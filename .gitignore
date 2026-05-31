@@ -12,17 +12,18 @@ yocto_layers/build/*.lock
 yocto_layers/build/pseudodone
 yocto_layers/build/bitbake.lock
 
-# If you run QEMU, ignore temporary runtime network/tap tap initialization files
+# If you run QEMU, ignore temporary runtime network/tap initialization files
 yocto_layers/build/qemu-boot*
 
 # ==============================================================================
-# 2. UPSTREAM / BASE LAYERS
+# 2. UPSTREAM / BASE LAYERS (MANAGED VIA GIT SUBMODULES)
 # ==============================================================================
-# Ignore the upstream cloned ecosystems so you only track YOUR custom layer modifications
-yocto_layers/poky/
-yocto_layers/meta-st-stm32mp/
-yocto_layers/meta-openembedded/
-yocto_layers/meta-rust/
+# DO NOT uncomment these. Submodules must remain unignored so Git can track 
+# their tracking configuration files and 40-character revision pointer hashes.
+#yocto_layers/poky/
+#yocto_layers/meta-st-stm32mp/
+#yocto_layers/meta-openembedded/
+#yocto_layers/meta-rust/
 
 # ==============================================================================
 # 3. RUST APPLICATION LAYER (linux_a7/)
@@ -32,8 +33,7 @@ linux_a7/backend_daemon/target/
 linux_a7/ui_layer/target/
 **/target/
 
-# Ignore Cargo lock files if you want to always pull latest minor crates, 
-# though tracking it in application roots is fine. We ensure binary targets are clean.
+# Ignore Cargo backup files generated during edits
 **/*.rs.bk
 
 # ==============================================================================
