@@ -17,6 +17,8 @@ RUN apt-get update && apt-get install -y \
     gdisk \
     git \
     gcc \
+    g++-multilib \
+    gcc-multilib \
     iputils-ping \
     iptables \
     libegl1-mesa \
@@ -24,7 +26,6 @@ RUN apt-get update && apt-get install -y \
     libssl-dev \
     locales \
     locales-all \
-    multilib-build-essential \
     nano \
     pylint \
     python3 \
