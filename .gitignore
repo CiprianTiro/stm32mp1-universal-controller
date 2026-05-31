@@ -1,19 +1,80 @@
-CMakeLists.txt.user
-CMakeCache.txt
-CMakeFiles
-CMakeScripts
-Testing
-Makefile
-cmake_install.cmake
-install_manifest.txt
-compile_commands.json
-CTestTestfile.cmake
-_deps
-CMakeUserPresets.json
+# ==============================================================================
+# 1. YOCTO PROJECT & BITBAKE ARTIFACTS (CRITICAL)
+# ==============================================================================
+# Never track the massive temporary compilation directory, caches, or downloads
+yocto_layers/build/tmp/
+yocto_layers/build/sstate-cache/
+yocto_layers/build/cache/
+yocto_layers/build/downloads/
 
-# CLion
-#  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
-#  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
-#  and can be added to the global gitignore or merged into this file.  For a more nuclear
-#  option (not recommended) you can uncomment the following to ignore the entire idea folder.
-#cmake-build-*
+# Ignore BitBake execution locks and state flags
+yocto_layers/build/*.lock
+yocto_layers/build/pseudodone
+yocto_layers/build/bitbake.lock
+
+# If you run QEMU, ignore temporary runtime network/tap tap initialization files
+yocto_layers/build/qemu-boot*
+
+# ==============================================================================
+# 2. UPSTREAM / BASE LAYERS
+# ==============================================================================
+# Ignore the upstream cloned ecosystems so you only track YOUR custom layer modifications
+yocto_layers/poky/
+yocto_layers/meta-st-stm32mp/
+yocto_layers/meta-openembedded/
+yocto_layers/meta-rust/
+
+# ==============================================================================
+# 3. RUST APPLICATION LAYER (linux_a7/)
+# ==============================================================================
+# Ignore Cargo compilation target directories (which easily grow to gigabytes)
+linux_a7/backend_daemon/target/
+linux_a7/ui_layer/target/
+**/target/
+
+# Ignore Cargo lock files if you want to always pull latest minor crates, 
+# though tracking it in application roots is fine. We ensure binary targets are clean.
+**/*.rs.bk
+
+# ==============================================================================
+# 4. EMBEDDED C/C++ FIRMWARE (firmware_m4/)
+# ==============================================================================
+# STM32CubeIDE / GNU ARM Toolchain build outputs
+firmware_m4/**/Debug/
+firmware_m4/**/Release/
+firmware_m4/**/*.o
+firmware_m4/**/*.su
+firmware_m4/**/*.d
+firmware_m4/**/*.elf
+firmware_m4/**/*.bin
+firmware_m4/**/*.hex
+firmware_m4/**/*.map
+firmware_m4/**/*.list
+
+# Toolchain / IDE project specific user configurations
+firmware_m4/**/*.launch
+firmware_m4/.metadata/
+firmware_m4/**/.settings/
+
+# ==============================================================================
+# 5. IDE, EDITORS, AND SYSTEM ARTIFACTS
+# ==============================================================================
+# VS Code
+.vscode/
+*.code-workspace
+
+# JetBrains (CLion / PyCharm / IntelliJ)
+.idea/
+
+# Vim/Emacs swap and backup files
+*~
+*.swp
+*.swo
+*.bak
+
+# Operating System system-generated files
+.DS_Store
+Thumbs.db
+
+# Docker container volume state leftovers
+yocto_layers/.docker/

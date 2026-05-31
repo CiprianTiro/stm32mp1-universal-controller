@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  yocto-builder:
+    build:
+      context: .
+      args:
+        USER_ID: 1000  # Adjust if your host linux ID is different (run `id -u`)
+        GROUP_ID: 1000 # Adjust if your host linux group is different (run `id -g`)
+    container_name: stm32mp1-yocto-container
+    user: "1000:1000"
+    volumes:
+      # Mount your whole local yocto folder right into the isolated sandbox environment
+      - .:/home/builder/workspace
+    network_mode: "host" # Essential for headless QEMU testing and tap/tun routing loops
+    tty: true
+    stdin_open: true
