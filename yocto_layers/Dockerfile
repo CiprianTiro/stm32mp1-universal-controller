@@ -4,7 +4,7 @@ FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Install essential Yocto Project compilation and QEMU rendering dependencies
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     bc \
     build-essential \
     bsdmainutils \
@@ -12,19 +12,22 @@ RUN apt-get update && apt-get install -y \
     cpio \
     debianutils \
     diffstat \
+    file \
     gawk \
     gedit \
     gdisk \
     git \
     gcc \
+    g++-multilib \
+    gcc-multilib \
     iputils-ping \
     iptables \
     libegl1-mesa \
-    libsdl1.2-dev \
+    libsdl2-dev \
     libssl-dev \
     locales \
     locales-all \
-    multilib-build-essential \
+    lz4 \
     nano \
     pylint \
     python3 \
@@ -43,6 +46,7 @@ RUN apt-get update && apt-get install -y \
     wget \
     xterm \
     xz-utils \
+    zstd \
     && rm -rf /var/lib/apt/lists/*
 
 # Set up system locales to prevent BitBake parsing warnings

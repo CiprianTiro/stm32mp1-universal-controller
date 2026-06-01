@@ -42,3 +42,13 @@ This project is licensed under the terms of the **GNU General Public License v3.
 * **Disclose Source & License Notice:** Anyone distributing binaries built from this project must explicitly include the original copyright notice, a copy of this GPLv3 license text, and a clear method for users to download the source code.
 
 *For full details regarding the formal legal text, permissions, and reciprocal conditions, please consult the local `LICENSE` file sitting at the root directory of this repository.*
+
+## 🚚 Workspace Initialization
+
+This repository tracks external Yocto and hardware vendor layers as **Git Submodules**. This ensures the correct versions are locked down without breaking main source history.
+
+If you are cloning this repository for the first time, use the `--recurse-submodules` flag to automatically pull down all the linked Yocto ecosystem dependencies in a single action:
+
+```bash
+git clone --recurse-submodules https://github.com/CiprianTiro/stm32mp1-universal-controller
+```

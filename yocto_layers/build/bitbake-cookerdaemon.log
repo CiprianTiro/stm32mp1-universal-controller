@@ -1,0 +1,2009 @@
+4008546 05:55:45.883357 --- Starting bitbake server pid 4008546 at 2026-06-01 05:55:45.883338 ---
+4008546 05:55:45.884097 Started bitbake server pid 4008546
+4008546 05:55:45.884249 Entering server connection loop
+4008546 05:55:45.884272 Lockfile is: /home/builder/workspace/build/bitbake.lock
+Socket is /home/builder/workspace/build/bitbake.sock (True)
+4008546 05:55:45.884668 Accepting [<socket.socket fd=6, family=AddressFamily.AF_UNIX, type=SocketKind.SOCK_STREAM, proto=0, laddr=bitbake.sock>] ([])
+4008546 05:55:45.885313 Processing Client
+4008546 05:55:45.885346 Connecting Client
+4008546 05:55:45.885659 Running command ['setFeatures', [2, 1]]
+4008546 05:55:45.885690 Sending reply (None, None)
+4008546 05:55:45.885764 Command Completed (socket: True)
+4008546 05:55:45.886211 Running command ['updateConfig', {'halt': True, 'force': False, 'invalidate_stamp': None, 'dry_run': False, 'dump_signatures': [], 'extra_assume_provided': [], 'profile': False, 'prefile': [], 'postfile': [], 'server_timeout': None, 'nosetscene': False, 'setsceneonly': False, 'skipsetscene': False, 'runall': [], 'runonly': None, 'writeeventlog': None, 'build_verbose_shell': False, 'build_verbose_stdout': False, 'default_loglevel': 20, 'debug_domains': {}}, {'BB_ENV_PASSTHROUGH_ADDITIONS': 'ALL_PROXY BBPATH_EXTRA BB_LOGCONFIG BB_NO_NETWORK BB_NUMBER_THREADS BB_SETSCENE_ENFORCE BB_SRCREV_POLICY DISTRO FTPS_PROXY FTP_PROXY GIT_PROXY_COMMAND HTTPS_PROXY HTTP_PROXY MACHINE NO_PROXY PARALLEL_MAKE SCREENDIR SDKMACHINE SOCKS5_PASSWD SOCKS5_USER SSH_AGENT_PID SSH_AUTH_SOCK STAMPS_DIR TCLIBC TCMODE all_proxy ftp_proxy ftps_proxy http_proxy https_proxy no_proxy ', 'PWD': '/home/builder/workspace/build', 'HOME': '/home/builder', 'BBPATH': '/home/builder/workspace/build', 'LC_ALL': 'en_US.UTF-8', 'PATH': '/home/builder/workspace/poky/scripts:/home/builder/workspace/poky/bitbake/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', 'OE_ADDED_PATHS': '/home/builder/workspace/poky/scripts:/home/builder/workspace/poky/bitbake/bin:', 'HOSTNAME': 'ciprian-B250M-D2V', 'LANGUAGE': 'en_US:en', 'LANG': 'en_US.UTF-8', 'PYTHONPATH': '/home/builder/workspace/poky/bitbake/lib:', 'TERM': 'xterm', 'SHLVL': '0', 'BUILDDIR': '/home/builder/workspace/build', 'DEBIAN_FRONTEND': 'noninteractive', 'OLDPWD': '/home/builder/workspace', '_': '/home/builder/workspace/poky/bitbake/bin/bitbake-layers'}, ['/home/builder/workspace/poky/bitbake/bin/bitbake-layers', 'show-layers']]
+4008546 05:55:46.477137 Base config valid
+4008546 05:55:47.197968 Sending reply (None, None)
+4008546 05:55:47.198143 Command Completed (socket: True)
+4008546 05:55:47.198319 Running command ['parseConfiguration']
+4008546 05:55:47.199101 Sending reply (None, None)
+4008546 05:55:47.199178 Command Completed (socket: True)
+4008546 05:55:47.199434 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBMULTICONFIG',), {}]
+4008546 05:55:47.199522 Sending reply (None, None)
+4008546 05:55:47.199603 Command Completed (socket: True)
+4008546 05:55:47.199843 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBPATH',), {}]
+4008546 05:55:47.199906 Sending reply ('/home/builder/workspace/poky/meta-poky:/home/builder/workspace/build:/home/builder/workspace/poky/meta:/home/builder/workspace/poky/meta-yocto-bsp', None)
+4008546 05:55:47.199976 Command Completed (socket: True)
+4008546 05:55:47.206233 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+4008546 05:55:47.206311 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   ', None)
+4008546 05:55:47.206569 Command Completed (socket: True)
+4008546 05:55:47.206636 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+4008546 05:55:47.206733 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf'}, None)
+4008546 05:55:47.206806 Command Completed (socket: True)
+4008546 05:55:47.208095 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+4008546 05:55:47.208137 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   ', None)
+4008546 05:55:47.208216 Command Completed (socket: True)
+4008546 05:55:47.208336 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+4008546 05:55:47.208395 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf'}, None)
+4008546 05:55:47.208480 Command Completed (socket: True)
+4008546 05:55:47.211614 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+4008546 05:55:47.211665 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   ', None)
+4008546 05:55:47.211735 Command Completed (socket: True)
+4008546 05:55:47.211913 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+4008546 05:55:47.211975 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf'}, None)
+4008546 05:55:47.212027 Command Completed (socket: True)
+4008546 05:55:47.213389 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+4008546 05:55:47.213439 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   ', None)
+4008546 05:55:47.213491 Command Completed (socket: True)
+4008546 05:55:47.213718 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+4008546 05:55:47.213774 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf'}, None)
+4008546 05:55:47.213830 Command Completed (socket: True)
+4008546 05:55:47.214365 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBPATH',), {}]
+4008546 05:55:47.214395 Sending reply ('/home/builder/workspace/poky/meta-poky:/home/builder/workspace/build:/home/builder/workspace/poky/meta:/home/builder/workspace/poky/meta-yocto-bsp', None)
+4008546 05:55:47.214486 Command Completed (socket: True)
+4008546 05:55:47.215510 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+4008546 05:55:47.215544 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   ', None)
+4008546 05:55:47.215595 Command Completed (socket: True)
+4008546 05:55:47.215759 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+4008546 05:55:47.215818 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf'}, None)
+4008546 05:55:47.215868 Command Completed (socket: True)
+4008546 05:55:47.216384 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+4008546 05:55:47.216437 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   ', None)
+4008546 05:55:47.216504 Command Completed (socket: True)
+4008546 05:55:47.216703 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+4008546 05:55:47.216752 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf'}, None)
+4008546 05:55:47.216806 Command Completed (socket: True)
+4008546 05:55:47.217789 Running command ['getLayerPriorities']
+4008546 05:55:47.217916 Sending reply ([('core', '^/home/builder/workspace/poky/meta/', '^/home/builder/workspace/poky/meta/', 5), ('yocto', '^/home/builder/workspace/poky/meta-poky/', '^/home/builder/workspace/poky/meta-poky/', 5), ('yoctobsp', '^/home/builder/workspace/poky/meta-yocto-bsp/', '^/home/builder/workspace/poky/meta-yocto-bsp/', 5)], None)
+4008546 05:55:47.217977 Command Completed (socket: True)
+4008546 05:55:47.218532 Running command ['clientComplete']
+4008546 05:55:47.218618 Registering idle function <bound method Command.runAsyncCommand of <bb.command.Command object at 0x73e14194c4f0>>
+4008546 05:55:47.218629 Sending reply (True, None)
+4008546 05:55:47.218676 Command Completed (socket: True)
+4008546 05:55:47.312626 Processing Client
+4008546 05:55:47.313352 Disconnecting Client (socket: True)
+4008546 05:55:47.314811 Removing idle function <bound method Command.runAsyncCommand of <bb.command.Command object at 0x73e14194c4f0>>
+4008546 05:55:47.315624 No timeout, exiting.
+4008546 05:55:47.415896 Exiting (socket: True)
+4008546 05:55:47.418954 Exiting as we could obtain the lock
+sys:1: ResourceWarning: unclosed file <_io.TextIOWrapper name='/home/builder/workspace/build/bitbake-cookerdaemon.log' mode='a+' encoding='UTF-8'>
+4008557 05:55:47.821930 --- Starting bitbake server pid 4008557 at 2026-06-01 05:55:47.821911 ---
+4008557 05:55:47.822707 Started bitbake server pid 4008557
+4008557 05:55:47.822860 Entering server connection loop
+4008557 05:55:47.822882 Lockfile is: /home/builder/workspace/build/bitbake.lock
+Socket is /home/builder/workspace/build/bitbake.sock (True)
+4008557 05:55:47.823225 Accepting [<socket.socket fd=6, family=AddressFamily.AF_UNIX, type=SocketKind.SOCK_STREAM, proto=0, laddr=bitbake.sock>] ([])
+4008557 05:55:47.823865 Processing Client
+4008557 05:55:47.823898 Connecting Client
+4008557 05:55:47.824209 Running command ['setFeatures', [2, 1]]
+4008557 05:55:47.824241 Sending reply (None, None)
+4008557 05:55:47.824313 Command Completed (socket: True)
+4008557 05:55:47.824768 Running command ['updateConfig', {'halt': True, 'force': False, 'invalidate_stamp': None, 'dry_run': False, 'dump_signatures': [], 'extra_assume_provided': [], 'profile': False, 'prefile': [], 'postfile': [], 'server_timeout': None, 'nosetscene': False, 'setsceneonly': False, 'skipsetscene': False, 'runall': [], 'runonly': None, 'writeeventlog': None, 'build_verbose_shell': False, 'build_verbose_stdout': False, 'default_loglevel': 20, 'debug_domains': {}}, {'BB_ENV_PASSTHROUGH_ADDITIONS': 'ALL_PROXY BBPATH_EXTRA BB_LOGCONFIG BB_NO_NETWORK BB_NUMBER_THREADS BB_SETSCENE_ENFORCE BB_SRCREV_POLICY DISTRO FTPS_PROXY FTP_PROXY GIT_PROXY_COMMAND HTTPS_PROXY HTTP_PROXY MACHINE NO_PROXY PARALLEL_MAKE SCREENDIR SDKMACHINE SOCKS5_PASSWD SOCKS5_USER SSH_AGENT_PID SSH_AUTH_SOCK STAMPS_DIR TCLIBC TCMODE all_proxy ftp_proxy ftps_proxy http_proxy https_proxy no_proxy ', 'PWD': '/home/builder/workspace/build', 'HOME': '/home/builder', 'BBPATH': '/home/builder/workspace/build', 'LC_ALL': 'en_US.UTF-8', 'PATH': '/home/builder/workspace/poky/scripts:/home/builder/workspace/poky/bitbake/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', 'OE_ADDED_PATHS': '/home/builder/workspace/poky/scripts:/home/builder/workspace/poky/bitbake/bin:', 'HOSTNAME': 'ciprian-B250M-D2V', 'LANGUAGE': 'en_US:en', 'LANG': 'en_US.UTF-8', 'PYTHONPATH': '/home/builder/workspace/poky/bitbake/lib:', 'TERM': 'xterm', 'SHLVL': '1', 'BUILDDIR': '/home/builder/workspace/build', 'DEBIAN_FRONTEND': 'noninteractive', 'OLDPWD': '/home/builder/workspace', '_': '/home/builder/workspace/poky/bitbake/bin/bitbake-layers'}, ['/home/builder/workspace/poky/bitbake/bin/bitbake-layers', 'add-layer', '../meta-openembedded/meta-oe']]
+4008557 05:55:48.399802 Base config valid
+4008557 05:55:48.410079 Sending reply (None, None)
+4008557 05:55:48.410251 Command Completed (socket: True)
+4008557 05:55:48.410424 Running command ['parseConfiguration']
+4008557 05:55:48.411141 Sending reply (None, None)
+4008557 05:55:48.411216 Command Completed (socket: True)
+4008557 05:55:48.411432 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBMULTICONFIG',), {}]
+4008557 05:55:48.411502 Sending reply (None, None)
+4008557 05:55:48.411567 Command Completed (socket: True)
+4008557 05:55:48.411812 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBPATH',), {}]
+4008557 05:55:48.411869 Sending reply ('/home/builder/workspace/poky/meta-poky:/home/builder/workspace/build:/home/builder/workspace/poky/meta:/home/builder/workspace/poky/meta-yocto-bsp', None)
+4008557 05:55:48.411937 Command Completed (socket: True)
+4008557 05:55:48.417309 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+4008557 05:55:48.417364 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   ', None)
+4008557 05:55:48.417430 Command Completed (socket: True)
+4008557 05:55:48.417665 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+4008557 05:55:48.417746 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf'}, None)
+4008557 05:55:48.417814 Command Completed (socket: True)
+4008557 05:55:48.418903 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+4008557 05:55:48.418940 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   ', None)
+4008557 05:55:48.419010 Command Completed (socket: True)
+4008557 05:55:48.419193 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+4008557 05:55:48.419249 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf'}, None)
+4008557 05:55:48.419318 Command Completed (socket: True)
+4008557 05:55:48.420456 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+4008557 05:55:48.420499 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   ', None)
+4008557 05:55:48.420550 Command Completed (socket: True)
+4008557 05:55:48.420732 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+4008557 05:55:48.420778 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf'}, None)
+4008557 05:55:48.420832 Command Completed (socket: True)
+4008557 05:55:48.422759 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+4008557 05:55:48.422786 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   ', None)
+4008557 05:55:48.422851 Command Completed (socket: True)
+4008557 05:55:48.423027 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+4008557 05:55:48.423072 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf'}, None)
+4008557 05:55:48.423127 Command Completed (socket: True)
+4008557 05:55:48.423711 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+4008557 05:55:48.423745 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   ', None)
+4008557 05:55:48.423797 Command Completed (socket: True)
+4008557 05:55:48.423947 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+4008557 05:55:48.423993 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf'}, None)
+4008557 05:55:48.424050 Command Completed (socket: True)
+4008557 05:55:48.424502 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+4008557 05:55:48.424537 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   ', None)
+4008557 05:55:48.424589 Command Completed (socket: True)
+4008557 05:55:48.424742 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+4008557 05:55:48.424790 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf'}, None)
+4008557 05:55:48.424857 Command Completed (socket: True)
+4008557 05:55:48.425363 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBPATH',), {}]
+4008557 05:55:48.425394 Sending reply ('/home/builder/workspace/poky/meta-poky:/home/builder/workspace/build:/home/builder/workspace/poky/meta:/home/builder/workspace/poky/meta-yocto-bsp', None)
+4008557 05:55:48.425487 Command Completed (socket: True)
+4008557 05:55:48.427787 Running command ['revalidateCaches']
+4008557 05:55:48.428025 Found /home/builder/workspace/build/conf/bblayers.conf changed, invalid cache
+4008557 05:55:48.428037 Base config invalidated
+4008557 05:55:48.430668 Sending reply (None, None)
+4008557 05:55:48.430767 Command Completed (socket: True)
+4008557 05:55:48.430982 Running command ['parseConfiguration']
+4008557 05:55:48.665526 Base config valid
+4008557 05:55:48.666449 Sending reply (None, None)
+4008557 05:55:48.666552 Command Completed (socket: True)
+4008557 05:55:48.666952 Running command ['clientComplete']
+4008557 05:55:48.667020 Registering idle function <bound method Command.runAsyncCommand of <bb.command.Command object at 0x772dedddc4f0>>
+4008557 05:55:48.667030 Sending reply (True, None)
+4008557 05:55:48.667095 Command Completed (socket: True)
+4008557 05:55:48.746841 Removing idle function <bound method Command.runAsyncCommand of <bb.command.Command object at 0x772dedddc4f0>>
+4008557 05:55:48.747237 Processing Client
+4008557 05:55:48.747461 Disconnecting Client (socket: True)
+4008557 05:55:48.748047 No timeout, exiting.
+4008557 05:55:48.848306 Exiting (socket: True)
+4008557 05:55:48.851800 Exiting as we could obtain the lock
+sys:1: ResourceWarning: unclosed file <_io.TextIOWrapper name='/home/builder/workspace/build/bitbake-cookerdaemon.log' mode='a+' encoding='UTF-8'>
+4008573 05:55:49.262773 --- Starting bitbake server pid 4008573 at 2026-06-01 05:55:49.262754 ---
+4008573 05:55:49.263547 Started bitbake server pid 4008573
+4008573 05:55:49.263695 Entering server connection loop
+4008573 05:55:49.263717 Lockfile is: /home/builder/workspace/build/bitbake.lock
+Socket is /home/builder/workspace/build/bitbake.sock (True)
+4008573 05:55:49.264076 Accepting [<socket.socket fd=6, family=AddressFamily.AF_UNIX, type=SocketKind.SOCK_STREAM, proto=0, laddr=bitbake.sock>] ([])
+4008573 05:55:49.264749 Processing Client
+4008573 05:55:49.264781 Connecting Client
+4008573 05:55:49.265092 Running command ['setFeatures', [2, 1]]
+4008573 05:55:49.265126 Sending reply (None, None)
+4008573 05:55:49.265198 Command Completed (socket: True)
+4008573 05:55:49.265658 Running command ['updateConfig', {'halt': True, 'force': False, 'invalidate_stamp': None, 'dry_run': False, 'dump_signatures': [], 'extra_assume_provided': [], 'profile': False, 'prefile': [], 'postfile': [], 'server_timeout': None, 'nosetscene': False, 'setsceneonly': False, 'skipsetscene': False, 'runall': [], 'runonly': None, 'writeeventlog': None, 'build_verbose_shell': False, 'build_verbose_stdout': False, 'default_loglevel': 20, 'debug_domains': {}}, {'BB_ENV_PASSTHROUGH_ADDITIONS': 'ALL_PROXY BBPATH_EXTRA BB_LOGCONFIG BB_NO_NETWORK BB_NUMBER_THREADS BB_SETSCENE_ENFORCE BB_SRCREV_POLICY DISTRO FTPS_PROXY FTP_PROXY GIT_PROXY_COMMAND HTTPS_PROXY HTTP_PROXY MACHINE NO_PROXY PARALLEL_MAKE SCREENDIR SDKMACHINE SOCKS5_PASSWD SOCKS5_USER SSH_AGENT_PID SSH_AUTH_SOCK STAMPS_DIR TCLIBC TCMODE all_proxy ftp_proxy ftps_proxy http_proxy https_proxy no_proxy ', 'PWD': '/home/builder/workspace/build', 'HOME': '/home/builder', 'BBPATH': '/home/builder/workspace/build', 'LC_ALL': 'en_US.UTF-8', 'PATH': '/home/builder/workspace/poky/scripts:/home/builder/workspace/poky/bitbake/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', 'OE_ADDED_PATHS': '/home/builder/workspace/poky/scripts:/home/builder/workspace/poky/bitbake/bin:', 'HOSTNAME': 'ciprian-B250M-D2V', 'LANGUAGE': 'en_US:en', 'LANG': 'en_US.UTF-8', 'PYTHONPATH': '/home/builder/workspace/poky/bitbake/lib:', 'TERM': 'xterm', 'SHLVL': '0', 'BUILDDIR': '/home/builder/workspace/build', 'DEBIAN_FRONTEND': 'noninteractive', 'OLDPWD': '/home/builder/workspace', '_': '/home/builder/workspace/poky/bitbake/bin/bitbake-layers'}, ['/home/builder/workspace/poky/bitbake/bin/bitbake-layers', 'show-layers']]
+4008573 05:55:49.841157 Base config valid
+4008573 05:55:49.851459 Sending reply (None, None)
+4008573 05:55:49.851638 Command Completed (socket: True)
+4008573 05:55:49.851881 Running command ['parseConfiguration']
+4008573 05:55:49.852795 Sending reply (None, None)
+4008573 05:55:49.852872 Command Completed (socket: True)
+4008573 05:55:49.853165 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBMULTICONFIG',), {}]
+4008573 05:55:49.853233 Sending reply (None, None)
+4008573 05:55:49.853295 Command Completed (socket: True)
+4008573 05:55:49.853547 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBPATH',), {}]
+4008573 05:55:49.853615 Sending reply ('/home/builder/workspace/poky/meta-poky:/home/builder/workspace/build:/home/builder/workspace/poky/meta:/home/builder/workspace/poky/meta-yocto-bsp:/home/builder/workspace/meta-openembedded/meta-oe', None)
+4008573 05:55:49.853676 Command Completed (socket: True)
+4008573 05:55:49.859442 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+4008573 05:55:49.859520 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   ', None)
+4008573 05:55:49.859599 Command Completed (socket: True)
+4008573 05:55:49.859809 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+4008573 05:55:49.859909 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf'}, None)
+4008573 05:55:49.859989 Command Completed (socket: True)
+4008573 05:55:49.861112 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+4008573 05:55:49.861144 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   ', None)
+4008573 05:55:49.861208 Command Completed (socket: True)
+4008573 05:55:49.861316 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+4008573 05:55:49.861366 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf'}, None)
+4008573 05:55:49.861438 Command Completed (socket: True)
+4008573 05:55:49.863259 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+4008573 05:55:49.863292 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   ', None)
+4008573 05:55:49.863357 Command Completed (socket: True)
+4008573 05:55:49.863569 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+4008573 05:55:49.863619 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf'}, None)
+4008573 05:55:49.863674 Command Completed (socket: True)
+4008573 05:55:49.864842 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+4008573 05:55:49.864873 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   ', None)
+4008573 05:55:49.864925 Command Completed (socket: True)
+4008573 05:55:49.865055 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+4008573 05:55:49.865111 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf'}, None)
+4008573 05:55:49.865166 Command Completed (socket: True)
+4008573 05:55:49.865719 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+4008573 05:55:49.865747 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   ', None)
+4008573 05:55:49.865798 Command Completed (socket: True)
+4008573 05:55:49.865930 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+4008573 05:55:49.865977 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf'}, None)
+4008573 05:55:49.866033 Command Completed (socket: True)
+4008573 05:55:49.866495 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+4008573 05:55:49.866516 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   ', None)
+4008573 05:55:49.866561 Command Completed (socket: True)
+4008573 05:55:49.866692 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+4008573 05:55:49.866756 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf'}, None)
+4008573 05:55:49.866811 Command Completed (socket: True)
+4008573 05:55:49.867264 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBPATH',), {}]
+4008573 05:55:49.867291 Sending reply ('/home/builder/workspace/poky/meta-poky:/home/builder/workspace/build:/home/builder/workspace/poky/meta:/home/builder/workspace/poky/meta-yocto-bsp:/home/builder/workspace/meta-openembedded/meta-oe', None)
+4008573 05:55:49.867348 Command Completed (socket: True)
+4008573 05:55:49.868688 Running command ['getLayerPriorities']
+4008573 05:55:49.868815 Sending reply ([('core', '^/home/builder/workspace/poky/meta/', '^/home/builder/workspace/poky/meta/', 5), ('yocto', '^/home/builder/workspace/poky/meta-poky/', '^/home/builder/workspace/poky/meta-poky/', 5), ('yoctobsp', '^/home/builder/workspace/poky/meta-yocto-bsp/', '^/home/builder/workspace/poky/meta-yocto-bsp/', 5), ('openembedded-layer', '^/home/builder/workspace/meta-openembedded/meta-oe/', '^/home/builder/workspace/meta-openembedded/meta-oe/', 5)], None)
+4008573 05:55:49.868874 Command Completed (socket: True)
+4008573 05:55:49.869480 Running command ['clientComplete']
+4008573 05:55:49.869559 Registering idle function <bound method Command.runAsyncCommand of <bb.command.Command object at 0x7f71720ac4f0>>
+4008573 05:55:49.869574 Sending reply (True, None)
+4008573 05:55:49.869622 Command Completed (socket: True)
+4008573 05:55:49.877296 Processing Client
+4008573 05:55:49.877351 Disconnecting Client (socket: True)
+4008573 05:55:49.877841 Removing idle function <bound method Command.runAsyncCommand of <bb.command.Command object at 0x7f71720ac4f0>>
+4008573 05:55:49.878075 No timeout, exiting.
+4008573 05:55:49.978284 Exiting (socket: True)
+4008573 05:55:49.981628 Exiting as we could obtain the lock
+sys:1: ResourceWarning: unclosed file <_io.TextIOWrapper name='/home/builder/workspace/build/bitbake-cookerdaemon.log' mode='a+' encoding='UTF-8'>
+4008584 05:55:50.357860 --- Starting bitbake server pid 4008584 at 2026-06-01 05:55:50.357836 ---
+4008584 05:55:50.358638 Started bitbake server pid 4008584
+4008584 05:55:50.358789 Entering server connection loop
+4008584 05:55:50.358811 Lockfile is: /home/builder/workspace/build/bitbake.lock
+Socket is /home/builder/workspace/build/bitbake.sock (True)
+4008584 05:55:50.359135 Accepting [<socket.socket fd=6, family=AddressFamily.AF_UNIX, type=SocketKind.SOCK_STREAM, proto=0, laddr=bitbake.sock>] ([])
+4008584 05:55:50.359780 Processing Client
+4008584 05:55:50.359813 Connecting Client
+4008584 05:55:50.360123 Running command ['setFeatures', [2, 1]]
+4008584 05:55:50.360155 Sending reply (None, None)
+4008584 05:55:50.360230 Command Completed (socket: True)
+4008584 05:55:50.360693 Running command ['updateConfig', {'halt': True, 'force': False, 'invalidate_stamp': None, 'dry_run': False, 'dump_signatures': [], 'extra_assume_provided': [], 'profile': False, 'prefile': [], 'postfile': [], 'server_timeout': None, 'nosetscene': False, 'setsceneonly': False, 'skipsetscene': False, 'runall': [], 'runonly': None, 'writeeventlog': None, 'build_verbose_shell': False, 'build_verbose_stdout': False, 'default_loglevel': 20, 'debug_domains': {}}, {'BB_ENV_PASSTHROUGH_ADDITIONS': 'ALL_PROXY BBPATH_EXTRA BB_LOGCONFIG BB_NO_NETWORK BB_NUMBER_THREADS BB_SETSCENE_ENFORCE BB_SRCREV_POLICY DISTRO FTPS_PROXY FTP_PROXY GIT_PROXY_COMMAND HTTPS_PROXY HTTP_PROXY MACHINE NO_PROXY PARALLEL_MAKE SCREENDIR SDKMACHINE SOCKS5_PASSWD SOCKS5_USER SSH_AGENT_PID SSH_AUTH_SOCK STAMPS_DIR TCLIBC TCMODE all_proxy ftp_proxy ftps_proxy http_proxy https_proxy no_proxy ', 'PWD': '/home/builder/workspace/build', 'HOME': '/home/builder', 'BBPATH': '/home/builder/workspace/build', 'LC_ALL': 'en_US.UTF-8', 'PATH': '/home/builder/workspace/poky/scripts:/home/builder/workspace/poky/bitbake/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', 'OE_ADDED_PATHS': '/home/builder/workspace/poky/scripts:/home/builder/workspace/poky/bitbake/bin:', 'HOSTNAME': 'ciprian-B250M-D2V', 'LANGUAGE': 'en_US:en', 'LANG': 'en_US.UTF-8', 'PYTHONPATH': '/home/builder/workspace/poky/bitbake/lib:', 'TERM': 'xterm', 'SHLVL': '1', 'BUILDDIR': '/home/builder/workspace/build', 'DEBIAN_FRONTEND': 'noninteractive', 'OLDPWD': '/home/builder/workspace', '_': '/home/builder/workspace/poky/bitbake/bin/bitbake-layers'}, ['/home/builder/workspace/poky/bitbake/bin/bitbake-layers', 'add-layer', '../meta-openembedded/meta-python']]
+4008584 05:55:50.935639 Base config valid
+4008584 05:55:50.946531 Sending reply (None, None)
+4008584 05:55:50.946708 Command Completed (socket: True)
+4008584 05:55:50.946885 Running command ['parseConfiguration']
+4008584 05:55:50.947709 Sending reply (None, None)
+4008584 05:55:50.947787 Command Completed (socket: True)
+4008584 05:55:50.948047 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBMULTICONFIG',), {}]
+4008584 05:55:50.948117 Sending reply (None, None)
+4008584 05:55:50.948188 Command Completed (socket: True)
+4008584 05:55:50.948407 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBPATH',), {}]
+4008584 05:55:50.948474 Sending reply ('/home/builder/workspace/poky/meta-poky:/home/builder/workspace/build:/home/builder/workspace/poky/meta:/home/builder/workspace/poky/meta-yocto-bsp:/home/builder/workspace/meta-openembedded/meta-oe', None)
+4008584 05:55:50.948537 Command Completed (socket: True)
+4008584 05:55:50.954039 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+4008584 05:55:50.954089 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   ', None)
+4008584 05:55:50.954147 Command Completed (socket: True)
+4008584 05:55:50.954334 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+4008584 05:55:50.954455 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf'}, None)
+4008584 05:55:50.954517 Command Completed (socket: True)
+4008584 05:55:50.955754 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+4008584 05:55:50.955788 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   ', None)
+4008584 05:55:50.955859 Command Completed (socket: True)
+4008584 05:55:50.956035 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+4008584 05:55:50.956088 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf'}, None)
+4008584 05:55:50.956143 Command Completed (socket: True)
+4008584 05:55:50.957040 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+4008584 05:55:50.957071 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   ', None)
+4008584 05:55:50.957123 Command Completed (socket: True)
+4008584 05:55:50.957250 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+4008584 05:55:50.957290 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf'}, None)
+4008584 05:55:50.957339 Command Completed (socket: True)
+4008584 05:55:50.959142 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+4008584 05:55:50.959170 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   ', None)
+4008584 05:55:50.959222 Command Completed (socket: True)
+4008584 05:55:50.959312 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+4008584 05:55:50.959353 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf'}, None)
+4008584 05:55:50.959410 Command Completed (socket: True)
+4008584 05:55:50.959942 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+4008584 05:55:50.959969 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   ', None)
+4008584 05:55:50.960020 Command Completed (socket: True)
+4008584 05:55:50.960162 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+4008584 05:55:50.960210 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf'}, None)
+4008584 05:55:50.960272 Command Completed (socket: True)
+4008584 05:55:50.960767 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+4008584 05:55:50.960795 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   ', None)
+4008584 05:55:50.960846 Command Completed (socket: True)
+4008584 05:55:50.960986 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+4008584 05:55:50.961033 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf'}, None)
+4008584 05:55:50.961089 Command Completed (socket: True)
+4008584 05:55:50.961549 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBPATH',), {}]
+4008584 05:55:50.961583 Sending reply ('/home/builder/workspace/poky/meta-poky:/home/builder/workspace/build:/home/builder/workspace/poky/meta:/home/builder/workspace/poky/meta-yocto-bsp:/home/builder/workspace/meta-openembedded/meta-oe', None)
+4008584 05:55:50.961635 Command Completed (socket: True)
+4008584 05:55:50.963947 Running command ['revalidateCaches']
+4008584 05:55:50.964167 Found /home/builder/workspace/build/conf/bblayers.conf changed, invalid cache
+4008584 05:55:50.964178 Base config invalidated
+4008584 05:55:50.966762 Sending reply (None, None)
+4008584 05:55:50.966872 Command Completed (socket: True)
+4008584 05:55:50.967088 Running command ['parseConfiguration']
+4008584 05:55:51.207802 Base config valid
+4008584 05:55:51.208963 Sending reply (None, None)
+4008584 05:55:51.209066 Command Completed (socket: True)
+4008584 05:55:51.209429 Running command ['clientComplete']
+4008584 05:55:51.209501 Registering idle function <bound method Command.runAsyncCommand of <bb.command.Command object at 0x7bcb6f2a44f0>>
+4008584 05:55:51.209510 Sending reply (True, None)
+4008584 05:55:51.209568 Command Completed (socket: True)
+4008584 05:55:51.276747 Removing idle function <bound method Command.runAsyncCommand of <bb.command.Command object at 0x7bcb6f2a44f0>>
+4008584 05:55:51.277020 Processing Client
+4008584 05:55:51.277229 Disconnecting Client (socket: True)
+4008584 05:55:51.277831 No timeout, exiting.
+4008584 05:55:51.378086 Exiting (socket: True)
+4008584 05:55:51.381411 Exiting as we could obtain the lock
+sys:1: ResourceWarning: unclosed file <_io.TextIOWrapper name='/home/builder/workspace/build/bitbake-cookerdaemon.log' mode='a+' encoding='UTF-8'>
+4008600 05:55:51.786014 --- Starting bitbake server pid 4008600 at 2026-06-01 05:55:51.785994 ---
+4008600 05:55:51.786765 Started bitbake server pid 4008600
+4008600 05:55:51.786917 Entering server connection loop
+4008600 05:55:51.786939 Lockfile is: /home/builder/workspace/build/bitbake.lock
+Socket is /home/builder/workspace/build/bitbake.sock (True)
+4008600 05:55:51.787305 Accepting [<socket.socket fd=6, family=AddressFamily.AF_UNIX, type=SocketKind.SOCK_STREAM, proto=0, laddr=bitbake.sock>] ([])
+4008600 05:55:51.787903 Processing Client
+4008600 05:55:51.787937 Connecting Client
+4008600 05:55:51.788246 Running command ['setFeatures', [2, 1]]
+4008600 05:55:51.788279 Sending reply (None, None)
+4008600 05:55:51.788353 Command Completed (socket: True)
+4008600 05:55:51.788808 Running command ['updateConfig', {'halt': True, 'force': False, 'invalidate_stamp': None, 'dry_run': False, 'dump_signatures': [], 'extra_assume_provided': [], 'profile': False, 'prefile': [], 'postfile': [], 'server_timeout': None, 'nosetscene': False, 'setsceneonly': False, 'skipsetscene': False, 'runall': [], 'runonly': None, 'writeeventlog': None, 'build_verbose_shell': False, 'build_verbose_stdout': False, 'default_loglevel': 20, 'debug_domains': {}}, {'BB_ENV_PASSTHROUGH_ADDITIONS': 'ALL_PROXY BBPATH_EXTRA BB_LOGCONFIG BB_NO_NETWORK BB_NUMBER_THREADS BB_SETSCENE_ENFORCE BB_SRCREV_POLICY DISTRO FTPS_PROXY FTP_PROXY GIT_PROXY_COMMAND HTTPS_PROXY HTTP_PROXY MACHINE NO_PROXY PARALLEL_MAKE SCREENDIR SDKMACHINE SOCKS5_PASSWD SOCKS5_USER SSH_AGENT_PID SSH_AUTH_SOCK STAMPS_DIR TCLIBC TCMODE all_proxy ftp_proxy ftps_proxy http_proxy https_proxy no_proxy ', 'PWD': '/home/builder/workspace/build', 'HOME': '/home/builder', 'BBPATH': '/home/builder/workspace/build', 'LC_ALL': 'en_US.UTF-8', 'PATH': '/home/builder/workspace/poky/scripts:/home/builder/workspace/poky/bitbake/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', 'OE_ADDED_PATHS': '/home/builder/workspace/poky/scripts:/home/builder/workspace/poky/bitbake/bin:', 'HOSTNAME': 'ciprian-B250M-D2V', 'LANGUAGE': 'en_US:en', 'LANG': 'en_US.UTF-8', 'PYTHONPATH': '/home/builder/workspace/poky/bitbake/lib:', 'TERM': 'xterm', 'SHLVL': '0', 'BUILDDIR': '/home/builder/workspace/build', 'DEBIAN_FRONTEND': 'noninteractive', 'OLDPWD': '/home/builder/workspace', '_': '/home/builder/workspace/poky/bitbake/bin/bitbake-layers'}, ['/home/builder/workspace/poky/bitbake/bin/bitbake-layers', 'show-layers']]
+4008600 05:55:52.382453 Base config valid
+4008600 05:55:52.395594 Sending reply (None, None)
+4008600 05:55:52.395761 Command Completed (socket: True)
+4008600 05:55:52.395947 Running command ['parseConfiguration']
+4008600 05:55:52.397122 Sending reply (None, None)
+4008600 05:55:52.397201 Command Completed (socket: True)
+4008600 05:55:52.397558 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBMULTICONFIG',), {}]
+4008600 05:55:52.397626 Sending reply (None, None)
+4008600 05:55:52.397694 Command Completed (socket: True)
+4008600 05:55:52.397940 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBPATH',), {}]
+4008600 05:55:52.398004 Sending reply ('/home/builder/workspace/poky/meta-poky:/home/builder/workspace/build:/home/builder/workspace/poky/meta:/home/builder/workspace/poky/meta-yocto-bsp:/home/builder/workspace/meta-openembedded/meta-oe:/home/builder/workspace/meta-openembedded/meta-python', None)
+4008600 05:55:52.398073 Command Completed (socket: True)
+4008600 05:55:52.403709 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+4008600 05:55:52.403768 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   ', None)
+4008600 05:55:52.403827 Command Completed (socket: True)
+4008600 05:55:52.404024 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+4008600 05:55:52.404108 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf'}, None)
+4008600 05:55:52.404166 Command Completed (socket: True)
+4008600 05:55:52.405413 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+4008600 05:55:52.405450 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   ', None)
+4008600 05:55:52.405503 Command Completed (socket: True)
+4008600 05:55:52.405683 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+4008600 05:55:52.405736 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf'}, None)
+4008600 05:55:52.405797 Command Completed (socket: True)
+4008600 05:55:52.407648 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+4008600 05:55:52.407676 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   ', None)
+4008600 05:55:52.407735 Command Completed (socket: True)
+4008600 05:55:52.407913 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+4008600 05:55:52.407966 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf'}, None)
+4008600 05:55:52.408022 Command Completed (socket: True)
+4008600 05:55:52.409026 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+4008600 05:55:52.409054 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   ', None)
+4008600 05:55:52.409105 Command Completed (socket: True)
+4008600 05:55:52.409249 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+4008600 05:55:52.409299 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf'}, None)
+4008600 05:55:52.409354 Command Completed (socket: True)
+4008600 05:55:52.409820 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBPATH',), {}]
+4008600 05:55:52.409848 Sending reply ('/home/builder/workspace/poky/meta-poky:/home/builder/workspace/build:/home/builder/workspace/poky/meta:/home/builder/workspace/poky/meta-yocto-bsp:/home/builder/workspace/meta-openembedded/meta-oe:/home/builder/workspace/meta-openembedded/meta-python', None)
+4008600 05:55:52.409908 Command Completed (socket: True)
+4008600 05:55:52.410944 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+4008600 05:55:52.410973 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   ', None)
+4008600 05:55:52.411025 Command Completed (socket: True)
+4008600 05:55:52.411157 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+4008600 05:55:52.411215 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf'}, None)
+4008600 05:55:52.411271 Command Completed (socket: True)
+4008600 05:55:52.411753 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+4008600 05:55:52.411788 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   ', None)
+4008600 05:55:52.411842 Command Completed (socket: True)
+4008600 05:55:52.411975 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+4008600 05:55:52.412028 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf'}, None)
+4008600 05:55:52.412084 Command Completed (socket: True)
+4008600 05:55:52.412937 Running command ['getLayerPriorities']
+4008600 05:55:52.413096 Sending reply ([('core', '^/home/builder/workspace/poky/meta/', '^/home/builder/workspace/poky/meta/', 5), ('yocto', '^/home/builder/workspace/poky/meta-poky/', '^/home/builder/workspace/poky/meta-poky/', 5), ('yoctobsp', '^/home/builder/workspace/poky/meta-yocto-bsp/', '^/home/builder/workspace/poky/meta-yocto-bsp/', 5), ('openembedded-layer', '^/home/builder/workspace/meta-openembedded/meta-oe/', '^/home/builder/workspace/meta-openembedded/meta-oe/', 5), ('meta-python', '^/home/builder/workspace/meta-openembedded/meta-python/', '^/home/builder/workspace/meta-openembedded/meta-python/', 5)], None)
+4008600 05:55:52.413188 Command Completed (socket: True)
+4008600 05:55:52.413905 Running command ['clientComplete']
+4008600 05:55:52.413970 Registering idle function <bound method Command.runAsyncCommand of <bb.command.Command object at 0x75a4cf2e44f0>>
+4008600 05:55:52.413980 Sending reply (True, None)
+4008600 05:55:52.414029 Command Completed (socket: True)
+4008600 05:55:52.500433 Processing Client
+4008600 05:55:52.501128 Disconnecting Client (socket: True)
+4008600 05:55:52.502836 Removing idle function <bound method Command.runAsyncCommand of <bb.command.Command object at 0x75a4cf2e44f0>>
+4008600 05:55:52.503630 No timeout, exiting.
+4008600 05:55:52.603899 Exiting (socket: True)
+4008600 05:55:52.606996 Exiting as we could obtain the lock
+sys:1: ResourceWarning: unclosed file <_io.TextIOWrapper name='/home/builder/workspace/build/bitbake-cookerdaemon.log' mode='a+' encoding='UTF-8'>
+4008611 05:55:53.011312 --- Starting bitbake server pid 4008611 at 2026-06-01 05:55:53.011288 ---
+4008611 05:55:53.012051 Started bitbake server pid 4008611
+4008611 05:55:53.012208 Entering server connection loop
+4008611 05:55:53.012230 Lockfile is: /home/builder/workspace/build/bitbake.lock
+Socket is /home/builder/workspace/build/bitbake.sock (True)
+4008611 05:55:53.012581 Accepting [<socket.socket fd=6, family=AddressFamily.AF_UNIX, type=SocketKind.SOCK_STREAM, proto=0, laddr=bitbake.sock>] ([])
+4008611 05:55:53.013123 Processing Client
+4008611 05:55:53.013147 Connecting Client
+4008611 05:55:53.013461 Running command ['setFeatures', [2, 1]]
+4008611 05:55:53.013491 Sending reply (None, None)
+4008611 05:55:53.013564 Command Completed (socket: True)
+4008611 05:55:53.013976 Running command ['updateConfig', {'halt': True, 'force': False, 'invalidate_stamp': None, 'dry_run': False, 'dump_signatures': [], 'extra_assume_provided': [], 'profile': False, 'prefile': [], 'postfile': [], 'server_timeout': None, 'nosetscene': False, 'setsceneonly': False, 'skipsetscene': False, 'runall': [], 'runonly': None, 'writeeventlog': None, 'build_verbose_shell': False, 'build_verbose_stdout': False, 'default_loglevel': 20, 'debug_domains': {}}, {'BB_ENV_PASSTHROUGH_ADDITIONS': 'ALL_PROXY BBPATH_EXTRA BB_LOGCONFIG BB_NO_NETWORK BB_NUMBER_THREADS BB_SETSCENE_ENFORCE BB_SRCREV_POLICY DISTRO FTPS_PROXY FTP_PROXY GIT_PROXY_COMMAND HTTPS_PROXY HTTP_PROXY MACHINE NO_PROXY PARALLEL_MAKE SCREENDIR SDKMACHINE SOCKS5_PASSWD SOCKS5_USER SSH_AGENT_PID SSH_AUTH_SOCK STAMPS_DIR TCLIBC TCMODE all_proxy ftp_proxy ftps_proxy http_proxy https_proxy no_proxy ', 'PWD': '/home/builder/workspace/build', 'HOME': '/home/builder', 'BBPATH': '/home/builder/workspace/build', 'LC_ALL': 'en_US.UTF-8', 'PATH': '/home/builder/workspace/poky/scripts:/home/builder/workspace/poky/bitbake/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', 'OE_ADDED_PATHS': '/home/builder/workspace/poky/scripts:/home/builder/workspace/poky/bitbake/bin:', 'HOSTNAME': 'ciprian-B250M-D2V', 'LANGUAGE': 'en_US:en', 'LANG': 'en_US.UTF-8', 'PYTHONPATH': '/home/builder/workspace/poky/bitbake/lib:', 'TERM': 'xterm', 'SHLVL': '1', 'BUILDDIR': '/home/builder/workspace/build', 'DEBIAN_FRONTEND': 'noninteractive', 'OLDPWD': '/home/builder/workspace', '_': '/home/builder/workspace/poky/bitbake/bin/bitbake-layers'}, ['/home/builder/workspace/poky/bitbake/bin/bitbake-layers', 'add-layer', '../meta-st-stm32mp']]
+4008611 05:55:53.591075 Base config valid
+4008611 05:55:53.603796 Sending reply (None, None)
+4008611 05:55:53.603965 Command Completed (socket: True)
+4008611 05:55:53.604202 Running command ['parseConfiguration']
+4008611 05:55:53.605421 Sending reply (None, None)
+4008611 05:55:53.605522 Command Completed (socket: True)
+4008611 05:55:53.605791 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBMULTICONFIG',), {}]
+4008611 05:55:53.605855 Sending reply (None, None)
+4008611 05:55:53.605923 Command Completed (socket: True)
+4008611 05:55:53.606163 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBPATH',), {}]
+4008611 05:55:53.606229 Sending reply ('/home/builder/workspace/poky/meta-poky:/home/builder/workspace/build:/home/builder/workspace/poky/meta:/home/builder/workspace/poky/meta-yocto-bsp:/home/builder/workspace/meta-openembedded/meta-oe:/home/builder/workspace/meta-openembedded/meta-python', None)
+4008611 05:55:53.606298 Command Completed (socket: True)
+4008611 05:55:53.611767 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+4008611 05:55:53.611826 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   ', None)
+4008611 05:55:53.611898 Command Completed (socket: True)
+4008611 05:55:53.612101 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+4008611 05:55:53.612179 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf'}, None)
+4008611 05:55:53.612255 Command Completed (socket: True)
+4008611 05:55:53.613455 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+4008611 05:55:53.613483 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   ', None)
+4008611 05:55:53.613548 Command Completed (socket: True)
+4008611 05:55:53.613738 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+4008611 05:55:53.613788 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf'}, None)
+4008611 05:55:53.613857 Command Completed (socket: True)
+4008611 05:55:53.615662 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+4008611 05:55:53.615690 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   ', None)
+4008611 05:55:53.615749 Command Completed (socket: True)
+4008611 05:55:53.615895 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+4008611 05:55:53.615951 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf'}, None)
+4008611 05:55:53.616006 Command Completed (socket: True)
+4008611 05:55:53.616935 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+4008611 05:55:53.616963 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   ', None)
+4008611 05:55:53.617016 Command Completed (socket: True)
+4008611 05:55:53.617148 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+4008611 05:55:53.617204 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf'}, None)
+4008611 05:55:53.617260 Command Completed (socket: True)
+4008611 05:55:53.617799 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+4008611 05:55:53.617827 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   ', None)
+4008611 05:55:53.617879 Command Completed (socket: True)
+4008611 05:55:53.618011 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+4008611 05:55:53.618062 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf'}, None)
+4008611 05:55:53.618125 Command Completed (socket: True)
+4008611 05:55:53.618594 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+4008611 05:55:53.618621 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   ', None)
+4008611 05:55:53.618673 Command Completed (socket: True)
+4008611 05:55:53.618856 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+4008611 05:55:53.618906 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf'}, None)
+4008611 05:55:53.618961 Command Completed (socket: True)
+4008611 05:55:53.619493 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBPATH',), {}]
+4008611 05:55:53.619529 Sending reply ('/home/builder/workspace/poky/meta-poky:/home/builder/workspace/build:/home/builder/workspace/poky/meta:/home/builder/workspace/poky/meta-yocto-bsp:/home/builder/workspace/meta-openembedded/meta-oe:/home/builder/workspace/meta-openembedded/meta-python', None)
+4008611 05:55:53.619582 Command Completed (socket: True)
+4008611 05:55:53.621992 Running command ['revalidateCaches']
+4008611 05:55:53.622177 Found /home/builder/workspace/build/conf/bblayers.conf changed, invalid cache
+4008611 05:55:53.622190 Base config invalidated
+4008611 05:55:53.624610 Sending reply (None, None)
+4008611 05:55:53.624714 Command Completed (socket: True)
+4008611 05:55:53.625031 Running command ['parseConfiguration']
+4008611 05:55:53.951088 Base config valid
+4008611 05:55:53.953621 Sending reply (None, None)
+4008611 05:55:53.953755 Command Completed (socket: True)
+4008611 05:55:53.954156 Running command ['clientComplete']
+4008611 05:55:53.954223 Registering idle function <bound method Command.runAsyncCommand of <bb.command.Command object at 0x795c5190c4f0>>
+4008611 05:55:53.954233 Sending reply (True, None)
+4008611 05:55:53.954296 Command Completed (socket: True)
+4008611 05:55:54.032726 Removing idle function <bound method Command.runAsyncCommand of <bb.command.Command object at 0x795c5190c4f0>>
+4008611 05:55:54.032902 Processing Client
+4008611 05:55:54.033018 Disconnecting Client (socket: True)
+4008611 05:55:54.033328 No timeout, exiting.
+4008611 05:55:54.133499 Exiting (socket: True)
+4008611 05:55:54.136860 Exiting as we could obtain the lock
+sys:1: ResourceWarning: unclosed file <_io.TextIOWrapper name='/home/builder/workspace/build/bitbake-cookerdaemon.log' mode='a+' encoding='UTF-8'>
+4008627 05:55:54.536182 --- Starting bitbake server pid 4008627 at 2026-06-01 05:55:54.536158 ---
+4008627 05:55:54.536923 Started bitbake server pid 4008627
+4008627 05:55:54.537077 Entering server connection loop
+4008627 05:55:54.537098 Lockfile is: /home/builder/workspace/build/bitbake.lock
+Socket is /home/builder/workspace/build/bitbake.sock (True)
+4008627 05:55:54.537425 Accepting [<socket.socket fd=6, family=AddressFamily.AF_UNIX, type=SocketKind.SOCK_STREAM, proto=0, laddr=bitbake.sock>] ([])
+4008627 05:55:54.538120 Processing Client
+4008627 05:55:54.538152 Connecting Client
+4008627 05:55:54.538492 Running command ['setFeatures', [2, 1]]
+4008627 05:55:54.538524 Sending reply (None, None)
+4008627 05:55:54.538585 Command Completed (socket: True)
+4008627 05:55:54.539036 Running command ['updateConfig', {'halt': True, 'force': False, 'invalidate_stamp': None, 'dry_run': False, 'dump_signatures': [], 'extra_assume_provided': [], 'profile': False, 'prefile': [], 'postfile': [], 'server_timeout': None, 'nosetscene': False, 'setsceneonly': False, 'skipsetscene': False, 'runall': [], 'runonly': None, 'writeeventlog': None, 'build_verbose_shell': False, 'build_verbose_stdout': False, 'default_loglevel': 20, 'debug_domains': {}}, {'BB_ENV_PASSTHROUGH_ADDITIONS': 'ALL_PROXY BBPATH_EXTRA BB_LOGCONFIG BB_NO_NETWORK BB_NUMBER_THREADS BB_SETSCENE_ENFORCE BB_SRCREV_POLICY DISTRO FTPS_PROXY FTP_PROXY GIT_PROXY_COMMAND HTTPS_PROXY HTTP_PROXY MACHINE NO_PROXY PARALLEL_MAKE SCREENDIR SDKMACHINE SOCKS5_PASSWD SOCKS5_USER SSH_AGENT_PID SSH_AUTH_SOCK STAMPS_DIR TCLIBC TCMODE all_proxy ftp_proxy ftps_proxy http_proxy https_proxy no_proxy ', 'PWD': '/home/builder/workspace/build', 'HOME': '/home/builder', 'BBPATH': '/home/builder/workspace/build', 'LC_ALL': 'en_US.UTF-8', 'PATH': '/home/builder/workspace/poky/scripts:/home/builder/workspace/poky/bitbake/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', 'OE_ADDED_PATHS': '/home/builder/workspace/poky/scripts:/home/builder/workspace/poky/bitbake/bin:', 'HOSTNAME': 'ciprian-B250M-D2V', 'LANGUAGE': 'en_US:en', 'LANG': 'en_US.UTF-8', 'PYTHONPATH': '/home/builder/workspace/poky/bitbake/lib:', 'TERM': 'xterm', 'SHLVL': '0', 'BUILDDIR': '/home/builder/workspace/build', 'DEBIAN_FRONTEND': 'noninteractive', 'OLDPWD': '/home/builder/workspace', '_': '/home/builder/workspace/poky/bitbake/bin/bitbake-layers'}, ['/home/builder/workspace/poky/bitbake/bin/bitbake-layers', 'show-layers']]
+4008627 05:55:55.203875 Base config valid
+4008627 05:55:55.216927 Sending reply (None, None)
+4008627 05:55:55.217104 Command Completed (socket: True)
+4008627 05:55:55.217305 Running command ['parseConfiguration']
+4008627 05:55:55.218578 Sending reply (None, None)
+4008627 05:55:55.218655 Command Completed (socket: True)
+4008627 05:55:55.218923 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBMULTICONFIG',), {}]
+4008627 05:55:55.218991 Sending reply (None, None)
+4008627 05:55:55.219059 Command Completed (socket: True)
+4008627 05:55:55.219287 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBPATH',), {}]
+4008627 05:55:55.219349 Sending reply ('/home/builder/workspace/poky/meta-poky:/home/builder/workspace/build:/home/builder/workspace/poky/meta:/home/builder/workspace/poky/meta-yocto-bsp:/home/builder/workspace/meta-openembedded/meta-oe:/home/builder/workspace/meta-openembedded/meta-python:/home/builder/workspace/meta-st-stm32mp', None)
+4008627 05:55:55.219424 Command Completed (socket: True)
+4008627 05:55:55.224964 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+4008627 05:55:55.225010 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   /home/builder/workspace/meta-st-stm32mp   ', None)
+4008627 05:55:55.225081 Command Completed (socket: True)
+4008627 05:55:55.225269 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+4008627 05:55:55.225373 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf', 'stm-st-stm32mp': '/home/builder/workspace/meta-st-stm32mp/conf/layer.conf'}, None)
+4008627 05:55:55.225472 Command Completed (socket: True)
+4008627 05:55:55.226563 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+4008627 05:55:55.226597 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   /home/builder/workspace/meta-st-stm32mp   ', None)
+4008627 05:55:55.226663 Command Completed (socket: True)
+4008627 05:55:55.226856 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+4008627 05:55:55.226915 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf', 'stm-st-stm32mp': '/home/builder/workspace/meta-st-stm32mp/conf/layer.conf'}, None)
+4008627 05:55:55.226985 Command Completed (socket: True)
+4008627 05:55:55.228796 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+4008627 05:55:55.228823 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   /home/builder/workspace/meta-st-stm32mp   ', None)
+4008627 05:55:55.228889 Command Completed (socket: True)
+4008627 05:55:55.229077 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+4008627 05:55:55.229135 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf', 'stm-st-stm32mp': '/home/builder/workspace/meta-st-stm32mp/conf/layer.conf'}, None)
+4008627 05:55:55.229209 Command Completed (socket: True)
+4008627 05:55:55.230346 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+4008627 05:55:55.230376 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   /home/builder/workspace/meta-st-stm32mp   ', None)
+4008627 05:55:55.230438 Command Completed (socket: True)
+4008627 05:55:55.230652 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+4008627 05:55:55.230706 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf', 'stm-st-stm32mp': '/home/builder/workspace/meta-st-stm32mp/conf/layer.conf'}, None)
+4008627 05:55:55.230779 Command Completed (socket: True)
+4008627 05:55:55.231381 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+4008627 05:55:55.231416 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   /home/builder/workspace/meta-st-stm32mp   ', None)
+4008627 05:55:55.231495 Command Completed (socket: True)
+4008627 05:55:55.231683 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+4008627 05:55:55.231737 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf', 'stm-st-stm32mp': '/home/builder/workspace/meta-st-stm32mp/conf/layer.conf'}, None)
+4008627 05:55:55.231810 Command Completed (socket: True)
+4008627 05:55:55.232346 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBPATH',), {}]
+4008627 05:55:55.232372 Sending reply ('/home/builder/workspace/poky/meta-poky:/home/builder/workspace/build:/home/builder/workspace/poky/meta:/home/builder/workspace/poky/meta-yocto-bsp:/home/builder/workspace/meta-openembedded/meta-oe:/home/builder/workspace/meta-openembedded/meta-python:/home/builder/workspace/meta-st-stm32mp', None)
+4008627 05:55:55.232446 Command Completed (socket: True)
+4008627 05:55:55.233644 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+4008627 05:55:55.233671 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   /home/builder/workspace/meta-st-stm32mp   ', None)
+4008627 05:55:55.233743 Command Completed (socket: True)
+4008627 05:55:55.233930 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+4008627 05:55:55.233986 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf', 'stm-st-stm32mp': '/home/builder/workspace/meta-st-stm32mp/conf/layer.conf'}, None)
+4008627 05:55:55.234086 Command Completed (socket: True)
+4008627 05:55:55.234958 Running command ['getLayerPriorities']
+4008627 05:55:55.235124 Sending reply ([('core', '^/home/builder/workspace/poky/meta/', '^/home/builder/workspace/poky/meta/', 5), ('yocto', '^/home/builder/workspace/poky/meta-poky/', '^/home/builder/workspace/poky/meta-poky/', 5), ('yoctobsp', '^/home/builder/workspace/poky/meta-yocto-bsp/', '^/home/builder/workspace/poky/meta-yocto-bsp/', 5), ('openembedded-layer', '^/home/builder/workspace/meta-openembedded/meta-oe/', '^/home/builder/workspace/meta-openembedded/meta-oe/', 5), ('meta-python', '^/home/builder/workspace/meta-openembedded/meta-python/', '^/home/builder/workspace/meta-openembedded/meta-python/', 5), ('stm-st-stm32mp', '^/home/builder/workspace/meta-st-stm32mp/', '^/home/builder/workspace/meta-st-stm32mp/', 6)], None)
+4008627 05:55:55.235186 Command Completed (socket: True)
+4008627 05:55:55.236058 Running command ['clientComplete']
+4008627 05:55:55.236130 Registering idle function <bound method Command.runAsyncCommand of <bb.command.Command object at 0x7e80db85c4f0>>
+4008627 05:55:55.236141 Sending reply (True, None)
+4008627 05:55:55.236189 Command Completed (socket: True)
+4008627 05:55:55.248819 Processing Client
+4008627 05:55:55.248889 Disconnecting Client (socket: True)
+4008627 05:55:55.249380 Removing idle function <bound method Command.runAsyncCommand of <bb.command.Command object at 0x7e80db85c4f0>>
+4008627 05:55:55.249590 No timeout, exiting.
+4008627 05:55:55.349774 Exiting (socket: True)
+4008627 05:55:55.353116 Exiting as we could obtain the lock
+sys:1: ResourceWarning: unclosed file <_io.TextIOWrapper name='/home/builder/workspace/build/bitbake-cookerdaemon.log' mode='a+' encoding='UTF-8'>
+4008638 05:55:55.736526 --- Starting bitbake server pid 4008638 at 2026-06-01 05:55:55.736506 ---
+4008638 05:55:55.737262 Started bitbake server pid 4008638
+4008638 05:55:55.737426 Entering server connection loop
+4008638 05:55:55.737485 Lockfile is: /home/builder/workspace/build/bitbake.lock
+Socket is /home/builder/workspace/build/bitbake.sock (True)
+4008638 05:55:55.737846 Accepting [<socket.socket fd=6, family=AddressFamily.AF_UNIX, type=SocketKind.SOCK_STREAM, proto=0, laddr=bitbake.sock>] ([])
+4008638 05:55:55.738457 Processing Client
+4008638 05:55:55.738489 Connecting Client
+4008638 05:55:55.738799 Running command ['setFeatures', [2, 1]]
+4008638 05:55:55.738831 Sending reply (None, None)
+4008638 05:55:55.738891 Command Completed (socket: True)
+4008638 05:55:55.739343 Running command ['updateConfig', {'halt': True, 'force': False, 'invalidate_stamp': None, 'dry_run': False, 'dump_signatures': [], 'extra_assume_provided': [], 'profile': False, 'prefile': [], 'postfile': [], 'server_timeout': None, 'nosetscene': False, 'setsceneonly': False, 'skipsetscene': False, 'runall': [], 'runonly': None, 'writeeventlog': None, 'build_verbose_shell': False, 'build_verbose_stdout': False, 'default_loglevel': 20, 'debug_domains': {}}, {'BB_ENV_PASSTHROUGH_ADDITIONS': 'ALL_PROXY BBPATH_EXTRA BB_LOGCONFIG BB_NO_NETWORK BB_NUMBER_THREADS BB_SETSCENE_ENFORCE BB_SRCREV_POLICY DISTRO FTPS_PROXY FTP_PROXY GIT_PROXY_COMMAND HTTPS_PROXY HTTP_PROXY MACHINE NO_PROXY PARALLEL_MAKE SCREENDIR SDKMACHINE SOCKS5_PASSWD SOCKS5_USER SSH_AGENT_PID SSH_AUTH_SOCK STAMPS_DIR TCLIBC TCMODE all_proxy ftp_proxy ftps_proxy http_proxy https_proxy no_proxy ', 'PWD': '/home/builder/workspace/build', 'HOME': '/home/builder', 'BBPATH': '/home/builder/workspace/build', 'LC_ALL': 'en_US.UTF-8', 'PATH': '/home/builder/workspace/poky/scripts:/home/builder/workspace/poky/bitbake/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', 'OE_ADDED_PATHS': '/home/builder/workspace/poky/scripts:/home/builder/workspace/poky/bitbake/bin:', 'HOSTNAME': 'ciprian-B250M-D2V', 'LANGUAGE': 'en_US:en', 'LANG': 'en_US.UTF-8', 'PYTHONPATH': '/home/builder/workspace/poky/bitbake/lib:', 'TERM': 'xterm', 'SHLVL': '1', 'BUILDDIR': '/home/builder/workspace/build', 'DEBIAN_FRONTEND': 'noninteractive', 'OLDPWD': '/home/builder/workspace', '_': '/home/builder/workspace/poky/bitbake/bin/bitbake-layers'}, ['/home/builder/workspace/poky/bitbake/bin/bitbake-layers', 'add-layer', '../meta-universal-controller']]
+4008638 05:55:56.399288 Base config valid
+4008638 05:55:56.412473 Sending reply (None, None)
+4008638 05:55:56.412653 Command Completed (socket: True)
+4008638 05:55:56.412888 Running command ['parseConfiguration']
+4008638 05:55:56.414143 Sending reply (None, None)
+4008638 05:55:56.414220 Command Completed (socket: True)
+4008638 05:55:56.414430 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBMULTICONFIG',), {}]
+4008638 05:55:56.414500 Sending reply (None, None)
+4008638 05:55:56.414561 Command Completed (socket: True)
+4008638 05:55:56.414804 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBPATH',), {}]
+4008638 05:55:56.414864 Sending reply ('/home/builder/workspace/poky/meta-poky:/home/builder/workspace/build:/home/builder/workspace/poky/meta:/home/builder/workspace/poky/meta-yocto-bsp:/home/builder/workspace/meta-openembedded/meta-oe:/home/builder/workspace/meta-openembedded/meta-python:/home/builder/workspace/meta-st-stm32mp', None)
+4008638 05:55:56.414939 Command Completed (socket: True)
+4008638 05:55:56.420708 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+4008638 05:55:56.420756 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   /home/builder/workspace/meta-st-stm32mp   ', None)
+4008638 05:55:56.420827 Command Completed (socket: True)
+4008638 05:55:56.421032 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+4008638 05:55:56.421129 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf', 'stm-st-stm32mp': '/home/builder/workspace/meta-st-stm32mp/conf/layer.conf'}, None)
+4008638 05:55:56.421200 Command Completed (socket: True)
+4008638 05:55:56.423228 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+4008638 05:55:56.423256 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   /home/builder/workspace/meta-st-stm32mp   ', None)
+4008638 05:55:56.423322 Command Completed (socket: True)
+4008638 05:55:56.423555 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+4008638 05:55:56.423607 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf', 'stm-st-stm32mp': '/home/builder/workspace/meta-st-stm32mp/conf/layer.conf'}, None)
+4008638 05:55:56.423680 Command Completed (socket: True)
+4008638 05:55:56.424630 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+4008638 05:55:56.424657 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   /home/builder/workspace/meta-st-stm32mp   ', None)
+4008638 05:55:56.424708 Command Completed (socket: True)
+4008638 05:55:56.424852 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+4008638 05:55:56.424909 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf', 'stm-st-stm32mp': '/home/builder/workspace/meta-st-stm32mp/conf/layer.conf'}, None)
+4008638 05:55:56.424968 Command Completed (socket: True)
+4008638 05:55:56.426063 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+4008638 05:55:56.426094 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   /home/builder/workspace/meta-st-stm32mp   ', None)
+4008638 05:55:56.426146 Command Completed (socket: True)
+4008638 05:55:56.426288 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+4008638 05:55:56.426349 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf', 'stm-st-stm32mp': '/home/builder/workspace/meta-st-stm32mp/conf/layer.conf'}, None)
+4008638 05:55:56.426411 Command Completed (socket: True)
+4008638 05:55:56.426906 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBPATH',), {}]
+4008638 05:55:56.426932 Sending reply ('/home/builder/workspace/poky/meta-poky:/home/builder/workspace/build:/home/builder/workspace/poky/meta:/home/builder/workspace/poky/meta-yocto-bsp:/home/builder/workspace/meta-openembedded/meta-oe:/home/builder/workspace/meta-openembedded/meta-python:/home/builder/workspace/meta-st-stm32mp', None)
+4008638 05:55:56.426984 Command Completed (socket: True)
+4008638 05:55:56.428146 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+4008638 05:55:56.428174 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   /home/builder/workspace/meta-st-stm32mp   ', None)
+4008638 05:55:56.428226 Command Completed (socket: True)
+4008638 05:55:56.428369 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+4008638 05:55:56.428429 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf', 'stm-st-stm32mp': '/home/builder/workspace/meta-st-stm32mp/conf/layer.conf'}, None)
+4008638 05:55:56.428487 Command Completed (socket: True)
+4008638 05:55:56.429040 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+4008638 05:55:56.429066 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   /home/builder/workspace/meta-st-stm32mp   ', None)
+4008638 05:55:56.429136 Command Completed (socket: True)
+4008638 05:55:56.429315 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+4008638 05:55:56.429371 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf', 'stm-st-stm32mp': '/home/builder/workspace/meta-st-stm32mp/conf/layer.conf'}, None)
+4008638 05:55:56.429460 Command Completed (socket: True)
+4008638 05:55:56.431286 Running command ['revalidateCaches']
+4008638 05:55:56.431552 Found /home/builder/workspace/build/conf/bblayers.conf changed, invalid cache
+4008638 05:55:56.431561 Base config invalidated
+4008638 05:55:56.435226 Sending reply (None, None)
+4008638 05:55:56.435348 Command Completed (socket: True)
+4008638 05:55:56.435572 Running command ['parseConfiguration']
+4008638 05:55:56.750876 Base config valid
+4008638 05:55:56.753413 Sending reply (None, None)
+4008638 05:55:56.753516 Command Completed (socket: True)
+4008638 05:55:56.753923 Running command ['clientComplete']
+4008638 05:55:56.753993 Registering idle function <bound method Command.runAsyncCommand of <bb.command.Command object at 0x7023479244f0>>
+4008638 05:55:56.754002 Sending reply (True, None)
+4008638 05:55:56.754066 Command Completed (socket: True)
+4008638 05:55:56.762624 Removing idle function <bound method Command.runAsyncCommand of <bb.command.Command object at 0x7023479244f0>>
+4008638 05:55:56.762751 Processing Client
+4008638 05:55:56.762824 Disconnecting Client (socket: True)
+4008638 05:55:56.763022 No timeout, exiting.
+4008638 05:55:56.863237 Exiting (socket: True)
+4008638 05:55:56.866880 Exiting as we could obtain the lock
+sys:1: ResourceWarning: unclosed file <_io.TextIOWrapper name='/home/builder/workspace/build/bitbake-cookerdaemon.log' mode='a+' encoding='UTF-8'>
+4008653 05:55:57.239218 --- Starting bitbake server pid 4008653 at 2026-06-01 05:55:57.239193 ---
+4008653 05:55:57.239967 Started bitbake server pid 4008653
+4008653 05:55:57.240117 Entering server connection loop
+4008653 05:55:57.240138 Lockfile is: /home/builder/workspace/build/bitbake.lock
+Socket is /home/builder/workspace/build/bitbake.sock (True)
+4008653 05:55:57.240498 Accepting [<socket.socket fd=6, family=AddressFamily.AF_UNIX, type=SocketKind.SOCK_STREAM, proto=0, laddr=bitbake.sock>] ([])
+4008653 05:55:57.241194 Processing Client
+4008653 05:55:57.241225 Connecting Client
+4008653 05:55:57.241544 Running command ['setFeatures', [2, 1]]
+4008653 05:55:57.241575 Sending reply (None, None)
+4008653 05:55:57.241650 Command Completed (socket: True)
+4008653 05:55:57.242046 Running command ['updateConfig', {'halt': True, 'force': False, 'invalidate_stamp': None, 'dry_run': False, 'dump_signatures': [], 'extra_assume_provided': [], 'profile': False, 'prefile': [], 'postfile': [], 'server_timeout': None, 'nosetscene': False, 'setsceneonly': False, 'skipsetscene': False, 'runall': [], 'runonly': None, 'writeeventlog': None, 'build_verbose_shell': False, 'build_verbose_stdout': False, 'default_loglevel': 20, 'debug_domains': {}}, {'BB_ENV_PASSTHROUGH_ADDITIONS': 'ALL_PROXY BBPATH_EXTRA BB_LOGCONFIG BB_NO_NETWORK BB_NUMBER_THREADS BB_SETSCENE_ENFORCE BB_SRCREV_POLICY DISTRO FTPS_PROXY FTP_PROXY GIT_PROXY_COMMAND HTTPS_PROXY HTTP_PROXY MACHINE NO_PROXY PARALLEL_MAKE SCREENDIR SDKMACHINE SOCKS5_PASSWD SOCKS5_USER SSH_AGENT_PID SSH_AUTH_SOCK STAMPS_DIR TCLIBC TCMODE all_proxy ftp_proxy ftps_proxy http_proxy https_proxy no_proxy ', 'PWD': '/home/builder/workspace/build', 'HOME': '/home/builder', 'BBPATH': '/home/builder/workspace/build', 'LC_ALL': 'en_US.UTF-8', 'PATH': '/home/builder/workspace/poky/scripts:/home/builder/workspace/poky/bitbake/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', 'OE_ADDED_PATHS': '/home/builder/workspace/poky/scripts:/home/builder/workspace/poky/bitbake/bin:', 'HOSTNAME': 'ciprian-B250M-D2V', 'LANGUAGE': 'en_US:en', 'LANG': 'en_US.UTF-8', 'PYTHONPATH': '/home/builder/workspace/poky/bitbake/lib:', 'TERM': 'xterm', 'SHLVL': '1', 'BUILDDIR': '/home/builder/workspace/build', 'DEBIAN_FRONTEND': 'noninteractive', 'OLDPWD': '/home/builder/workspace', '_': '/home/builder/workspace/poky/bitbake/bin/bitbake'}, ['/home/builder/workspace/poky/bitbake/bin/bitbake', 'core-image-minimal']]
+4008653 05:55:57.926376 Base config valid
+4008653 05:55:57.939514 Sending reply (None, None)
+4008653 05:55:57.939692 Command Completed (socket: True)
+4008653 05:55:57.939920 Running command ['getVariable', 'BBINCLUDELOGS']
+4008653 05:55:57.940007 Sending reply ('yes', None)
+4008653 05:55:57.940075 Command Completed (socket: True)
+4008653 05:55:57.940241 Running command ['getVariable', 'BBINCLUDELOGS_LINES']
+4008653 05:55:57.940277 Sending reply (None, None)
+4008653 05:55:57.940344 Command Completed (socket: True)
+4008653 05:55:57.940554 Running command ['getSetVariable', 'BB_CONSOLELOG']
+4008653 05:55:57.940664 Sending reply ('/home/builder/workspace/build/tmp/log/cooker/stm32mp1/20260601055557.log', None)
+4008653 05:55:57.940735 Command Completed (socket: True)
+4008653 05:55:57.940897 Running command ['getSetVariable', 'BB_LOGCONFIG']
+4008653 05:55:57.940940 Sending reply (None, None)
+4008653 05:55:57.941008 Command Completed (socket: True)
+4008653 05:55:57.942898 Running command ['getUIHandlerNum']
+4008653 05:55:57.942929 Sending reply (1, None)
+4008653 05:55:57.942997 Command Completed (socket: True)
+4008653 05:55:57.943184 Running command ['setEventMask', 1, 20, {'BitBake.SigGen.HashEquiv': 19, 'BitBake.RunQueue.HashEquiv': 19}, ['bb.runqueue.runQueueExitWait', 'bb.event.LogExecTTY', 'logging.LogRecord', 'bb.build.TaskFailed', 'bb.build.TaskBase', 'bb.event.ParseStarted', 'bb.event.ParseProgress', 'bb.event.ParseCompleted', 'bb.event.CacheLoadStarted', 'bb.event.CacheLoadProgress', 'bb.event.CacheLoadCompleted', 'bb.command.CommandFailed', 'bb.command.CommandExit', 'bb.command.CommandCompleted', 'bb.cooker.CookerExit', 'bb.event.MultipleProviders', 'bb.event.NoProvider', 'bb.runqueue.sceneQueueTaskStarted', 'bb.runqueue.runQueueTaskStarted', 'bb.runqueue.runQueueTaskFailed', 'bb.runqueue.sceneQueueTaskFailed', 'bb.event.BuildBase', 'bb.build.TaskStarted', 'bb.build.TaskSucceeded', 'bb.build.TaskFailedSilent', 'bb.build.TaskProgress', 'bb.event.ProcessStarted', 'bb.event.ProcessProgress', 'bb.event.ProcessFinished']]
+4008653 05:55:57.943214 Sending reply (True, None)
+4008653 05:55:57.943280 Command Completed (socket: True)
+4008653 05:55:57.943388 Running command ['getVariable', 'BB_DEFAULT_TASK']
+4008653 05:55:57.943444 Sending reply ('build', None)
+4008653 05:55:57.943503 Command Completed (socket: True)
+4008653 05:55:57.943625 Running command ['setConfig', 'cmd', 'build']
+4008653 05:55:57.943649 Sending reply (None, None)
+4008653 05:55:57.943699 Command Completed (socket: True)
+4008653 05:55:57.943820 Running command ['buildTargets', ['core-image-minimal'], 'build']
+4008653 05:55:57.943898 Registering idle function <bound method Command.runAsyncCommand of <bb.command.Command object at 0x7a09acae84f0>>
+4008653 05:55:57.943908 Sending reply (True, None)
+4008653 05:55:57.943956 Command Completed (socket: True)
+4008653 05:55:57.955583 Parsing started
+4008653 05:55:58.458566 Parse cache valid
+--2026-06-01 05:58:48--  http://downloads.yoctoproject.org/releases/uninative/5.1/x86_64-nativesdk-libc-5.1.tar.xz
+Resolving downloads.yoctoproject.org (downloads.yoctoproject.org)... 37.27.135.249, 2a01:4f9:3070:3985::2
+Connecting to downloads.yoctoproject.org (downloads.yoctoproject.org)|37.27.135.249|:80... connected.
+HTTP request sent, awaiting response... 200 OK
+Length: 7219084 (6.9M) [application/octet-stream]
+Saving to: ‘/home/builder/workspace/build/downloads/uninative/2b63a078c26535e0786e87f81ae69509df30f4dce40693004c527bd5e4ab2b85/x86_64-nativesdk-libc-5.1.tar.xz.tmp’
+
+
+2026-06-01 05:58:51 (2.02 MB/s) - ‘/home/builder/workspace/build/downloads/uninative/2b63a078c26535e0786e87f81ae69509df30f4dce40693004c527bd5e4ab2b85/x86_64-nativesdk-libc-5.1.tar.xz.tmp’ saved [7219084/7219084]
+
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 12709 
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 357631 
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 378898 
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 380509 
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 424745 
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 427748 
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 428139 
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 521372 
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 525274 
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 529208 
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 529338 
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 529631 
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 530646 
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 585128 
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 676785 
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 678768 
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 678778 
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 802755 
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 806709 
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 819449 
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 819641 
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 821258 
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 841542 
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 875335 
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 885603 
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 887146 
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 887944 
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 892776 
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 916771 
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 917394 
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 917883 
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 918869 
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 953525 
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 954528 
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 971714 
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 973480 
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 974195 
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 974093 
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 974625 
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 980636 
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 982989 
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1024859
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1031458
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1035170
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1034662
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1022458
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1042381
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1055880
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1062489
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1100718
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1102245
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1102963
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1117415
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1122575
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1123590
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1132602
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1132916
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1132663
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1140414
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1140774
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1140829
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1140846
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1136714
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1141386
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1146003
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1152155
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1152417
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1154609
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1157025
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1157144
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1160066
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1192893
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1195000
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1149120
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1205161
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1200335
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1219033
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1219426
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1219809
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1219877
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1220473
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1221829
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1223292
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1225510
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1230104
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1242077
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1230314
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1278921
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1287399
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1287512
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1288856
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1293333
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1302347
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1303959
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1296713
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1312532
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1322843
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1323376
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1328759
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1329086
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1329835
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1333254
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1330132
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1333873
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1335319
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1336471
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1336520
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1339355
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1358790
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1365670
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1373835
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1367211
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1383501
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1385226
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1385344
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1390587
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1385042
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1397189
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1397667
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1398490
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1398847
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1377945
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1399431
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1399702
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1402531
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1403259
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1403814
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1404342
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1404768
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1406549
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1406820
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1407087
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1407423
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1400468
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1410848
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1421583
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1410901
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1421908
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1441915
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1442123
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1442988
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1444015
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1444433
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1444604
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1445738
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1446155
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1446171
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1464052
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1491313
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1492818
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1493168
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1493354
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1497405
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1499709
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1499927
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1468140
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1503276
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1500402
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1504359
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1504381
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1505818
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1506395
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1506444
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1508538
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1508683
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1511624
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1514337
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1521584
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1522473
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1508337
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1628698
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1628800
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1632471
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1633072
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1633391
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1633446
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1634705
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1639403
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1639957
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1640868
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1642692
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1681112
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1689084
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1700296
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1719069
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1719247
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1719468
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1719612
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1720080
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1720245
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1720294
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1720342
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1720401
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1720698
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1721156
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1722720
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1722821
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1722600
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1723189
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1721601
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1723165
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1723758
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1723740
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1724142
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1723836
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1724455
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1725038
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1726159
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1726120
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1727183
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1727668
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1727764
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1728005
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1728102
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1728877
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1729659
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1729366
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1738233
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1741272
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1741690
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1740857
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1774123
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1793601
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1798494
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1806011
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1806054
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 2
+Client pids: 1809953
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1810087
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 2
+Client pids: 1810658
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1811472
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1811665
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1810785
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 2
+Client pids: 1812249
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1812301
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 2
+Client pids: 1812510
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1812553
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 2
+Client pids: 1813201
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1813201
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 2
+Client pids: 1813586
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1815107
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1815381
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1813594
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 5
+Client pids: 1815931
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 2
+Client pids: 1818046
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1818418
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 2
+Client pids: 1818741
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1818791
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 3
+Client pids: 1819134
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1819134
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 2
+Client pids: 1819333
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1819333
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 2
+Client pids: 1819519
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1819519
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 2
+Client pids: 1819740
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1819740
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 4
+Client pids: 1820543
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1820543
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 2
+Client pids: 1821633
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1821688
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 2
+Client pids: 1822002
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1822002
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 2
+Client pids: 1822365
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1817783
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 2
+Client pids: 1823418
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1823418
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1822403
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1824656
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1825120
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 2
+Client pids: 1823782
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 4
+Client pids: 1825787
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1825787
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 2
+Client pids: 1826335
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1826335
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 4
+Client pids: 1826648
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1823819
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1826648
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 2
+Client pids: 1827703
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1827748
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 4
+Client pids: 1827976
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1827976
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1828285
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 4
+Client pids: 1828173
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1828472
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 2
+Client pids: 1828663
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1828663
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 2
+Client pids: 1828849
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1828849
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 4
+Client pids: 1829102
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1829084
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 2
+Client pids: 1829379
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1829379
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 2
+Client pids: 1829783
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1829783
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 2
+Client pids: 1829938
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1829938
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 4
+Client pids: 1830161
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1828173
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1830161
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 4
+Client pids: 1830568
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1830568
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 2
+Client pids: 1830719
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1830758
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 4
+Client pids: 1831263
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1831263
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 4
+Client pids: 1831527
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1831527
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1831987
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1832260
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 2
+Client pids: 1831792
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1831834
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 2
+Client pids: 1832738
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1832788
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1833283
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1833787
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1834158
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1834290
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1834562
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1834778
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 2
+Client pids: 1832913
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 2
+Client pids: 1834907
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1834986
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1833100
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 4
+Client pids: 1835237
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1835237
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 4
+Client pids: 1835436
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1835436
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 2
+Client pids: 1835616
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1835616
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 2
+Client pids: 1835916
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1835928
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 2
+Client pids: 1836431
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1836431
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 4
+Client pids: 1836727
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1836727
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 2
+Client pids: 1836954
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1836954
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 2
+Client pids: 1837218
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1837268
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 3
+Client pids: 1837339
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1837436
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1837658
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1837762
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 2
+Client pids: 1837545
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1837596
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 4
+Client pids: 1837901
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1837901
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 4
+Client pids: 1838169
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1838169
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 2
+Client pids: 1838276
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1838323
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 2
+Client pids: 1839474
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1839474
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1839815
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1839905
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1840018
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1840181
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1840325
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1840402
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1840479
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1840580
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1840773
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1840844
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1840916
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 2
+Client pids: 1839680
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1841066
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 5
+Client pids: 1841484
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1841484
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 4
+Client pids: 1841694
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1841694
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1839687
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1842349
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 2
+Client pids: 1842154
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1842722
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1842194
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1843013
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1843215
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1843362
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1843437
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1843595
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1844246
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 2
+Client pids: 1842888
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 2
+Client pids: 1846689
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1842891
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 4
+Client pids: 1850859
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1850859
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1849515
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1852524
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1852629
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1853523
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1853785
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1853891
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1854017
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1854268
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1854395
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1854758
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1854861
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1854972
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 4
+Client pids: 1851419
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1855296
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 4
+Client pids: 1864091
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1864091
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1851419
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1864518
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1864595
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 2
+Client pids: 1864458
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 2
+Client pids: 1864763
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1864461
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1865020
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 3
+Client pids: 1865133
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1865133
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 2
+Client pids: 1866343
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1866343
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 6
+Client pids: 1866557
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1866557
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1875272
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1924408
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1925139
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 1977443
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 2123607
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 2211554
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 2212712
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 2213854
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 2214619
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 2221398
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 2276153
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 2677278
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 2679626
+Server will shut down after all clients exit.
+Server refused shutdown.  Remaining client fds: 1
+Client pids: 2680877
+Server will shut down after all clients exit.
+Failure expanding variable PARTITIONS_CONFIG, expression was  ${@bb.utils.contains_any('BOOTDEVICE_LABELS', 'emmc nor-emmc nor-nor-emmc', 'emmc', '', d)} ${@bb.utils.contains('BOOTDEVICE_LABELS', 'nand-2-128-256', 'nand-2-128-256', '', d)} ${@bb.utils.contains('BOOTDEVICE_LABELS', 'nand-4-256-512', 'nand-4-256-512', '', d)} ${@bb.utils.contains('BOOTDEVICE_LABELS', 'nand-4-256-1024', 'nand-4-256-1024', '', d)} ${@bb.utils.contains('BOOTDEVICE_LABELS', 'nand-custom', 'nand-custom', '', d)} ${@bb.utils.contains('BOOTDEVICE_LABELS', 'nor', 'nor', '', d)} ${@bb.utils.contains_any('BOOTDEVICE_LABELS', 'sdcard nor-sdcard nor-nor-sdcard', 'sdcard', d)} which triggered exception TypeError: contains_any() missing 1 required positional argument: 'd'
+The variable dependency chain for the failure is: PARTITIONS_CONFIG
+4008653 05:58:53.172477 Registering idle function <function BBCooker.buildTargets.<locals>.buildTargetsIdle at 0x7a09a75eb250>
+4008653 05:58:53.172522 Removing idle function <bound method Command.runAsyncCommand of <bb.command.Command object at 0x7a09acae84f0>>
+4008653 08:28:48.372681 Running command ['ping']
+4008653 08:28:48.382889 Sending reply ('Still alive!', None)
+4008653 08:28:48.384454 Command Completed (socket: True)
+4008653 09:27:20.528083 Running command ['ping']
+4008653 09:27:20.528192 Sending reply ('Still alive!', None)
+4008653 09:27:20.528475 Command Completed (socket: True)
+4008653 09:28:20.590507 Running command ['ping']
+4008653 09:28:20.591456 Sending reply ('Still alive!', None)
+4008653 09:28:20.591597 Command Completed (socket: True)
+4008653 09:29:20.660232 Running command ['ping']
+4008653 09:29:20.660274 Sending reply ('Still alive!', None)
+4008653 09:29:20.660368 Command Completed (socket: True)
+4008653 09:30:53.096736 Running command ['ping']
+4008653 09:30:53.096845 Sending reply ('Still alive!', None)
+4008653 09:30:53.097091 Command Completed (socket: True)
+4008653 09:35:03.106520 Running command ['ping']
+4008653 09:35:03.106558 Sending reply ('Still alive!', None)
+4008653 09:35:03.106641 Command Completed (socket: True)
+4008653 10:03:44.325063 Removing idle function <function BBCooker.buildTargets.<locals>.buildTargetsIdle at 0x7a09a75eb250> at idleFinish
+4008653 10:03:44.586823 Processing Client
+4008653 10:03:44.590317 Disconnecting Client (socket: True)
+4008653 10:03:44.630708 Parse cache invalidated
+4008653 10:03:44.630798 No timeout, exiting.
+4008653 10:03:44.731198 Exiting (socket: True)
+4008653 10:03:44.875997 Exiting as we could obtain the lock
+sys:1: ResourceWarning: unclosed file <_io.TextIOWrapper name='/home/builder/workspace/build/bitbake-cookerdaemon.log' mode='a+' encoding='UTF-8'>
