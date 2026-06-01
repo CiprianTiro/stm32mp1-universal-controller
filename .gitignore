@@ -13,7 +13,21 @@ yocto_layers/build/pseudodone
 yocto_layers/build/bitbake.lock
 
 # If you run QEMU, ignore temporary runtime network/tap initialization files
-yocto_layers/build/qemu-boot*
+yocto_layers/build-qemu/qemu-boot*
+yocto_layers/build-qemu/tmp/
+yocto_layers/build-qemu/sstate-cache/
+yocto_layers/build-qemu/cache/
+yocto_layers/build-qemu/downloads/
+
+# Ignore BitBake execution locks and state flags
+yocto_layers/build/*.lock
+yocto_layers/build/pseudodone
+yocto_layers/build/bitbake.lock
+
+# Ignore BitBake execution locks and state flags
+yocto_layers/build-qemu/*.lock
+yocto_layers/build-qemu/pseudodone
+yocto_layers/build-qemu/bitbake.lock
 
 # ==============================================================================
 # 2. UPSTREAM / BASE LAYERS (MANAGED VIA GIT SUBMODULES)
