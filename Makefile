@@ -12,7 +12,7 @@ help:
 	@echo "============================================================================="
 	@echo "Available Execution Commands:"
 	@echo "  make build-hw      - Build Yocto Linux production image for STM32MP157F-DK2"
-#	@echo "  make build-qemu    - Build Yocto Linux simulation image for QEMU ARM64"
+	@echo "  make build-qemu    - Build Yocto Linux simulation image for QEMU ARM64"
 	@echo "  make shell-yocto   - Enter interactive terminal inside Yocto Docker sandbox"
 	@echo "  make clean-yocto   - Wipe local Yocto build caches and configuration layouts"
 	@echo "-----------------------------------------------------------------------------"
@@ -28,9 +28,9 @@ build-hw:
 	@echo "🎬 Invoking Yocto hardware build pipeline..."
 	@cd yocto_layers && ./run_build.sh
 
-#build-qemu:
-#	@echo "🎬 Invoking Yocto QEMU emulation build pipeline..."
-#	@cd yocto_layers && ./run_build.sh qemu
+build-qemu:
+	@echo "🎬 Invoking Yocto QEMU emulation build pipeline..."
+	@cd yocto_layers && ./run_build.sh qemu
 
 shell-yocto:
 	@echo "🐳 Entering Yocto Docker workspace portal..."
@@ -71,5 +71,5 @@ kernel-save:
 # 4. SIMULATION PIPELINES
 # -----------------------------------------------------------------------------
 
-#run-qemu:
-#	@cd yocto_layers && ./run_qemu.sh
+run-qemu:
+	@cd yocto_layers && ./run_qemu.sh

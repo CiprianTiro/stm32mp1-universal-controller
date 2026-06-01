@@ -2163,3 +2163,289 @@ Socket is /home/builder/workspace/build-qemu/bitbake.sock (True)
 4008464 05:53:31.758377 Exiting (socket: True)
 4008464 05:53:31.781343 Exiting as we could obtain the lock
 sys:1: ResourceWarning: unclosed file <_io.TextIOWrapper name='/home/builder/workspace/build-qemu/bitbake-cookerdaemon.log' mode='a+' encoding='UTF-8'>
+2689138 15:11:56.268548 --- Starting bitbake server pid 2689138 at 2026-06-01 15:11:56.268528 ---
+2689138 15:11:56.269293 Started bitbake server pid 2689138
+2689138 15:11:56.269526 Entering server connection loop
+2689138 15:11:56.269549 Lockfile is: /home/builder/workspace/build-qemu/bitbake.lock
+Socket is /home/builder/workspace/build-qemu/bitbake.sock (True)
+2689138 15:11:56.269904 Accepting [<socket.socket fd=6, family=AddressFamily.AF_UNIX, type=SocketKind.SOCK_STREAM, proto=0, laddr=bitbake.sock>] ([])
+2689138 15:11:56.270645 Processing Client
+2689138 15:11:56.270678 Connecting Client
+2689138 15:11:56.270996 Running command ['setFeatures', [2, 1]]
+2689138 15:11:56.271032 Sending reply (None, None)
+2689138 15:11:56.271116 Command Completed (socket: True)
+2689138 15:11:56.271576 Running command ['updateConfig', {'halt': True, 'force': False, 'invalidate_stamp': None, 'dry_run': False, 'dump_signatures': [], 'extra_assume_provided': [], 'profile': False, 'prefile': [], 'postfile': [], 'server_timeout': None, 'nosetscene': False, 'setsceneonly': False, 'skipsetscene': False, 'runall': [], 'runonly': None, 'writeeventlog': None, 'build_verbose_shell': False, 'build_verbose_stdout': False, 'default_loglevel': 20, 'debug_domains': {}}, {'BB_ENV_PASSTHROUGH_ADDITIONS': 'ALL_PROXY BBPATH_EXTRA BB_LOGCONFIG BB_NO_NETWORK BB_NUMBER_THREADS BB_SETSCENE_ENFORCE BB_SRCREV_POLICY DISTRO FTPS_PROXY FTP_PROXY GIT_PROXY_COMMAND HTTPS_PROXY HTTP_PROXY MACHINE NO_PROXY PARALLEL_MAKE SCREENDIR SDKMACHINE SOCKS5_PASSWD SOCKS5_USER SSH_AGENT_PID SSH_AUTH_SOCK STAMPS_DIR TCLIBC TCMODE all_proxy ftp_proxy ftps_proxy http_proxy https_proxy no_proxy ', 'PWD': '/home/builder/workspace/build-qemu', 'HOME': '/home/builder', 'BBPATH': '/home/builder/workspace/build-qemu', 'LC_ALL': 'en_US.UTF-8', 'PATH': '/home/builder/workspace/poky/scripts:/home/builder/workspace/poky/bitbake/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', 'OE_ADDED_PATHS': '/home/builder/workspace/poky/scripts:/home/builder/workspace/poky/bitbake/bin:', 'HOSTNAME': 'ciprian-B250M-D2V', 'LANGUAGE': 'en_US:en', 'LANG': 'en_US.UTF-8', 'PYTHONPATH': '/home/builder/workspace/poky/bitbake/lib:', 'TERM': 'xterm', 'SHLVL': '0', 'BUILDDIR': '/home/builder/workspace/build-qemu', 'DEBIAN_FRONTEND': 'noninteractive', 'OLDPWD': '/home/builder/workspace', '_': '/home/builder/workspace/poky/bitbake/bin/bitbake-layers'}, ['/home/builder/workspace/poky/bitbake/bin/bitbake-layers', 'show-layers']]
+2689138 15:11:56.856595 Base config valid
+2689138 15:11:56.900278 Sending reply (None, None)
+2689138 15:11:56.900487 Command Completed (socket: True)
+2689138 15:11:56.900692 Running command ['parseConfiguration']
+2689138 15:11:56.902038 Sending reply (None, None)
+2689138 15:11:56.902103 Command Completed (socket: True)
+2689138 15:11:56.902364 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBMULTICONFIG',), {}]
+2689138 15:11:56.902439 Sending reply (None, None)
+2689138 15:11:56.902494 Command Completed (socket: True)
+2689138 15:11:56.902739 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBPATH',), {}]
+2689138 15:11:56.902800 Sending reply ('/home/builder/workspace/poky/meta-poky:/home/builder/workspace/build-qemu:/home/builder/workspace/poky/meta:/home/builder/workspace/poky/meta-yocto-bsp:/home/builder/workspace/meta-openembedded/meta-oe:/home/builder/workspace/meta-openembedded/meta-python:/home/builder/workspace/meta-universal-controller', None)
+2689138 15:11:56.902856 Command Completed (socket: True)
+2689138 15:11:56.910490 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+2689138 15:11:56.910544 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   /home/builder/workspace/meta-universal-controller   ', None)
+2689138 15:11:56.910608 Command Completed (socket: True)
+2689138 15:11:56.910763 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+2689138 15:11:56.910866 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf', 'meta-universal-controller': '/home/builder/workspace/meta-universal-controller/conf/layer.conf'}, None)
+2689138 15:11:56.910928 Command Completed (socket: True)
+2689138 15:11:56.911942 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+2689138 15:11:56.911969 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   /home/builder/workspace/meta-universal-controller   ', None)
+2689138 15:11:56.912021 Command Completed (socket: True)
+2689138 15:11:56.912201 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+2689138 15:11:56.912267 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf', 'meta-universal-controller': '/home/builder/workspace/meta-universal-controller/conf/layer.conf'}, None)
+2689138 15:11:56.912326 Command Completed (socket: True)
+2689138 15:11:56.913407 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+2689138 15:11:56.913438 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   /home/builder/workspace/meta-universal-controller   ', None)
+2689138 15:11:56.913490 Command Completed (socket: True)
+2689138 15:11:56.913677 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+2689138 15:11:56.913738 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf', 'meta-universal-controller': '/home/builder/workspace/meta-universal-controller/conf/layer.conf'}, None)
+2689138 15:11:56.913799 Command Completed (socket: True)
+2689138 15:11:56.915702 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+2689138 15:11:56.915730 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   /home/builder/workspace/meta-universal-controller   ', None)
+2689138 15:11:56.915782 Command Completed (socket: True)
+2689138 15:11:56.915962 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+2689138 15:11:56.916014 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf', 'meta-universal-controller': '/home/builder/workspace/meta-universal-controller/conf/layer.conf'}, None)
+2689138 15:11:56.916076 Command Completed (socket: True)
+2689138 15:11:56.916614 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBPATH',), {}]
+2689138 15:11:56.916651 Sending reply ('/home/builder/workspace/poky/meta-poky:/home/builder/workspace/build-qemu:/home/builder/workspace/poky/meta:/home/builder/workspace/poky/meta-yocto-bsp:/home/builder/workspace/meta-openembedded/meta-oe:/home/builder/workspace/meta-openembedded/meta-python:/home/builder/workspace/meta-universal-controller', None)
+2689138 15:11:56.916704 Command Completed (socket: True)
+2689138 15:11:56.917963 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+2689138 15:11:56.917994 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   /home/builder/workspace/meta-universal-controller   ', None)
+2689138 15:11:56.918049 Command Completed (socket: True)
+2689138 15:11:56.918186 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+2689138 15:11:56.918238 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf', 'meta-universal-controller': '/home/builder/workspace/meta-universal-controller/conf/layer.conf'}, None)
+2689138 15:11:56.918302 Command Completed (socket: True)
+2689138 15:11:56.918781 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+2689138 15:11:56.918808 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   /home/builder/workspace/meta-universal-controller   ', None)
+2689138 15:11:56.918866 Command Completed (socket: True)
+2689138 15:11:56.918996 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+2689138 15:11:56.919051 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf', 'meta-universal-controller': '/home/builder/workspace/meta-universal-controller/conf/layer.conf'}, None)
+2689138 15:11:56.919137 Command Completed (socket: True)
+2689138 15:11:56.920004 Running command ['getLayerPriorities']
+2689138 15:11:56.920173 Sending reply ([('core', '^/home/builder/workspace/poky/meta/', '^/home/builder/workspace/poky/meta/', 5), ('yocto', '^/home/builder/workspace/poky/meta-poky/', '^/home/builder/workspace/poky/meta-poky/', 5), ('yoctobsp', '^/home/builder/workspace/poky/meta-yocto-bsp/', '^/home/builder/workspace/poky/meta-yocto-bsp/', 5), ('openembedded-layer', '^/home/builder/workspace/meta-openembedded/meta-oe/', '^/home/builder/workspace/meta-openembedded/meta-oe/', 5), ('meta-python', '^/home/builder/workspace/meta-openembedded/meta-python/', '^/home/builder/workspace/meta-openembedded/meta-python/', 5), ('meta-universal-controller', '^/home/builder/workspace/meta-universal-controller/', '^/home/builder/workspace/meta-universal-controller/', 6)], None)
+2689138 15:11:56.920235 Command Completed (socket: True)
+2689138 15:11:56.921084 Running command ['clientComplete']
+2689138 15:11:56.921160 Registering idle function <bound method Command.runAsyncCommand of <bb.command.Command object at 0x73b36db304f0>>
+2689138 15:11:56.921185 Sending reply (True, None)
+2689138 15:11:56.921247 Command Completed (socket: True)
+2689138 15:11:56.973766 Processing Client
+2689138 15:11:56.973895 Disconnecting Client (socket: True)
+2689138 15:11:56.979013 Removing idle function <bound method Command.runAsyncCommand of <bb.command.Command object at 0x73b36db304f0>>
+2689138 15:11:56.979575 No timeout, exiting.
+2689138 15:11:57.079829 Exiting (socket: True)
+2689138 15:11:57.083305 Exiting as we could obtain the lock
+sys:1: ResourceWarning: unclosed file <_io.TextIOWrapper name='/home/builder/workspace/build-qemu/bitbake-cookerdaemon.log' mode='a+' encoding='UTF-8'>
+2689152 15:11:57.484044 --- Starting bitbake server pid 2689152 at 2026-06-01 15:11:57.484025 ---
+2689152 15:11:57.484821 Started bitbake server pid 2689152
+2689152 15:11:57.484971 Entering server connection loop
+2689152 15:11:57.484993 Lockfile is: /home/builder/workspace/build-qemu/bitbake.lock
+Socket is /home/builder/workspace/build-qemu/bitbake.sock (True)
+2689152 15:11:57.485354 Accepting [<socket.socket fd=6, family=AddressFamily.AF_UNIX, type=SocketKind.SOCK_STREAM, proto=0, laddr=bitbake.sock>] ([])
+2689152 15:11:57.485907 Processing Client
+2689152 15:11:57.485939 Connecting Client
+2689152 15:11:57.486237 Running command ['setFeatures', [2, 1]]
+2689152 15:11:57.486273 Sending reply (None, None)
+2689152 15:11:57.486342 Command Completed (socket: True)
+2689152 15:11:57.486780 Running command ['updateConfig', {'halt': True, 'force': False, 'invalidate_stamp': None, 'dry_run': False, 'dump_signatures': [], 'extra_assume_provided': [], 'profile': False, 'prefile': [], 'postfile': [], 'server_timeout': None, 'nosetscene': False, 'setsceneonly': False, 'skipsetscene': False, 'runall': [], 'runonly': None, 'writeeventlog': None, 'build_verbose_shell': False, 'build_verbose_stdout': False, 'default_loglevel': 20, 'debug_domains': {}}, {'BB_ENV_PASSTHROUGH_ADDITIONS': 'ALL_PROXY BBPATH_EXTRA BB_LOGCONFIG BB_NO_NETWORK BB_NUMBER_THREADS BB_SETSCENE_ENFORCE BB_SRCREV_POLICY DISTRO FTPS_PROXY FTP_PROXY GIT_PROXY_COMMAND HTTPS_PROXY HTTP_PROXY MACHINE NO_PROXY PARALLEL_MAKE SCREENDIR SDKMACHINE SOCKS5_PASSWD SOCKS5_USER SSH_AGENT_PID SSH_AUTH_SOCK STAMPS_DIR TCLIBC TCMODE all_proxy ftp_proxy ftps_proxy http_proxy https_proxy no_proxy ', 'PWD': '/home/builder/workspace/build-qemu', 'HOME': '/home/builder', 'BBPATH': '/home/builder/workspace/build-qemu', 'LC_ALL': 'en_US.UTF-8', 'PATH': '/home/builder/workspace/poky/scripts:/home/builder/workspace/poky/bitbake/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', 'OE_ADDED_PATHS': '/home/builder/workspace/poky/scripts:/home/builder/workspace/poky/bitbake/bin:', 'HOSTNAME': 'ciprian-B250M-D2V', 'LANGUAGE': 'en_US:en', 'LANG': 'en_US.UTF-8', 'PYTHONPATH': '/home/builder/workspace/poky/bitbake/lib:', 'TERM': 'xterm', 'SHLVL': '0', 'BUILDDIR': '/home/builder/workspace/build-qemu', 'DEBIAN_FRONTEND': 'noninteractive', 'OLDPWD': '/home/builder/workspace', '_': '/home/builder/workspace/poky/bitbake/bin/bitbake-layers'}, ['/home/builder/workspace/poky/bitbake/bin/bitbake-layers', 'show-layers']]
+2689152 15:11:57.840243 Base config valid
+2689152 15:11:57.855949 Sending reply (None, None)
+2689152 15:11:57.856129 Command Completed (socket: True)
+2689152 15:11:57.856308 Running command ['parseConfiguration']
+2689152 15:11:57.857668 Sending reply (None, None)
+2689152 15:11:57.857746 Command Completed (socket: True)
+2689152 15:11:57.858011 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBMULTICONFIG',), {}]
+2689152 15:11:57.858083 Sending reply (None, None)
+2689152 15:11:57.858151 Command Completed (socket: True)
+2689152 15:11:57.858373 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBPATH',), {}]
+2689152 15:11:57.858435 Sending reply ('/home/builder/workspace/poky/meta-poky:/home/builder/workspace/build-qemu:/home/builder/workspace/poky/meta:/home/builder/workspace/poky/meta-yocto-bsp:/home/builder/workspace/meta-openembedded/meta-oe:/home/builder/workspace/meta-openembedded/meta-python:/home/builder/workspace/meta-universal-controller', None)
+2689152 15:11:57.858512 Command Completed (socket: True)
+2689152 15:11:57.864144 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+2689152 15:11:57.864190 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   /home/builder/workspace/meta-universal-controller   ', None)
+2689152 15:11:57.864266 Command Completed (socket: True)
+2689152 15:11:57.864413 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+2689152 15:11:57.864519 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf', 'meta-universal-controller': '/home/builder/workspace/meta-universal-controller/conf/layer.conf'}, None)
+2689152 15:11:57.864586 Command Completed (socket: True)
+2689152 15:11:57.865707 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+2689152 15:11:57.865740 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   /home/builder/workspace/meta-universal-controller   ', None)
+2689152 15:11:57.865807 Command Completed (socket: True)
+2689152 15:11:57.865995 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+2689152 15:11:57.866057 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf', 'meta-universal-controller': '/home/builder/workspace/meta-universal-controller/conf/layer.conf'}, None)
+2689152 15:11:57.866134 Command Completed (socket: True)
+2689152 15:11:57.867224 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+2689152 15:11:57.867252 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   /home/builder/workspace/meta-universal-controller   ', None)
+2689152 15:11:57.867305 Command Completed (socket: True)
+2689152 15:11:57.867395 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+2689152 15:11:57.867495 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf', 'meta-universal-controller': '/home/builder/workspace/meta-universal-controller/conf/layer.conf'}, None)
+2689152 15:11:57.867546 Command Completed (socket: True)
+2689152 15:11:57.869392 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+2689152 15:11:57.869433 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   /home/builder/workspace/meta-universal-controller   ', None)
+2689152 15:11:57.869515 Command Completed (socket: True)
+2689152 15:11:57.869703 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+2689152 15:11:57.869766 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf', 'meta-universal-controller': '/home/builder/workspace/meta-universal-controller/conf/layer.conf'}, None)
+2689152 15:11:57.869838 Command Completed (socket: True)
+2689152 15:11:57.870366 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+2689152 15:11:57.870393 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   /home/builder/workspace/meta-universal-controller   ', None)
+2689152 15:11:57.870496 Command Completed (socket: True)
+2689152 15:11:57.870684 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+2689152 15:11:57.870742 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf', 'meta-universal-controller': '/home/builder/workspace/meta-universal-controller/conf/layer.conf'}, None)
+2689152 15:11:57.870816 Command Completed (socket: True)
+2689152 15:11:57.871352 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBPATH',), {}]
+2689152 15:11:57.871385 Sending reply ('/home/builder/workspace/poky/meta-poky:/home/builder/workspace/build-qemu:/home/builder/workspace/poky/meta:/home/builder/workspace/poky/meta-yocto-bsp:/home/builder/workspace/meta-openembedded/meta-oe:/home/builder/workspace/meta-openembedded/meta-python:/home/builder/workspace/meta-universal-controller', None)
+2689152 15:11:57.871489 Command Completed (socket: True)
+2689152 15:11:57.872691 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+2689152 15:11:57.872719 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   /home/builder/workspace/meta-universal-controller   ', None)
+2689152 15:11:57.872786 Command Completed (socket: True)
+2689152 15:11:57.872969 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+2689152 15:11:57.873029 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf', 'meta-universal-controller': '/home/builder/workspace/meta-universal-controller/conf/layer.conf'}, None)
+2689152 15:11:57.873115 Command Completed (socket: True)
+2689152 15:11:57.874071 Running command ['getLayerPriorities']
+2689152 15:11:57.874263 Sending reply ([('core', '^/home/builder/workspace/poky/meta/', '^/home/builder/workspace/poky/meta/', 5), ('yocto', '^/home/builder/workspace/poky/meta-poky/', '^/home/builder/workspace/poky/meta-poky/', 5), ('yoctobsp', '^/home/builder/workspace/poky/meta-yocto-bsp/', '^/home/builder/workspace/poky/meta-yocto-bsp/', 5), ('openembedded-layer', '^/home/builder/workspace/meta-openembedded/meta-oe/', '^/home/builder/workspace/meta-openembedded/meta-oe/', 5), ('meta-python', '^/home/builder/workspace/meta-openembedded/meta-python/', '^/home/builder/workspace/meta-openembedded/meta-python/', 5), ('meta-universal-controller', '^/home/builder/workspace/meta-universal-controller/', '^/home/builder/workspace/meta-universal-controller/', 6)], None)
+2689152 15:11:57.874339 Command Completed (socket: True)
+2689152 15:11:57.875255 Running command ['clientComplete']
+2689152 15:11:57.875331 Registering idle function <bound method Command.runAsyncCommand of <bb.command.Command object at 0x76931601c4f0>>
+2689152 15:11:57.875342 Sending reply (True, None)
+2689152 15:11:57.875392 Command Completed (socket: True)
+2689152 15:11:57.903441 Processing Client
+2689152 15:11:57.903520 Disconnecting Client (socket: True)
+2689152 15:11:57.904060 Removing idle function <bound method Command.runAsyncCommand of <bb.command.Command object at 0x76931601c4f0>>
+2689152 15:11:57.904333 No timeout, exiting.
+2689152 15:11:58.004528 Exiting (socket: True)
+2689152 15:11:58.007835 Exiting as we could obtain the lock
+sys:1: ResourceWarning: unclosed file <_io.TextIOWrapper name='/home/builder/workspace/build-qemu/bitbake-cookerdaemon.log' mode='a+' encoding='UTF-8'>
+2689166 15:11:58.387105 --- Starting bitbake server pid 2689166 at 2026-06-01 15:11:58.387080 ---
+2689166 15:11:58.387855 Started bitbake server pid 2689166
+2689166 15:11:58.388007 Entering server connection loop
+2689166 15:11:58.388029 Lockfile is: /home/builder/workspace/build-qemu/bitbake.lock
+Socket is /home/builder/workspace/build-qemu/bitbake.sock (True)
+2689166 15:11:58.388363 Accepting [<socket.socket fd=6, family=AddressFamily.AF_UNIX, type=SocketKind.SOCK_STREAM, proto=0, laddr=bitbake.sock>] ([])
+2689166 15:11:58.389017 Processing Client
+2689166 15:11:58.389049 Connecting Client
+2689166 15:11:58.389352 Running command ['setFeatures', [2, 1]]
+2689166 15:11:58.389385 Sending reply (None, None)
+2689166 15:11:58.389500 Command Completed (socket: True)
+2689166 15:11:58.389933 Running command ['updateConfig', {'halt': True, 'force': False, 'invalidate_stamp': None, 'dry_run': False, 'dump_signatures': [], 'extra_assume_provided': [], 'profile': False, 'prefile': [], 'postfile': [], 'server_timeout': None, 'nosetscene': False, 'setsceneonly': False, 'skipsetscene': False, 'runall': [], 'runonly': None, 'writeeventlog': None, 'build_verbose_shell': False, 'build_verbose_stdout': False, 'default_loglevel': 20, 'debug_domains': {}}, {'BB_ENV_PASSTHROUGH_ADDITIONS': 'ALL_PROXY BBPATH_EXTRA BB_LOGCONFIG BB_NO_NETWORK BB_NUMBER_THREADS BB_SETSCENE_ENFORCE BB_SRCREV_POLICY DISTRO FTPS_PROXY FTP_PROXY GIT_PROXY_COMMAND HTTPS_PROXY HTTP_PROXY MACHINE NO_PROXY PARALLEL_MAKE SCREENDIR SDKMACHINE SOCKS5_PASSWD SOCKS5_USER SSH_AGENT_PID SSH_AUTH_SOCK STAMPS_DIR TCLIBC TCMODE all_proxy ftp_proxy ftps_proxy http_proxy https_proxy no_proxy ', 'PWD': '/home/builder/workspace/build-qemu', 'HOME': '/home/builder', 'BBPATH': '/home/builder/workspace/build-qemu', 'LC_ALL': 'en_US.UTF-8', 'PATH': '/home/builder/workspace/poky/scripts:/home/builder/workspace/poky/bitbake/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', 'OE_ADDED_PATHS': '/home/builder/workspace/poky/scripts:/home/builder/workspace/poky/bitbake/bin:', 'HOSTNAME': 'ciprian-B250M-D2V', 'LANGUAGE': 'en_US:en', 'LANG': 'en_US.UTF-8', 'PYTHONPATH': '/home/builder/workspace/poky/bitbake/lib:', 'TERM': 'xterm', 'SHLVL': '0', 'BUILDDIR': '/home/builder/workspace/build-qemu', 'DEBIAN_FRONTEND': 'noninteractive', 'OLDPWD': '/home/builder/workspace', '_': '/home/builder/workspace/poky/bitbake/bin/bitbake-layers'}, ['/home/builder/workspace/poky/bitbake/bin/bitbake-layers', 'show-layers']]
+2689166 15:11:58.743773 Base config valid
+2689166 15:11:58.759273 Sending reply (None, None)
+2689166 15:11:58.759491 Command Completed (socket: True)
+2689166 15:11:58.759710 Running command ['parseConfiguration']
+2689166 15:11:58.761041 Sending reply (None, None)
+2689166 15:11:58.761119 Command Completed (socket: True)
+2689166 15:11:58.761360 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBMULTICONFIG',), {}]
+2689166 15:11:58.761434 Sending reply (None, None)
+2689166 15:11:58.761510 Command Completed (socket: True)
+2689166 15:11:58.761757 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBPATH',), {}]
+2689166 15:11:58.761816 Sending reply ('/home/builder/workspace/poky/meta-poky:/home/builder/workspace/build-qemu:/home/builder/workspace/poky/meta:/home/builder/workspace/poky/meta-yocto-bsp:/home/builder/workspace/meta-openembedded/meta-oe:/home/builder/workspace/meta-openembedded/meta-python:/home/builder/workspace/meta-universal-controller', None)
+2689166 15:11:58.761885 Command Completed (socket: True)
+2689166 15:11:58.767591 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+2689166 15:11:58.767641 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   /home/builder/workspace/meta-universal-controller   ', None)
+2689166 15:11:58.767705 Command Completed (socket: True)
+2689166 15:11:58.767904 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+2689166 15:11:58.768006 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf', 'meta-universal-controller': '/home/builder/workspace/meta-universal-controller/conf/layer.conf'}, None)
+2689166 15:11:58.768064 Command Completed (socket: True)
+2689166 15:11:58.770105 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+2689166 15:11:58.770134 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   /home/builder/workspace/meta-universal-controller   ', None)
+2689166 15:11:58.770198 Command Completed (socket: True)
+2689166 15:11:58.770344 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+2689166 15:11:58.770412 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf', 'meta-universal-controller': '/home/builder/workspace/meta-universal-controller/conf/layer.conf'}, None)
+2689166 15:11:58.770465 Command Completed (socket: True)
+2689166 15:11:58.771337 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+2689166 15:11:58.771368 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   /home/builder/workspace/meta-universal-controller   ', None)
+2689166 15:11:58.771430 Command Completed (socket: True)
+2689166 15:11:58.771629 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+2689166 15:11:58.771688 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf', 'meta-universal-controller': '/home/builder/workspace/meta-universal-controller/conf/layer.conf'}, None)
+2689166 15:11:58.771748 Command Completed (socket: True)
+2689166 15:11:58.772926 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+2689166 15:11:58.772954 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   /home/builder/workspace/meta-universal-controller   ', None)
+2689166 15:11:58.773007 Command Completed (socket: True)
+2689166 15:11:58.773185 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+2689166 15:11:58.773244 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf', 'meta-universal-controller': '/home/builder/workspace/meta-universal-controller/conf/layer.conf'}, None)
+2689166 15:11:58.773301 Command Completed (socket: True)
+2689166 15:11:58.773830 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+2689166 15:11:58.773858 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   /home/builder/workspace/meta-universal-controller   ', None)
+2689166 15:11:58.773911 Command Completed (socket: True)
+2689166 15:11:58.774043 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+2689166 15:11:58.774097 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf', 'meta-universal-controller': '/home/builder/workspace/meta-universal-controller/conf/layer.conf'}, None)
+2689166 15:11:58.774161 Command Completed (socket: True)
+2689166 15:11:58.774731 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+2689166 15:11:58.774766 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   /home/builder/workspace/meta-universal-controller   ', None)
+2689166 15:11:58.774823 Command Completed (socket: True)
+2689166 15:11:58.775053 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+2689166 15:11:58.775112 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf', 'meta-universal-controller': '/home/builder/workspace/meta-universal-controller/conf/layer.conf'}, None)
+2689166 15:11:58.775172 Command Completed (socket: True)
+2689166 15:11:58.775717 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBPATH',), {}]
+2689166 15:11:58.775746 Sending reply ('/home/builder/workspace/poky/meta-poky:/home/builder/workspace/build-qemu:/home/builder/workspace/poky/meta:/home/builder/workspace/poky/meta-yocto-bsp:/home/builder/workspace/meta-openembedded/meta-oe:/home/builder/workspace/meta-openembedded/meta-python:/home/builder/workspace/meta-universal-controller', None)
+2689166 15:11:58.775799 Command Completed (socket: True)
+2689166 15:11:58.777292 Running command ['getLayerPriorities']
+2689166 15:11:58.777505 Sending reply ([('core', '^/home/builder/workspace/poky/meta/', '^/home/builder/workspace/poky/meta/', 5), ('yocto', '^/home/builder/workspace/poky/meta-poky/', '^/home/builder/workspace/poky/meta-poky/', 5), ('yoctobsp', '^/home/builder/workspace/poky/meta-yocto-bsp/', '^/home/builder/workspace/poky/meta-yocto-bsp/', 5), ('openembedded-layer', '^/home/builder/workspace/meta-openembedded/meta-oe/', '^/home/builder/workspace/meta-openembedded/meta-oe/', 5), ('meta-python', '^/home/builder/workspace/meta-openembedded/meta-python/', '^/home/builder/workspace/meta-openembedded/meta-python/', 5), ('meta-universal-controller', '^/home/builder/workspace/meta-universal-controller/', '^/home/builder/workspace/meta-universal-controller/', 6)], None)
+2689166 15:11:58.777574 Command Completed (socket: True)
+2689166 15:11:58.778394 Running command ['clientComplete']
+2689166 15:11:58.778486 Registering idle function <bound method Command.runAsyncCommand of <bb.command.Command object at 0x7346bfbc04f0>>
+2689166 15:11:58.778497 Sending reply (True, None)
+2689166 15:11:58.778584 Command Completed (socket: True)
+2689166 15:11:58.807120 Processing Client
+2689166 15:11:58.807201 Disconnecting Client (socket: True)
+2689166 15:11:58.807757 Removing idle function <bound method Command.runAsyncCommand of <bb.command.Command object at 0x7346bfbc04f0>>
+2689166 15:11:58.808023 No timeout, exiting.
+2689166 15:11:58.908240 Exiting (socket: True)
+2689166 15:11:58.911588 Exiting as we could obtain the lock
+sys:1: ResourceWarning: unclosed file <_io.TextIOWrapper name='/home/builder/workspace/build-qemu/bitbake-cookerdaemon.log' mode='a+' encoding='UTF-8'>
+2689179 15:11:59.290579 --- Starting bitbake server pid 2689179 at 2026-06-01 15:11:59.290559 ---
+2689179 15:11:59.291328 Started bitbake server pid 2689179
+2689179 15:11:59.291524 Entering server connection loop
+2689179 15:11:59.291546 Lockfile is: /home/builder/workspace/build-qemu/bitbake.lock
+Socket is /home/builder/workspace/build-qemu/bitbake.sock (True)
+2689179 15:11:59.291903 Accepting [<socket.socket fd=6, family=AddressFamily.AF_UNIX, type=SocketKind.SOCK_STREAM, proto=0, laddr=bitbake.sock>] ([])
+2689179 15:11:59.292551 Processing Client
+2689179 15:11:59.292585 Connecting Client
+2689179 15:11:59.292894 Running command ['setFeatures', [2, 1]]
+2689179 15:11:59.292925 Sending reply (None, None)
+2689179 15:11:59.293010 Command Completed (socket: True)
+2689179 15:11:59.293406 Running command ['updateConfig', {'halt': True, 'force': False, 'invalidate_stamp': None, 'dry_run': False, 'dump_signatures': [], 'extra_assume_provided': [], 'profile': False, 'prefile': [], 'postfile': [], 'server_timeout': None, 'nosetscene': False, 'setsceneonly': False, 'skipsetscene': False, 'runall': [], 'runonly': None, 'writeeventlog': None, 'build_verbose_shell': False, 'build_verbose_stdout': False, 'default_loglevel': 20, 'debug_domains': {}}, {'BB_ENV_PASSTHROUGH_ADDITIONS': 'ALL_PROXY BBPATH_EXTRA BB_LOGCONFIG BB_NO_NETWORK BB_NUMBER_THREADS BB_SETSCENE_ENFORCE BB_SRCREV_POLICY DISTRO FTPS_PROXY FTP_PROXY GIT_PROXY_COMMAND HTTPS_PROXY HTTP_PROXY MACHINE NO_PROXY PARALLEL_MAKE SCREENDIR SDKMACHINE SOCKS5_PASSWD SOCKS5_USER SSH_AGENT_PID SSH_AUTH_SOCK STAMPS_DIR TCLIBC TCMODE all_proxy ftp_proxy ftps_proxy http_proxy https_proxy no_proxy ', 'PWD': '/home/builder/workspace/build-qemu', 'HOME': '/home/builder', 'BBPATH': '/home/builder/workspace/build-qemu', 'LC_ALL': 'en_US.UTF-8', 'PATH': '/home/builder/workspace/poky/scripts:/home/builder/workspace/poky/bitbake/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', 'OE_ADDED_PATHS': '/home/builder/workspace/poky/scripts:/home/builder/workspace/poky/bitbake/bin:', 'HOSTNAME': 'ciprian-B250M-D2V', 'LANGUAGE': 'en_US:en', 'LANG': 'en_US.UTF-8', 'PYTHONPATH': '/home/builder/workspace/poky/bitbake/lib:', 'TERM': 'xterm', 'SHLVL': '1', 'BUILDDIR': '/home/builder/workspace/build-qemu', 'DEBIAN_FRONTEND': 'noninteractive', 'OLDPWD': '/home/builder/workspace', '_': '/home/builder/workspace/poky/bitbake/bin/bitbake'}, ['/home/builder/workspace/poky/bitbake/bin/bitbake', 'core-image-minimal']]
+2689179 15:11:59.639969 Base config valid
+2689179 15:11:59.655457 Sending reply (None, None)
+2689179 15:11:59.655644 Command Completed (socket: True)
+2689179 15:11:59.655887 Running command ['getVariable', 'BBINCLUDELOGS']
+2689179 15:11:59.655968 Sending reply ('yes', None)
+2689179 15:11:59.656039 Command Completed (socket: True)
+2689179 15:11:59.656211 Running command ['getVariable', 'BBINCLUDELOGS_LINES']
+2689179 15:11:59.656247 Sending reply (None, None)
+2689179 15:11:59.656312 Command Completed (socket: True)
+2689179 15:11:59.656393 Running command ['getSetVariable', 'BB_CONSOLELOG']
+2689179 15:11:59.656524 Sending reply ('/home/builder/workspace/build-qemu/tmp/log/cooker/qemuarm64/20260601151159.log', None)
+2689179 15:11:59.656589 Command Completed (socket: True)
+2689179 15:11:59.656752 Running command ['getSetVariable', 'BB_LOGCONFIG']
+2689179 15:11:59.656792 Sending reply (None, None)
+2689179 15:11:59.656859 Command Completed (socket: True)
+2689179 15:11:59.658688 Running command ['getUIHandlerNum']
+2689179 15:11:59.658718 Sending reply (1, None)
+2689179 15:11:59.658784 Command Completed (socket: True)
+2689179 15:11:59.658975 Running command ['setEventMask', 1, 20, {'BitBake.RunQueue.HashEquiv': 19, 'BitBake.SigGen.HashEquiv': 19}, ['bb.runqueue.runQueueExitWait', 'bb.event.LogExecTTY', 'logging.LogRecord', 'bb.build.TaskFailed', 'bb.build.TaskBase', 'bb.event.ParseStarted', 'bb.event.ParseProgress', 'bb.event.ParseCompleted', 'bb.event.CacheLoadStarted', 'bb.event.CacheLoadProgress', 'bb.event.CacheLoadCompleted', 'bb.command.CommandFailed', 'bb.command.CommandExit', 'bb.command.CommandCompleted', 'bb.cooker.CookerExit', 'bb.event.MultipleProviders', 'bb.event.NoProvider', 'bb.runqueue.sceneQueueTaskStarted', 'bb.runqueue.runQueueTaskStarted', 'bb.runqueue.runQueueTaskFailed', 'bb.runqueue.sceneQueueTaskFailed', 'bb.event.BuildBase', 'bb.build.TaskStarted', 'bb.build.TaskSucceeded', 'bb.build.TaskFailedSilent', 'bb.build.TaskProgress', 'bb.event.ProcessStarted', 'bb.event.ProcessProgress', 'bb.event.ProcessFinished']]
+2689179 15:11:59.659010 Sending reply (True, None)
+2689179 15:11:59.659075 Command Completed (socket: True)
+2689179 15:11:59.659220 Running command ['getVariable', 'BB_DEFAULT_TASK']
+2689179 15:11:59.659248 Sending reply ('build', None)
+2689179 15:11:59.659293 Command Completed (socket: True)
+2689179 15:11:59.659358 Running command ['setConfig', 'cmd', 'build']
+2689179 15:11:59.659377 Sending reply (None, None)
+2689179 15:11:59.659422 Command Completed (socket: True)
+2689179 15:11:59.659588 Running command ['buildTargets', ['core-image-minimal'], 'build']
+2689179 15:11:59.659667 Registering idle function <bound method Command.runAsyncCommand of <bb.command.Command object at 0x705c86a5c4f0>>
+2689179 15:11:59.659677 Sending reply (True, None)
+2689179 15:11:59.659725 Command Completed (socket: True)
+2689179 15:11:59.693392 Parsing started
+2689179 15:12:02.627898 Parse cache valid
+2689179 15:12:04.768547 Registering idle function <function BBCooker.buildTargets.<locals>.buildTargetsIdle at 0x705c738fa290>
+2689179 15:12:04.768591 Removing idle function <bound method Command.runAsyncCommand of <bb.command.Command object at 0x705c86a5c4f0>>
+2689179 15:12:10.127767 Removing idle function <function BBCooker.buildTargets.<locals>.buildTargetsIdle at 0x705c738fa290> at idleFinish
+2689179 15:12:10.379008 Processing Client
+2689179 15:12:10.379239 Disconnecting Client (socket: True)
+2689179 15:12:10.379989 Parse cache invalidated
+2689179 15:12:10.380056 No timeout, exiting.
+2689179 15:12:10.480479 Exiting (socket: True)
+2689179 15:12:10.484772 Exiting as we could obtain the lock
+sys:1: ResourceWarning: unclosed file <_io.TextIOWrapper name='/home/builder/workspace/build-qemu/bitbake-cookerdaemon.log' mode='a+' encoding='UTF-8'>
