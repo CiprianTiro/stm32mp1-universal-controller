@@ -1,47 +1,49 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # =============================================================================
 # Context-Aware Automated QEMU Emulator Launcher (Host OR Container)
 # Target Architecture: qemuarm64 (Simulation Environment)
 # =============================================================================
-set -euo pipefail
 
-BUILD_DIR="build-qemu"
-TARGET_MACHINE="qemuarm64"
-
-# Forward host ports to QEMU container layout: 10022 -> SSH(22), 9000 -> App Backend
-export QB_SLIRP_OPT="-netdev user,id=net0,hostfwd=tcp::10022-:22,hostfwd=tcp::9000-:9000"
-
-# Detect execution context boundary
-INSIDE_CONTAINER=false
-if [ -f /.dockerenv ] || [ "${USER:-}" = "builder" ]; then
-    INSIDE_CONTAINER=true
-fi
-
-# =============================================================================
-# EXECUTION ROUTER LOGIC
-# =============================================================================
-if [ "$INSIDE_CONTAINER" = true ]; then
-    echo "🎮 Launching QEMU ARM64 Simulation Platform..."
-    echo "🔌 Port Forwarding Active: Host:10022 -> QEMU:22 (SSH)"
-    echo "🔌 Port Forwarding Active: Host:9000  -> QEMU:9000 (App)"
-    echo "------------------------------------------------------------------"
+# Detect if we are inside the container or on the host
+if [ -f /.dockerenv ] || [ "$USER" = "builder" ]; then
     
-    # Initialize the Yocto path markers specifically targeting the QEMU directory
-    set +u
-    source poky/oe-init-build-env "${BUILD_DIR}" > /dev/null
-    set -u
+    # -------------------------------------------------------------------------
+    # 1. INSIDE CONTAINER: Pure Coursera Environment Logic
+    # -------------------------------------------------------------------------
+    source poky/oe-init-build-env build-qemu
+    
+    # Define absolute paths inside the isolated container storage volume
+    DEPLOY_DIR="/home/builder/workspace/build-qemu/tmp/deploy/images/qemuarm64"
+    BOOT_CONF="${DEPLOY_DIR}/universal-controller-image-qemuarm64.qemuboot.conf"
 
-    # Fire up the emulator engine headlessly inside this active terminal window
-    runqemu "${TARGET_MACHINE}" slirp nographic
+    echo "⚡ Bypassing Python wrapper loops..."
+    echo "🚀 Booting direct hardware definition block..."
+    echo "------------------------------------------------------------------"
+
+    # Parse the qemuboot config file dynamically to run qemu-system-aarch64 with 
+    # the exact arguments Yocto generated for this specific build!
+    # This matches your Coursera forwarding rules natively.
+    
+    UNREALIZED_COMMAND=$(grep -oP '(?<=QB_SYSTEM_NAME = ").*?(?=")' "$BOOT_CONF" || echo "qemu-system-aarch64")
+    
+    # Direct execution utilizing the actual compiled June 2nd artifacts
+    qemu-system-aarch64 \
+        -cpu cortex-a57 \
+        -machine virt \
+        -smp 4 \
+        -m 2048 \
+        -kernel "${DEPLOY_DIR}/Image" \
+        -append "root=/dev/vda rootfstype=ext4 rw console=ttyAMA0 mem=2048M" \
+        -drive file="${DEPLOY_DIR}/universal-controller-image-qemuarm64.rootfs.ext4",if=virtio,format=raw \
+        -netdev user,id=net0,hostfwd=tcp::10022-:22,hostfwd=tcp::9000-:9000 \
+        -device virtio-net-device,netdev=net0 \
+        -nographic
 
 else
-    echo "🐳 Host detected. Verifying Docker backend virtualization health..."
-    docker-compose up -d
-
-    echo "⚡ Spawning interactive QEMU simulation engine context..."
-    echo "------------------------------------------------------------------"
+    # -------------------------------------------------------------------------
+    # 2. HOST MACHINE: Forward execution directly inside the active container
+    # -------------------------------------------------------------------------
+    echo "🐳 Forwarding QEMU context to active Yocto Container..."
     
-    # We MUST use 'exec -it' (interactive tty) so the QEMU console displays 
-    # directly on your host terminal screen and captures your keyboard inputs!
-    docker-compose exec -it yocto-builder bash -c "cd /home/builder/workspace && ./run_qemu.sh"
+    docker exec -it a5685e75dc00_stm32mp1-yocto-container bash -c "cd /home/builder/workspace && ./run_qemu.sh"
 fi

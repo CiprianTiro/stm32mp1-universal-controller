@@ -2,17 +2,18 @@
 # =============================================================================
 # Hybrid Automated Yocto Build System Wrapper for Host OR Container Execution
 # Targets: stm32mp1 (ST Common Profile) & qemuarm64 (Simulation)
+# Custom Image: universal-controller-image
 # =============================================================================
 set -euo pipefail
 
 MODE="${1:-hardware}"
-TARGET_IMAGE="core-image-minimal"
+# CHANGED: Re-routed from legacy core-image-minimal to our custom OS specification
+TARGET_IMAGE="universal-controller-image"
 
 if [ "$MODE" = "qemu" ]; then
     TARGET_MACHINE="qemuarm64"
     BUILD_DIR="build-qemu"
 else
-    # Corrected target machine mapping to match STMicroelectronics BSP tracking
     TARGET_MACHINE="stm32mp1"
     BUILD_DIR="build"
 fi
@@ -37,7 +38,7 @@ compile_inside_container() {
         echo "  -> Injecting target machine profile configuration..."
         echo "MACHINE = \"${TARGET_MACHINE}\"" >> conf/local.conf
         
-        # Also automatically accept ST's required End User License Agreement (EULA)
+        # Automatically accept ST's required End User License Agreement (EULA)
         if [ "${TARGET_MACHINE}" = "stm32mp1" ]; then
             echo 'ACCEPT_EULA_stm32mp1 = "1"' >> conf/local.conf
         fi
@@ -48,29 +49,32 @@ compile_inside_container() {
         echo "PARALLEL_MAKE = \"-j $CORES\"" >> conf/local.conf
     fi
 
-    # Defensively append layer dependencies to bblayers.conf
+    # OPTIMIZED: Parsing bblayers.conf directly is faster and much safer than bitbake-layers execution
     echo "  -> Verifying metadata layer paths configuration..."
     for layer in meta-oe meta-python; do
-        if ! bitbake-layers show-layers | grep -q "$layer"; then
+        if ! grep -q "$layer" conf/bblayers.conf; then
             echo "     [+] Adding openembedded:$layer layer extension"
             bitbake-layers add-layer ../meta-openembedded/$layer
         fi
     done
 
     if [ "${TARGET_MACHINE}" != "qemuarm64" ]; then
-        if ! bitbake-layers show-layers | grep -q 'meta-st-stm32mp'; then
+        if ! grep -q 'meta-st-stm32mp' conf/bblayers.conf; then
             echo "     [+] Adding STMicroelectronics BSP hardware layer"
             bitbake-layers add-layer ../meta-st-stm32mp
         fi
     fi
 
-    if ! bitbake-layers show-layers | grep -q 'meta-universal-controller'; then
+    # CHANGED: Explicitly checks and registers your custom layer configuration
+    if ! grep -q 'meta-universal-controller' conf/bblayers.conf; then
         echo "     [+] Adding custom universal-controller layer"
         bitbake-layers add-layer ../meta-universal-controller
     fi
 
     echo "-----------------------------------------------------------------------------"
     echo "🔥 Firing up BitBake compilation engine..."
+    echo "📦 Image Recipe Target: ${TARGET_IMAGE}"
+    echo "-----------------------------------------------------------------------------"
     bitbake "${TARGET_IMAGE}"
 }
 

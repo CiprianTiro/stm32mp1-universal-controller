@@ -2007,3 +2007,154 @@ The variable dependency chain for the failure is: PARTITIONS_CONFIG
 4008653 10:03:44.731198 Exiting (socket: True)
 4008653 10:03:44.875997 Exiting as we could obtain the lock
 sys:1: ResourceWarning: unclosed file <_io.TextIOWrapper name='/home/builder/workspace/build/bitbake-cookerdaemon.log' mode='a+' encoding='UTF-8'>
+43 20:46:22.318451 --- Starting bitbake server pid 43 at 2026-06-02 20:46:22.318432 ---
+43 20:46:22.319205 Started bitbake server pid 43
+43 20:46:22.322893 Entering server connection loop
+43 20:46:22.322919 Lockfile is: /home/builder/workspace/build/bitbake.lock
+Socket is /home/builder/workspace/build/bitbake.sock (True)
+43 20:46:22.323327 Accepting [<socket.socket fd=6, family=AddressFamily.AF_UNIX, type=SocketKind.SOCK_STREAM, proto=0, laddr=bitbake.sock>] ([])
+43 20:46:22.323797 Processing Client
+43 20:46:22.323828 Connecting Client
+43 20:46:22.324151 Running command ['setFeatures', [2, 1]]
+43 20:46:22.324182 Sending reply (None, None)
+43 20:46:22.324256 Command Completed (socket: True)
+43 20:46:22.324718 Running command ['updateConfig', {'halt': True, 'force': False, 'invalidate_stamp': None, 'dry_run': False, 'dump_signatures': [], 'extra_assume_provided': [], 'profile': False, 'prefile': [], 'postfile': [], 'server_timeout': None, 'nosetscene': False, 'setsceneonly': False, 'skipsetscene': False, 'runall': [], 'runonly': None, 'writeeventlog': None, 'build_verbose_shell': False, 'build_verbose_stdout': False, 'default_loglevel': 20, 'debug_domains': {}}, {'BB_ENV_PASSTHROUGH_ADDITIONS': 'ALL_PROXY BBPATH_EXTRA BB_LOGCONFIG BB_NO_NETWORK BB_NUMBER_THREADS BB_SETSCENE_ENFORCE BB_SRCREV_POLICY DISTRO FTPS_PROXY FTP_PROXY GIT_PROXY_COMMAND HTTPS_PROXY HTTP_PROXY MACHINE NO_PROXY PARALLEL_MAKE SCREENDIR SDKMACHINE SOCKS5_PASSWD SOCKS5_USER SSH_AGENT_PID SSH_AUTH_SOCK STAMPS_DIR TCLIBC TCMODE all_proxy ftp_proxy ftps_proxy http_proxy https_proxy no_proxy ', 'PWD': '/home/builder/workspace/build', 'HOME': '/home/builder', 'BBPATH': '/home/builder/workspace/build', 'LC_ALL': 'en_US.UTF-8', 'PATH': '/home/builder/workspace/poky/scripts:/home/builder/workspace/poky/bitbake/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', 'OE_ADDED_PATHS': '/home/builder/workspace/poky/scripts:/home/builder/workspace/poky/bitbake/bin:', 'HOSTNAME': 'ciprian-B250M-D2V', 'LANGUAGE': 'en_US:en', 'LANG': 'en_US.UTF-8', 'LS_COLORS': 'rs=0:di=01;34:ln=01;36:mh=00:pi=40;33:so=01;35:do=01;35:bd=40;33;01:cd=40;33;01:or=40;31;01:mi=00:su=37;41:sg=30;43:ca=30;41:tw=30;42:ow=34;42:st=37;44:ex=01;32:*.tar=01;31:*.tgz=01;31:*.arc=01;31:*.arj=01;31:*.taz=01;31:*.lha=01;31:*.lz4=01;31:*.lzh=01;31:*.lzma=01;31:*.tlz=01;31:*.txz=01;31:*.tzo=01;31:*.t7z=01;31:*.zip=01;31:*.z=01;31:*.dz=01;31:*.gz=01;31:*.lrz=01;31:*.lz=01;31:*.lzo=01;31:*.xz=01;31:*.zst=01;31:*.tzst=01;31:*.bz2=01;31:*.bz=01;31:*.tbz=01;31:*.tbz2=01;31:*.tz=01;31:*.deb=01;31:*.rpm=01;31:*.jar=01;31:*.war=01;31:*.ear=01;31:*.sar=01;31:*.rar=01;31:*.alz=01;31:*.ace=01;31:*.zoo=01;31:*.cpio=01;31:*.7z=01;31:*.rz=01;31:*.cab=01;31:*.wim=01;31:*.swm=01;31:*.dwm=01;31:*.esd=01;31:*.jpg=01;35:*.jpeg=01;35:*.mjpg=01;35:*.mjpeg=01;35:*.gif=01;35:*.bmp=01;35:*.pbm=01;35:*.pgm=01;35:*.ppm=01;35:*.tga=01;35:*.xbm=01;35:*.xpm=01;35:*.tif=01;35:*.tiff=01;35:*.png=01;35:*.svg=01;35:*.svgz=01;35:*.mng=01;35:*.pcx=01;35:*.mov=01;35:*.mpg=01;35:*.mpeg=01;35:*.m2v=01;35:*.mkv=01;35:*.webm=01;35:*.webp=01;35:*.ogm=01;35:*.mp4=01;35:*.m4v=01;35:*.mp4v=01;35:*.vob=01;35:*.qt=01;35:*.nuv=01;35:*.wmv=01;35:*.asf=01;35:*.rm=01;35:*.rmvb=01;35:*.flc=01;35:*.avi=01;35:*.fli=01;35:*.flv=01;35:*.gl=01;35:*.dl=01;35:*.xcf=01;35:*.xwd=01;35:*.yuv=01;35:*.cgm=01;35:*.emf=01;35:*.ogv=01;35:*.ogx=01;35:*.aac=00;36:*.au=00;36:*.flac=00;36:*.m4a=00;36:*.mid=00;36:*.midi=00;36:*.mka=00;36:*.mp3=00;36:*.mpc=00;36:*.ogg=00;36:*.ra=00;36:*.wav=00;36:*.oga=00;36:*.opus=00;36:*.spx=00;36:*.xspf=00;36:', 'PYTHONPATH': '/home/builder/workspace/poky/bitbake/lib:', 'TERM': 'xterm', 'SHLVL': '1', 'BUILDDIR': '/home/builder/workspace/build', 'DEBIAN_FRONTEND': 'noninteractive', 'OLDPWD': '/home/builder/workspace', '_': '/home/builder/workspace/poky/bitbake/bin/bitbake-layers'}, ['/home/builder/workspace/poky/bitbake/bin/bitbake-layers', 'create-layer', '../meta-universal-controller']]
+43 20:46:22.931033 Base config valid
+43 20:46:22.992274 Sending reply (None, None)
+43 20:46:22.992507 Command Completed (socket: True)
+43 20:46:22.992797 Running command ['parseConfiguration']
+43 20:46:22.994901 Sending reply (None, None)
+43 20:46:22.995004 Command Completed (socket: True)
+43 20:46:22.995365 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBMULTICONFIG',), {}]
+43 20:46:22.995463 Sending reply (None, None)
+43 20:46:22.995545 Command Completed (socket: True)
+43 20:46:22.995880 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBPATH',), {}]
+43 20:46:22.995965 Sending reply ('/home/builder/workspace/poky/meta-poky:/home/builder/workspace/build:/home/builder/workspace/poky/meta:/home/builder/workspace/poky/meta-yocto-bsp:/home/builder/workspace/meta-openembedded/meta-oe:/home/builder/workspace/meta-openembedded/meta-python:/home/builder/workspace/meta-st-stm32mp:/home/builder/workspace/meta-universal-controller', None)
+43 20:46:22.996063 Command Completed (socket: True)
+43 20:46:23.007583 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+43 20:46:23.007671 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   /home/builder/workspace/meta-st-stm32mp   /home/builder/workspace/meta-universal-controller   ', None)
+43 20:46:23.007780 Command Completed (socket: True)
+43 20:46:23.008001 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+43 20:46:23.008148 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf', 'stm-st-stm32mp': '/home/builder/workspace/meta-st-stm32mp/conf/layer.conf', 'meta-universal-controller': '/home/builder/workspace/meta-universal-controller/conf/layer.conf'}, None)
+43 20:46:23.008243 Command Completed (socket: True)
+43 20:46:23.009764 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+43 20:46:23.009817 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   /home/builder/workspace/meta-st-stm32mp   /home/builder/workspace/meta-universal-controller   ', None)
+43 20:46:23.009899 Command Completed (socket: True)
+43 20:46:23.010152 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+43 20:46:23.010256 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf', 'stm-st-stm32mp': '/home/builder/workspace/meta-st-stm32mp/conf/layer.conf', 'meta-universal-controller': '/home/builder/workspace/meta-universal-controller/conf/layer.conf'}, None)
+43 20:46:23.010343 Command Completed (socket: True)
+43 20:46:23.011970 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+43 20:46:23.012013 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   /home/builder/workspace/meta-st-stm32mp   /home/builder/workspace/meta-universal-controller   ', None)
+43 20:46:23.012102 Command Completed (socket: True)
+43 20:46:23.012357 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+43 20:46:23.012439 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf', 'stm-st-stm32mp': '/home/builder/workspace/meta-st-stm32mp/conf/layer.conf', 'meta-universal-controller': '/home/builder/workspace/meta-universal-controller/conf/layer.conf'}, None)
+43 20:46:23.012525 Command Completed (socket: True)
+43 20:46:23.015403 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+43 20:46:23.015446 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   /home/builder/workspace/meta-st-stm32mp   /home/builder/workspace/meta-universal-controller   ', None)
+43 20:46:23.015526 Command Completed (socket: True)
+43 20:46:23.015781 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+43 20:46:23.015871 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf', 'stm-st-stm32mp': '/home/builder/workspace/meta-st-stm32mp/conf/layer.conf', 'meta-universal-controller': '/home/builder/workspace/meta-universal-controller/conf/layer.conf'}, None)
+43 20:46:23.015959 Command Completed (socket: True)
+43 20:46:23.016816 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBPATH',), {}]
+43 20:46:23.016867 Sending reply ('/home/builder/workspace/poky/meta-poky:/home/builder/workspace/build:/home/builder/workspace/poky/meta:/home/builder/workspace/poky/meta-yocto-bsp:/home/builder/workspace/meta-openembedded/meta-oe:/home/builder/workspace/meta-openembedded/meta-python:/home/builder/workspace/meta-st-stm32mp:/home/builder/workspace/meta-universal-controller', None)
+43 20:46:23.016948 Command Completed (socket: True)
+43 20:46:23.019081 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+43 20:46:23.019126 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   /home/builder/workspace/meta-st-stm32mp   /home/builder/workspace/meta-universal-controller   ', None)
+43 20:46:23.019213 Command Completed (socket: True)
+43 20:46:23.019472 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+43 20:46:23.019571 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf', 'stm-st-stm32mp': '/home/builder/workspace/meta-st-stm32mp/conf/layer.conf', 'meta-universal-controller': '/home/builder/workspace/meta-universal-controller/conf/layer.conf'}, None)
+43 20:46:23.019658 Command Completed (socket: True)
+43 20:46:23.020601 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+43 20:46:23.020644 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   /home/builder/workspace/meta-st-stm32mp   /home/builder/workspace/meta-universal-controller   ', None)
+43 20:46:23.020765 Command Completed (socket: True)
+43 20:46:23.021018 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+43 20:46:23.021131 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf', 'stm-st-stm32mp': '/home/builder/workspace/meta-st-stm32mp/conf/layer.conf', 'meta-universal-controller': '/home/builder/workspace/meta-universal-controller/conf/layer.conf'}, None)
+43 20:46:23.021219 Command Completed (socket: True)
+43 20:46:23.022504 Running command ['clientComplete']
+43 20:46:23.022606 Registering idle function <bound method Command.runAsyncCommand of <bb.command.Command object at 0x7af6625884f0>>
+43 20:46:23.022622 Sending reply (True, None)
+43 20:46:23.022697 Command Completed (socket: True)
+43 20:46:23.039340 Processing Client
+43 20:46:23.039461 Disconnecting Client (socket: True)
+43 20:46:23.042637 Removing idle function <bound method Command.runAsyncCommand of <bb.command.Command object at 0x7af6625884f0>>
+43 20:46:23.043119 No timeout, exiting.
+43 20:46:23.143370 Exiting (socket: True)
+43 20:46:23.147646 Exiting as we could obtain the lock
+sys:1: ResourceWarning: unclosed file <_io.TextIOWrapper name='/home/builder/workspace/build/bitbake-cookerdaemon.log' mode='a+' encoding='UTF-8'>
+56 20:47:39.850953 --- Starting bitbake server pid 56 at 2026-06-02 20:47:39.850934 ---
+56 20:47:39.851694 Started bitbake server pid 56
+56 20:47:39.851845 Entering server connection loop
+56 20:47:39.851867 Lockfile is: /home/builder/workspace/build/bitbake.lock
+Socket is /home/builder/workspace/build/bitbake.sock (True)
+56 20:47:39.852262 Accepting [<socket.socket fd=6, family=AddressFamily.AF_UNIX, type=SocketKind.SOCK_STREAM, proto=0, laddr=bitbake.sock>] ([])
+56 20:47:39.852914 Processing Client
+56 20:47:39.852946 Connecting Client
+56 20:47:39.853262 Running command ['setFeatures', [2, 1]]
+56 20:47:39.853293 Sending reply (None, None)
+56 20:47:39.853369 Command Completed (socket: True)
+56 20:47:39.853830 Running command ['updateConfig', {'halt': True, 'force': False, 'invalidate_stamp': None, 'dry_run': False, 'dump_signatures': [], 'extra_assume_provided': [], 'profile': False, 'prefile': [], 'postfile': [], 'server_timeout': None, 'nosetscene': False, 'setsceneonly': False, 'skipsetscene': False, 'runall': [], 'runonly': None, 'writeeventlog': None, 'build_verbose_shell': False, 'build_verbose_stdout': False, 'default_loglevel': 20, 'debug_domains': {}}, {'BB_ENV_PASSTHROUGH_ADDITIONS': 'ALL_PROXY BBPATH_EXTRA BB_LOGCONFIG BB_NO_NETWORK BB_NUMBER_THREADS BB_SETSCENE_ENFORCE BB_SRCREV_POLICY DISTRO FTPS_PROXY FTP_PROXY GIT_PROXY_COMMAND HTTPS_PROXY HTTP_PROXY MACHINE NO_PROXY PARALLEL_MAKE SCREENDIR SDKMACHINE SOCKS5_PASSWD SOCKS5_USER SSH_AGENT_PID SSH_AUTH_SOCK STAMPS_DIR TCLIBC TCMODE all_proxy ftp_proxy ftps_proxy http_proxy https_proxy no_proxy ', 'PWD': '/home/builder/workspace/build', 'HOME': '/home/builder', 'BBPATH': '/home/builder/workspace/build', 'LC_ALL': 'en_US.UTF-8', 'PATH': '/home/builder/workspace/poky/scripts:/home/builder/workspace/poky/bitbake/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', 'OE_ADDED_PATHS': '/home/builder/workspace/poky/scripts:/home/builder/workspace/poky/bitbake/bin:', 'HOSTNAME': 'ciprian-B250M-D2V', 'LANGUAGE': 'en_US:en', 'LANG': 'en_US.UTF-8', 'LS_COLORS': 'rs=0:di=01;34:ln=01;36:mh=00:pi=40;33:so=01;35:do=01;35:bd=40;33;01:cd=40;33;01:or=40;31;01:mi=00:su=37;41:sg=30;43:ca=30;41:tw=30;42:ow=34;42:st=37;44:ex=01;32:*.tar=01;31:*.tgz=01;31:*.arc=01;31:*.arj=01;31:*.taz=01;31:*.lha=01;31:*.lz4=01;31:*.lzh=01;31:*.lzma=01;31:*.tlz=01;31:*.txz=01;31:*.tzo=01;31:*.t7z=01;31:*.zip=01;31:*.z=01;31:*.dz=01;31:*.gz=01;31:*.lrz=01;31:*.lz=01;31:*.lzo=01;31:*.xz=01;31:*.zst=01;31:*.tzst=01;31:*.bz2=01;31:*.bz=01;31:*.tbz=01;31:*.tbz2=01;31:*.tz=01;31:*.deb=01;31:*.rpm=01;31:*.jar=01;31:*.war=01;31:*.ear=01;31:*.sar=01;31:*.rar=01;31:*.alz=01;31:*.ace=01;31:*.zoo=01;31:*.cpio=01;31:*.7z=01;31:*.rz=01;31:*.cab=01;31:*.wim=01;31:*.swm=01;31:*.dwm=01;31:*.esd=01;31:*.jpg=01;35:*.jpeg=01;35:*.mjpg=01;35:*.mjpeg=01;35:*.gif=01;35:*.bmp=01;35:*.pbm=01;35:*.pgm=01;35:*.ppm=01;35:*.tga=01;35:*.xbm=01;35:*.xpm=01;35:*.tif=01;35:*.tiff=01;35:*.png=01;35:*.svg=01;35:*.svgz=01;35:*.mng=01;35:*.pcx=01;35:*.mov=01;35:*.mpg=01;35:*.mpeg=01;35:*.m2v=01;35:*.mkv=01;35:*.webm=01;35:*.webp=01;35:*.ogm=01;35:*.mp4=01;35:*.m4v=01;35:*.mp4v=01;35:*.vob=01;35:*.qt=01;35:*.nuv=01;35:*.wmv=01;35:*.asf=01;35:*.rm=01;35:*.rmvb=01;35:*.flc=01;35:*.avi=01;35:*.fli=01;35:*.flv=01;35:*.gl=01;35:*.dl=01;35:*.xcf=01;35:*.xwd=01;35:*.yuv=01;35:*.cgm=01;35:*.emf=01;35:*.ogv=01;35:*.ogx=01;35:*.aac=00;36:*.au=00;36:*.flac=00;36:*.m4a=00;36:*.mid=00;36:*.midi=00;36:*.mka=00;36:*.mp3=00;36:*.mpc=00;36:*.ogg=00;36:*.ra=00;36:*.wav=00;36:*.oga=00;36:*.opus=00;36:*.spx=00;36:*.xspf=00;36:', 'PYTHONPATH': '/home/builder/workspace/poky/bitbake/lib:', 'TERM': 'xterm', 'SHLVL': '1', 'BUILDDIR': '/home/builder/workspace/build', 'DEBIAN_FRONTEND': 'noninteractive', 'OLDPWD': '/home/builder/workspace', '_': '/home/builder/workspace/poky/bitbake/bin/bitbake-layers'}, ['/home/builder/workspace/poky/bitbake/bin/bitbake-layers', 'add-layer', '../meta-universal-controller']]
+56 20:47:40.251741 Base config valid
+56 20:47:40.267027 Sending reply (None, None)
+56 20:47:40.267247 Command Completed (socket: True)
+56 20:47:40.267467 Running command ['parseConfiguration']
+56 20:47:40.268895 Sending reply (None, None)
+56 20:47:40.268976 Command Completed (socket: True)
+56 20:47:40.269249 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBMULTICONFIG',), {}]
+56 20:47:40.269317 Sending reply (None, None)
+56 20:47:40.269385 Command Completed (socket: True)
+56 20:47:40.269635 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBPATH',), {}]
+56 20:47:40.269696 Sending reply ('/home/builder/workspace/poky/meta-poky:/home/builder/workspace/build:/home/builder/workspace/poky/meta:/home/builder/workspace/poky/meta-yocto-bsp:/home/builder/workspace/meta-openembedded/meta-oe:/home/builder/workspace/meta-openembedded/meta-python:/home/builder/workspace/meta-st-stm32mp:/home/builder/workspace/meta-universal-controller', None)
+56 20:47:40.269769 Command Completed (socket: True)
+56 20:47:40.275559 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+56 20:47:40.275608 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   /home/builder/workspace/meta-st-stm32mp   /home/builder/workspace/meta-universal-controller   ', None)
+56 20:47:40.275672 Command Completed (socket: True)
+56 20:47:40.275834 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+56 20:47:40.275937 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf', 'stm-st-stm32mp': '/home/builder/workspace/meta-st-stm32mp/conf/layer.conf', 'meta-universal-controller': '/home/builder/workspace/meta-universal-controller/conf/layer.conf'}, None)
+56 20:47:40.275996 Command Completed (socket: True)
+56 20:47:40.277283 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+56 20:47:40.277311 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   /home/builder/workspace/meta-st-stm32mp   /home/builder/workspace/meta-universal-controller   ', None)
+56 20:47:40.277376 Command Completed (socket: True)
+56 20:47:40.277565 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+56 20:47:40.277635 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf', 'stm-st-stm32mp': '/home/builder/workspace/meta-st-stm32mp/conf/layer.conf', 'meta-universal-controller': '/home/builder/workspace/meta-universal-controller/conf/layer.conf'}, None)
+56 20:47:40.277704 Command Completed (socket: True)
+56 20:47:40.279571 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+56 20:47:40.279605 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   /home/builder/workspace/meta-st-stm32mp   /home/builder/workspace/meta-universal-controller   ', None)
+56 20:47:40.279671 Command Completed (socket: True)
+56 20:47:40.279857 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+56 20:47:40.279923 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf', 'stm-st-stm32mp': '/home/builder/workspace/meta-st-stm32mp/conf/layer.conf', 'meta-universal-controller': '/home/builder/workspace/meta-universal-controller/conf/layer.conf'}, None)
+56 20:47:40.279993 Command Completed (socket: True)
+56 20:47:40.280973 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+56 20:47:40.281001 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   /home/builder/workspace/meta-st-stm32mp   /home/builder/workspace/meta-universal-controller   ', None)
+56 20:47:40.281052 Command Completed (socket: True)
+56 20:47:40.281206 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+56 20:47:40.281275 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf', 'stm-st-stm32mp': '/home/builder/workspace/meta-st-stm32mp/conf/layer.conf', 'meta-universal-controller': '/home/builder/workspace/meta-universal-controller/conf/layer.conf'}, None)
+56 20:47:40.281332 Command Completed (socket: True)
+56 20:47:40.281785 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+56 20:47:40.281816 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   /home/builder/workspace/meta-st-stm32mp   /home/builder/workspace/meta-universal-controller   ', None)
+56 20:47:40.281868 Command Completed (socket: True)
+56 20:47:40.282009 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+56 20:47:40.282073 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf', 'stm-st-stm32mp': '/home/builder/workspace/meta-st-stm32mp/conf/layer.conf', 'meta-universal-controller': '/home/builder/workspace/meta-universal-controller/conf/layer.conf'}, None)
+56 20:47:40.282166 Command Completed (socket: True)
+56 20:47:40.282723 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBLAYERS',), {}]
+56 20:47:40.282751 Sending reply ('   /home/builder/workspace/poky/meta   /home/builder/workspace/poky/meta-poky   /home/builder/workspace/poky/meta-yocto-bsp   /home/builder/workspace/meta-openembedded/meta-oe   /home/builder/workspace/meta-openembedded/meta-python   /home/builder/workspace/meta-st-stm32mp   /home/builder/workspace/meta-universal-controller   ', None)
+56 20:47:40.282802 Command Completed (socket: True)
+56 20:47:40.282945 Running command ['dataStoreConnectorVarHistCmd', 0, 'get_variable_items_files', ('BBFILE_COLLECTIONS',), {}]
+56 20:47:40.283006 Sending reply ({'core': '/home/builder/workspace/poky/meta/conf/layer.conf', 'yocto': '/home/builder/workspace/poky/meta-poky/conf/layer.conf', 'yoctobsp': '/home/builder/workspace/poky/meta-yocto-bsp/conf/layer.conf', 'openembedded-layer': '/home/builder/workspace/meta-openembedded/meta-oe/conf/layer.conf', 'meta-python': '/home/builder/workspace/meta-openembedded/meta-python/conf/layer.conf', 'stm-st-stm32mp': '/home/builder/workspace/meta-st-stm32mp/conf/layer.conf', 'meta-universal-controller': '/home/builder/workspace/meta-universal-controller/conf/layer.conf'}, None)
+56 20:47:40.283095 Command Completed (socket: True)
+56 20:47:40.283652 Running command ['dataStoreConnectorCmd', 0, 'getVar', ('BBPATH',), {}]
+56 20:47:40.283686 Sending reply ('/home/builder/workspace/poky/meta-poky:/home/builder/workspace/build:/home/builder/workspace/poky/meta:/home/builder/workspace/poky/meta-yocto-bsp:/home/builder/workspace/meta-openembedded/meta-oe:/home/builder/workspace/meta-openembedded/meta-python:/home/builder/workspace/meta-st-stm32mp:/home/builder/workspace/meta-universal-controller', None)
+56 20:47:40.283753 Command Completed (socket: True)
+56 20:47:40.289737 Running command ['revalidateCaches']
+56 20:47:40.291711 Sending reply (None, None)
+56 20:47:40.291793 Command Completed (socket: True)
+56 20:47:40.292094 Running command ['clientComplete']
+56 20:47:40.292162 Registering idle function <bound method Command.runAsyncCommand of <bb.command.Command object at 0x76086f99c4f0>>
+56 20:47:40.292175 Sending reply (True, None)
+56 20:47:40.292233 Command Completed (socket: True)
+56 20:47:40.367568 Processing Client
+56 20:47:40.367694 Disconnecting Client (socket: True)
+56 20:47:40.368611 Removing idle function <bound method Command.runAsyncCommand of <bb.command.Command object at 0x76086f99c4f0>>
+56 20:47:40.369137 No timeout, exiting.
+56 20:47:40.469484 Exiting (socket: True)
+56 20:47:40.473342 Exiting as we could obtain the lock
+sys:1: ResourceWarning: unclosed file <_io.TextIOWrapper name='/home/builder/workspace/build/bitbake-cookerdaemon.log' mode='a+' encoding='UTF-8'>
