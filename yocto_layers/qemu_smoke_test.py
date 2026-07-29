@@ -147,6 +147,15 @@ def login(child, results):
     child.sendline(f'export PS1="{part_a}""{part_b}"')
     child.expect(re.escape(SHELL_PROMPT), timeout=15)
 
+    # Disable local echo for the rest of the session. A long command line
+    # can get wrapped mid-word by a width-limited serial console when the
+    # tty echoes it back, which breaks run_cmd()'s "the echo is always on
+    # the first line" assumption and lets fragments of the command leak
+    # into what's supposed to be pure output. With echo off there's nothing
+    # to strip in the first place, regardless of command length.
+    child.sendline("stty -echo")
+    child.expect(re.escape(SHELL_PROMPT), timeout=15)
+
 
 def check_system_running(child, results):
     out = run_cmd(child, "systemctl is-system-running; echo RC=$?")
@@ -171,6 +180,16 @@ def check_sshd(child, results):
     out = run_cmd(child, "systemctl is-active sshd 2>/dev/null || systemctl is-active ssh 2>/dev/null || echo not-found")
     active = "active" == out.strip().splitlines()[-1].strip()
     results.append(("sshd is active (IMAGE_FEATURES ssh-server-openssh)", active, out.strip()))
+    if not active:
+        # Pull the "why" automatically instead of making the next run do it:
+        # is the unit even present/enabled, and if it tried to start, why
+        # did it fail. Cheap either way, and saves a debugging round trip.
+        unit_status = run_cmd(child, "systemctl status sshd --no-pager -l 2>&1 || systemctl status ssh --no-pager -l 2>&1")
+        enabled = run_cmd(child, "systemctl is-enabled sshd 2>&1 || systemctl is-enabled ssh 2>&1")
+        journal = run_cmd(child, "journalctl -u sshd --no-pager 2>&1 | tail -n 20 || journalctl -u ssh --no-pager 2>&1 | tail -n 20")
+        print(f"    sshd is-enabled: {enabled}")
+        print(f"    sshd systemctl status:\n{unit_status}")
+        print(f"    sshd journal (last 20 lines):\n{journal}")
 
 
 def check_kernel_version(child, results):
