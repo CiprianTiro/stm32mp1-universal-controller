@@ -18,8 +18,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gdisk \
     git \
     gcc \
-    g++-multilib \
-    gcc-multilib \
     iputils-ping \
     iptables \
     libegl1-mesa \
@@ -48,6 +46,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     xz-utils \
     zstd \
     && rm -rf /var/lib/apt/lists/*
+
+# gcc-multilib/g++-multilib are x86 32-bit multiarch (i386) compatibility
+# packages - they only exist in Ubuntu's amd64 archives. Installing them
+# unconditionally breaks the image build outright on arm64 hosts (Apple
+# Silicon Macs via Docker Desktop, arm64 CI runners, etc). Yocto's own
+# host-package docs list these as amd64-only requirements, so skip them
+# entirely on non-amd64 build hosts rather than failing the build.
+RUN if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
+        apt-get update && apt-get install -y --no-install-recommends \
+            gcc-multilib \
+            g++-multilib \
+        && rm -rf /var/lib/apt/lists/*; \
+    else \
+        echo "Skipping gcc-multilib/g++-multilib: not available on $(dpkg --print-architecture)"; \
+    fi
 
 # Set up system locales to prevent BitBake parsing warnings
 RUN locale-gen en_US.UTF-8

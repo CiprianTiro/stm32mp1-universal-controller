@@ -6,7 +6,9 @@
 set -euo pipefail
 
 MODE="${1:-hardware}"
-TARGET_IMAGE="core-image-minimal"
+# Custom image recipe (yocto_layers/meta-universal-controller/recipes-core/images/)
+# instead of the generic core-image-minimal placeholder.
+TARGET_IMAGE="universal-controller-image"
 
 if [ "$MODE" = "qemu" ]; then
     TARGET_MACHINE="qemuarm64"
@@ -48,23 +50,27 @@ compile_inside_container() {
         echo "PARALLEL_MAKE = \"-j $CORES\"" >> conf/local.conf
     fi
 
-    # Defensively append layer dependencies to bblayers.conf
+    # Verify/append layer dependencies to bblayers.conf. Read conf/bblayers.conf
+    # directly instead of shelling out to `bitbake-layers show-layers` per
+    # layer - same result, no repeated bitbake server round-trips. Guarded
+    # with -f since oe-init-build-env always generates this file, but a
+    # broken/partial build dir shouldn't make this die on a missing-file grep.
     echo "  -> Verifying metadata layer paths configuration..."
     for layer in meta-oe meta-python; do
-        if ! bitbake-layers show-layers | grep -q "$layer"; then
+        if [ ! -f conf/bblayers.conf ] || ! grep -q "$layer" conf/bblayers.conf; then
             echo "     [+] Adding openembedded:$layer layer extension"
             bitbake-layers add-layer ../meta-openembedded/$layer
         fi
     done
 
     if [ "${TARGET_MACHINE}" != "qemuarm64" ]; then
-        if ! bitbake-layers show-layers | grep -q 'meta-st-stm32mp'; then
+        if [ ! -f conf/bblayers.conf ] || ! grep -q 'meta-st-stm32mp' conf/bblayers.conf; then
             echo "     [+] Adding STMicroelectronics BSP hardware layer"
             bitbake-layers add-layer ../meta-st-stm32mp
         fi
     fi
 
-    if ! bitbake-layers show-layers | grep -q 'meta-universal-controller'; then
+    if [ ! -f conf/bblayers.conf ] || ! grep -q 'meta-universal-controller' conf/bblayers.conf; then
         echo "     [+] Adding custom universal-controller layer"
         bitbake-layers add-layer ../meta-universal-controller
     fi
@@ -92,11 +98,11 @@ else
     git submodule update --init --recursive
 
     echo "🐳 Step 2: Checking Docker container daemon sanity..."
-    docker-compose up -d
+    docker compose up -d
 
     echo "⚡ Step 3: Forwarding execution sequence into container sandbox..."
     echo "-----------------------------------------------------------------------------"
-    docker-compose exec yocto-builder bash -c "cd /home/builder/workspace && ./run_build.sh $MODE"
+    docker compose exec yocto-builder bash -c "cd /home/builder/workspace && ./run_build.sh $MODE"
 fi
 
 echo "-----------------------------------------------------------------------------"

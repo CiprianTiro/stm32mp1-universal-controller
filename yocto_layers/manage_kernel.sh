@@ -18,7 +18,7 @@ fi
 
 if [ "$INSIDE_CONTAINER" = false ]; then
     echo "🐳 Forwarding kernel task [$COMMAND] into Docker sandbox..."
-    docker-compose exec yocto-builder bash -c "cd /home/builder/workspace && ./manage_kernel.sh $COMMAND"
+    docker compose exec yocto-builder bash -c "cd /home/builder/workspace && ./manage_kernel.sh $COMMAND"
     exit 0
 fi
 

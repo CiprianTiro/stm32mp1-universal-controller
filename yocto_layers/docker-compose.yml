@@ -10,6 +10,14 @@ services:
     volumes:
       # Mount your whole local yocto folder right into the isolated sandbox environment
       - .:/home/builder/workspace
-    network_mode: "host" # Essential for headless QEMU testing and tap/tun routing loops
+    # NOT network_mode: "host" - that only works on Linux hosts. Docker
+    # Desktop for Mac (and Windows) runs the daemon inside a VM, so there is
+    # no host network namespace to join; "host" mode is silently unsupported
+    # there. Explicit port publishing below gives the same practical result
+    # (QEMU's slirp hostfwd ports reachable at localhost:<port>) and works
+    # identically on Linux, Mac, and Windows.
+    ports:
+      - "10022:10022"  # QB_SLIRP_OPT in run_qemu.sh: host 10022 -> QEMU guest SSH (22)
+      - "9000:9000"    # QB_SLIRP_OPT in run_qemu.sh: host 9000  -> QEMU guest app port
     tty: true
     stdin_open: true
