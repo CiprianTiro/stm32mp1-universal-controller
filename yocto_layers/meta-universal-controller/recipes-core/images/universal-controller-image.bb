@@ -17,11 +17,19 @@ inherit core-image
 
 # ssh access is legitimate on both targets (remote debug / deployment), the
 # risk is specifically the passwordless-root part covered above, not sshd itself.
-IMAGE_FEATURES += "ssh-server-openssh"
-
-# System packages to explicitly bake into the rootfs filesystem
+#
+# Named directly in IMAGE_INSTALL below rather than only via
+# IMAGE_FEATURES += "ssh-server-openssh": on real hardware that feature
+# flag showed up as installed with no error, but the sshd.service unit was
+# genuinely absent from the built rootfs (systemctl: "could not be found",
+# not "inactive"/"disabled") - most likely a stale sstate artifact from
+# this build directory's pre-existing build history predating this recipe.
+# Naming the packages explicitly removes the indirection either way.
 IMAGE_INSTALL += " \
     packagegroup-core-boot \
     bash \
     coreutils \
+    openssh \
+    openssh-sshd \
+    openssh-sftp-server \
 "

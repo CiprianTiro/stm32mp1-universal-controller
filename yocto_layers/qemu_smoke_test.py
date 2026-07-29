@@ -187,9 +187,17 @@ def check_sshd(child, results):
         unit_status = run_cmd(child, "systemctl status sshd --no-pager -l 2>&1 || systemctl status ssh --no-pager -l 2>&1")
         enabled = run_cmd(child, "systemctl is-enabled sshd 2>&1 || systemctl is-enabled ssh 2>&1")
         journal = run_cmd(child, "journalctl -u sshd --no-pager 2>&1 | tail -n 20 || journalctl -u ssh --no-pager 2>&1 | tail -n 20")
+        # Distinguishes "package never made it into the rootfs at all" from
+        # "package present but the unit is disabled/misconfigured" - the
+        # two look identical from is-active/is-enabled alone once the unit
+        # is missing entirely (both just report "not found").
+        pkg_check = run_cmd(child, "opkg list-installed 2>/dev/null | grep -i ssh || dpkg -l 2>/dev/null | grep -i ssh || rpm -qa 2>/dev/null | grep -i ssh || echo no-package-manager-matched")
+        binary_check = run_cmd(child, "which sshd 2>&1 || find /usr/sbin /usr/bin -iname 'sshd*' 2>&1 || echo no-sshd-binary-found")
         print(f"    sshd is-enabled: {enabled}")
         print(f"    sshd systemctl status:\n{unit_status}")
         print(f"    sshd journal (last 20 lines):\n{journal}")
+        print(f"    ssh-related installed packages: {pkg_check}")
+        print(f"    sshd binary search: {binary_check}")
 
 
 def check_kernel_version(child, results):
