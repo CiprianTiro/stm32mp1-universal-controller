@@ -177,25 +177,37 @@ def check_failed_units(child, results):
 
 
 def check_sshd(child, results):
-    out = run_cmd(child, "systemctl is-active sshd 2>/dev/null || systemctl is-active ssh 2>/dev/null || echo not-found")
+    # This build's openssh-sshd uses systemd *socket activation*
+    # (confirmed via `oe-pkgdata-util list-pkg-files openssh-sshd`:
+    # SYSTEMD_SERVICE:openssh-sshd = "sshd.socket", no plain sshd.service
+    # unit exists at all - sshd@.service is a template, instantiated
+    # per-connection on demand). Checking for "sshd.service" was checking
+    # for a unit that was never going to exist by design; sshd.socket
+    # being active is what actually means "SSH connections will be
+    # accepted". Falling back to the traditional non-socket-activated
+    # names too, for portability if a future recipe/config changes this.
+    out = run_cmd(child, "systemctl is-active sshd.socket 2>/dev/null || systemctl is-active ssh.socket 2>/dev/null "
+                          "|| systemctl is-active sshd 2>/dev/null || systemctl is-active ssh 2>/dev/null || echo not-found")
     active = "active" == out.strip().splitlines()[-1].strip()
-    results.append(("sshd is active (IMAGE_FEATURES ssh-server-openssh)", active, out.strip()))
+    results.append(("sshd.socket is active (IMAGE_FEATURES ssh-server-openssh)", active, out.strip()))
     if not active:
         # Pull the "why" automatically instead of making the next run do it:
         # is the unit even present/enabled, and if it tried to start, why
         # did it fail. Cheap either way, and saves a debugging round trip.
-        unit_status = run_cmd(child, "systemctl status sshd --no-pager -l 2>&1 || systemctl status ssh --no-pager -l 2>&1")
-        enabled = run_cmd(child, "systemctl is-enabled sshd 2>&1 || systemctl is-enabled ssh 2>&1")
-        journal = run_cmd(child, "journalctl -u sshd --no-pager 2>&1 | tail -n 20 || journalctl -u ssh --no-pager 2>&1 | tail -n 20")
+        unit_status = run_cmd(child, "systemctl status sshd.socket --no-pager -l 2>&1")
+        enabled = run_cmd(child, "systemctl is-enabled sshd.socket 2>&1")
+        journal = run_cmd(child, "journalctl -u sshd.socket --no-pager 2>&1 | tail -n 20")
         # Distinguishes "package never made it into the rootfs at all" from
         # "package present but the unit is disabled/misconfigured" - the
         # two look identical from is-active/is-enabled alone once the unit
         # is missing entirely (both just report "not found").
         pkg_check = run_cmd(child, "opkg list-installed 2>/dev/null | grep -i ssh || dpkg -l 2>/dev/null | grep -i ssh || rpm -qa 2>/dev/null | grep -i ssh || echo no-package-manager-matched")
         binary_check = run_cmd(child, "which sshd 2>&1 || find /usr/sbin /usr/bin -iname 'sshd*' 2>&1 || echo no-sshd-binary-found")
-        print(f"    sshd is-enabled: {enabled}")
-        print(f"    sshd systemctl status:\n{unit_status}")
-        print(f"    sshd journal (last 20 lines):\n{journal}")
+        print(f"    sshd.socket is-enabled: {enabled}")
+        print(f"    sshd.socket systemctl status:\n{unit_status}")
+        print(f"    sshd.socket journal (last 20 lines):\n{journal}")
+        print(f"    ssh-related installed packages: {pkg_check}")
+        print(f"    sshd binary search: {binary_check}")
         print(f"    ssh-related installed packages: {pkg_check}")
         print(f"    sshd binary search: {binary_check}")
 
