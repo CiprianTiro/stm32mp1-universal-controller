@@ -7,6 +7,10 @@ set -euo pipefail
 
 BUILD_DIR="build-qemu"
 TARGET_MACHINE="qemuarm64"
+# Must match TARGET_IMAGE in run_build.sh. Passed explicitly to runqemu below
+# so it can't accidentally pick up a stale core-image-minimal artifact left
+# over from an earlier build in tmp/deploy/images/${TARGET_MACHINE}/.
+TARGET_IMAGE="universal-controller-image"
 
 # Forward host ports to QEMU container layout: 10022 -> SSH(22), 9000 -> App Backend
 export QB_SLIRP_OPT="-netdev user,id=net0,hostfwd=tcp::10022-:22,hostfwd=tcp::9000-:9000"
@@ -32,16 +36,16 @@ if [ "$INSIDE_CONTAINER" = true ]; then
     set -u
 
     # Fire up the emulator engine headlessly inside this active terminal window
-    runqemu "${TARGET_MACHINE}" slirp nographic
+    runqemu "${TARGET_MACHINE}" "${TARGET_IMAGE}" slirp nographic
 
 else
     echo "🐳 Host detected. Verifying Docker backend virtualization health..."
-    docker-compose up -d
+    docker compose up -d
 
     echo "⚡ Spawning interactive QEMU simulation engine context..."
     echo "------------------------------------------------------------------"
-    
-    # We MUST use 'exec -it' (interactive tty) so the QEMU console displays 
+
+    # We MUST use 'exec -it' (interactive tty) so the QEMU console displays
     # directly on your host terminal screen and captures your keyboard inputs!
-    docker-compose exec -it yocto-builder bash -c "cd /home/builder/workspace && ./run_qemu.sh"
+    docker compose exec -it yocto-builder bash -c "cd /home/builder/workspace && ./run_qemu.sh"
 fi

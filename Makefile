@@ -3,7 +3,7 @@
 # Target Architecture: STMicroelectronics STM32MP1 (Cortex-A7 + Cortex-M4)
 # =============================================================================
 
-.PHONY: help build-hw build-qemu shell-yocto clean-yocto build-m4 build-a7
+.PHONY: help build-hw build-qemu shell-yocto clean-yocto build-m4 build-a7 test-qemu verify-qemu
 
 # Default target when just typing 'make'
 help:
@@ -13,6 +13,8 @@ help:
 	@echo "Available Execution Commands:"
 	@echo "  make build-hw      - Build Yocto Linux production image for STM32MP157F-DK2"
 	@echo "  make build-qemu    - Build Yocto Linux simulation image for QEMU ARM64"
+	@echo "  make test-qemu     - Automated headless boot smoke test (systemd/sshd/etc)"
+	@echo "  make verify-qemu   - build-qemu + test-qemu in one shot: run BEFORE build-hw"
 	@echo "  make shell-yocto   - Enter interactive terminal inside Yocto Docker sandbox"
 	@echo "  make clean-yocto   - Wipe local Yocto build caches and configuration layouts"
 	@echo "-----------------------------------------------------------------------------"
@@ -34,12 +36,20 @@ build-qemu:
 
 shell-yocto:
 	@echo "🐳 Entering Yocto Docker workspace portal..."
-	@cd yocto_layers && docker-compose up -d
-	@cd yocto_layers && docker-compose exec yocto-builder /bin/bash
+	@cd yocto_layers && docker compose up -d
+	@cd yocto_layers && docker compose exec yocto-builder /bin/bash
 
 clean-yocto:
 	@echo "⚠️  Wiping out Yocto generation paths..."
 	rm -rf yocto_layers/build/ yocto_layers/build-qemu/
+
+test-qemu:
+	@echo "🧪 Running automated QEMU boot smoke test..."
+	@cd yocto_layers && ./test_qemu.sh
+
+# Run this before every build-hw / hardware flash cycle: catches BSP and
+# rootfs breakage in a headless boot test instead of on the DK2 board.
+verify-qemu: build-qemu test-qemu
 
 # -----------------------------------------------------------------------------
 # 2. APPLICATION & MCU COMPONENT STACKS

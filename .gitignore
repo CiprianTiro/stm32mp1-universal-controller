@@ -29,6 +29,14 @@ yocto_layers/build-qemu/*.lock
 yocto_layers/build-qemu/pseudodone
 yocto_layers/build-qemu/bitbake.lock
 
+# Internal BitBake IPC trace log, regenerated every run - not build output,
+# just noise. NOTE: yocto_layers/build/bitbake-cookerdaemon.log and
+# yocto_layers/build-qemu/bitbake-cookerdaemon.log are already committed
+# from earlier runs; this only stops *future* regenerations from being
+# tracked. Run `git rm --cached yocto_layers/build*/bitbake-cookerdaemon.log`
+# if you want the existing ones out of the repo too.
+yocto_layers/build*/bitbake-cookerdaemon.log
+
 # ==============================================================================
 # 2. UPSTREAM / BASE LAYERS (MANAGED VIA GIT SUBMODULES)
 # ==============================================================================
@@ -80,6 +88,11 @@ firmware_m4/**/.settings/
 # JetBrains (CLion / PyCharm / IntelliJ)
 .idea/
 
+# Python (qemu_smoke_test.py and friends)
+__pycache__/
+*.pyc
+yocto_layers/qemu_smoke_test_console.log
+
 # Vim/Emacs swap and backup files
 *~
 *.swp
@@ -89,6 +102,9 @@ firmware_m4/**/.settings/
 # Operating System system-generated files
 .DS_Store
 Thumbs.db
+# AppleDouble shadow files - show up when this repo is accessed from macOS
+# over a non-native filesystem (e.g. the sshfs mount used for remote editing)
+._*
 
 # Docker container volume state leftovers
 yocto_layers/.docker/
