@@ -20,6 +20,7 @@ inside the container for.
 Exit code: 0 if every check passes, 1 otherwise.
 """
 import argparse
+import glob
 import os
 import re
 import sys
@@ -62,6 +63,27 @@ BOOT_FAILURE_PATTERNS = [
 
 class SmokeTestError(Exception):
     """Raised for any failure that should abort the run early with a clear reason."""
+
+
+def find_qemuboot_conf(build_dir, target_machine, target_image):
+    """Locate the built .qemuboot.conf explicitly instead of letting runqemu
+    resolve it from the image *name*. runqemu's argument parser treats any
+    argument matching `-image-` or ending in `-image` as a "lazy rootfs"
+    filename hint rather than a bitbake target to query - and TARGET_IMAGE
+    ends in "-image", so it hits that branch, the bitbake -e query that
+    would resolve IMAGE_LINK_NAME never runs, and runqemu dies with
+    "IMAGE_LINK_NAME wasn't set to find corresponding .qemuboot.conf file".
+    Passing the file directly (a different, unambiguous code path in
+    runqemu) sidesteps that entirely. Returns an absolute path, or None if
+    no build artifact was found.
+    """
+    pattern = os.path.join(build_dir, "tmp", "deploy", "images", target_machine,
+                            f"{target_image}*.qemuboot.conf")
+    matches = glob.glob(pattern)
+    if not matches:
+        return None
+    matches.sort(key=os.path.getmtime, reverse=True)
+    return os.path.abspath(matches[0])
 
 
 def run_cmd(child, cmd, prompt=SHELL_PROMPT, timeout=None):
@@ -208,11 +230,18 @@ def main():
               file=sys.stderr)
         sys.exit(2)
 
+    qemuboot_conf = find_qemuboot_conf(BUILD_DIR, TARGET_MACHINE, TARGET_IMAGE)
+    if not qemuboot_conf:
+        print(f"FATAL: no .qemuboot.conf found for {TARGET_IMAGE} on {TARGET_MACHINE} "
+              f"under {BUILD_DIR}/tmp/deploy/images/{TARGET_MACHINE}/. "
+              f"Did the build (make build-qemu) actually complete?", file=sys.stderr)
+        sys.exit(2)
+
     results = []
     boot_cmd = (
         "bash -c \"set +u; source poky/oe-init-build-env "
         f"{BUILD_DIR} > /dev/null; set -u; "
-        f"runqemu {TARGET_MACHINE} {TARGET_IMAGE} slirp nographic\""
+        f"runqemu {TARGET_MACHINE} {qemuboot_conf} slirp nographic\""
     )
 
     print("=" * 79)

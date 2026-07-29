@@ -35,8 +35,24 @@ if [ "$INSIDE_CONTAINER" = true ]; then
     source poky/oe-init-build-env "${BUILD_DIR}" > /dev/null
     set -u
 
+    # Locate the built qemuboot.conf explicitly rather than passing the image
+    # *name* to runqemu. runqemu's argument parser treats anything matching
+    # `-image-` or ending in `-image` as a "lazy rootfs" filename hint rather
+    # than a bitbake target to query - and TARGET_IMAGE ends in "-image", so
+    # it hits that branch, the bitbake -e query that resolves IMAGE_LINK_NAME
+    # never runs, and runqemu dies with "IMAGE_LINK_NAME wasn't set to find
+    # corresponding .qemuboot.conf file". Handing runqemu the .qemuboot.conf
+    # path directly takes a different, unambiguous code path that sidesteps
+    # this entirely. (cwd is now inside ${BUILD_DIR} after the source above.)
+    QEMUBOOT_CONF=$(ls -t "tmp/deploy/images/${TARGET_MACHINE}/${TARGET_IMAGE}"*.qemuboot.conf 2>/dev/null | head -n1)
+    if [ -z "$QEMUBOOT_CONF" ]; then
+        echo "❌ No .qemuboot.conf found for ${TARGET_IMAGE} on ${TARGET_MACHINE}."
+        echo "   Did 'make build-qemu' / './run_build.sh qemu' actually complete?"
+        exit 1
+    fi
+
     # Fire up the emulator engine headlessly inside this active terminal window
-    runqemu "${TARGET_MACHINE}" "${TARGET_IMAGE}" slirp nographic
+    runqemu "${TARGET_MACHINE}" "${QEMUBOOT_CONF}" slirp nographic
 
 else
     echo "🐳 Host detected. Verifying Docker backend virtualization health..."
