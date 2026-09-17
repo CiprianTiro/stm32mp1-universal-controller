@@ -20,22 +20,24 @@ yocto_layers/build-qemu/cache/
 yocto_layers/build-qemu/downloads/
 
 # Ignore BitBake execution locks and state flags
-yocto_layers/build/*.lock
-yocto_layers/build/pseudodone
-yocto_layers/build/bitbake.lock
-
-# Ignore BitBake execution locks and state flags
 yocto_layers/build-qemu/*.lock
 yocto_layers/build-qemu/pseudodone
 yocto_layers/build-qemu/bitbake.lock
 
-# Internal BitBake IPC trace log, regenerated every run - not build output,
-# just noise. NOTE: yocto_layers/build/bitbake-cookerdaemon.log and
-# yocto_layers/build-qemu/bitbake-cookerdaemon.log are already committed
-# from earlier runs; this only stops *future* regenerations from being
-# tracked. Run `git rm --cached yocto_layers/build*/bitbake-cookerdaemon.log`
-# if you want the existing ones out of the repo too.
+# Internal BitBake IPC trace log, regenerated every run - not build output
 yocto_layers/build*/bitbake-cookerdaemon.log
+
+# init-build-env-generated local config; regenerate per machine instead of tracking
+yocto_layers/build/conf/local.conf
+yocto_layers/build/conf/bblayers.conf
+yocto_layers/build/conf/conf-notes.txt
+yocto_layers/build/conf/conf-summary.txt
+yocto_layers/build/conf/templateconf.cfg
+yocto_layers/build-qemu/conf/local.conf
+yocto_layers/build-qemu/conf/bblayers.conf
+yocto_layers/build-qemu/conf/conf-notes.txt
+yocto_layers/build-qemu/conf/conf-summary.txt
+yocto_layers/build-qemu/conf/templateconf.cfg
 
 # ==============================================================================
 # 2. UPSTREAM / BASE LAYERS (MANAGED VIA GIT SUBMODULES)
