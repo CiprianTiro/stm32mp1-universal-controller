@@ -18,6 +18,5 @@ services:
     # identically on Linux, Mac, and Windows.
     ports:
       - "10022:10022"  # QB_SLIRP_OPT in run_qemu.sh: host 10022 -> QEMU guest SSH (22)
-      - "9000:9000"    # QB_SLIRP_OPT in run_qemu.sh: host 9000  -> QEMU guest app port
     tty: true
     stdin_open: true

@@ -9,11 +9,14 @@ inherit core-image
 # Deliberately NOT baked in here, because this recipe is shared by BOTH the
 # hardware build (yocto_layers/build/) and the QEMU build (yocto_layers/build-qemu/).
 # Baking "debug-tweaks" into the shared recipe would ship passwordless root
-# access on real hardware by default. Instead, EXTRA_IMAGE_FEATURES is set
-# per build directory:
+# access on real hardware by default. Instead, run_build.sh injects
+# EXTRA_IMAGE_FEATURES per build directory based on TARGET_MACHINE:
 #   - yocto_layers/build-qemu/conf/local.conf -> debug-tweaks ON (dev/test convenience)
 #   - yocto_layers/build/conf/local.conf      -> debug-tweaks OFF (production safety)
-# See both local.conf files for the actual toggle.
+# On hardware, root has no password at all once debug-tweaks is off, so
+# ssh-root-key (below, hardware-only) provides the actual way in: it installs
+# an authorized_keys file, and the openssh bbappend forces
+# "PermitRootLogin prohibit-password" so key auth is the only path.
 
 # ssh access is legitimate on both targets (remote debug / deployment), the
 # risk is specifically the passwordless-root part covered above, not sshd itself.
@@ -33,3 +36,7 @@ IMAGE_INSTALL += " \
     openssh-sshd \
     openssh-sftp-server \
 "
+
+# Hardware-only: key-based root access (see NOTE above). Not installed on
+# qemuarm64, where debug-tweaks' blank-password root already covers dev access.
+IMAGE_INSTALL:append:stm32mp1common = " ssh-root-key"

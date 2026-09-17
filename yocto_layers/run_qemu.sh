@@ -12,8 +12,8 @@ TARGET_MACHINE="qemuarm64"
 # over from an earlier build in tmp/deploy/images/${TARGET_MACHINE}/.
 TARGET_IMAGE="universal-controller-image"
 
-# Forward host ports to QEMU container layout: 10022 -> SSH(22), 9000 -> App Backend
-export QB_SLIRP_OPT="-netdev user,id=net0,hostfwd=tcp::10022-:22,hostfwd=tcp::9000-:9000"
+# Forward host ports to QEMU container layout: 10022 -> SSH(22)
+export QB_SLIRP_OPT="-netdev user,id=net0,hostfwd=tcp::10022-:22"
 
 # Detect execution context boundary
 INSIDE_CONTAINER=false
@@ -27,7 +27,6 @@ fi
 if [ "$INSIDE_CONTAINER" = true ]; then
     echo "🎮 Launching QEMU ARM64 Simulation Platform..."
     echo "🔌 Port Forwarding Active: Host:10022 -> QEMU:22 (SSH)"
-    echo "🔌 Port Forwarding Active: Host:9000  -> QEMU:9000 (App)"
     echo "------------------------------------------------------------------"
     
     # Initialize the Yocto path markers specifically targeting the QEMU directory

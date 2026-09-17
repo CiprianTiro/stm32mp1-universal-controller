@@ -48,6 +48,21 @@ compile_inside_container() {
         echo "  -> Optimizing performance parameters for $CORES CPU cores..."
         echo "BB_NUMBER_THREADS = \"$CORES\"" >> conf/local.conf
         echo "PARALLEL_MAKE = \"-j $CORES\"" >> conf/local.conf
+
+        # Override the stock template's "EXTRA_IMAGE_FEATURES ?= debug-tweaks"
+        # explicitly (weak "?=" from local.conf.sample would otherwise leave
+        # debug-tweaks -- blank-password root over SSH -- on for BOTH targets,
+        # since this variable was never actually touched here before). QEMU
+        # keeps it for dev convenience; hardware ships with it off, relying on
+        # the ssh-root-key recipe for actual root access instead (see
+        # universal-controller-image.bb).
+        if [ "${TARGET_MACHINE}" = "qemuarm64" ]; then
+            echo "  -> Enabling debug-tweaks (blank-password root) for QEMU dev convenience..."
+            echo 'EXTRA_IMAGE_FEATURES = "debug-tweaks"' >> conf/local.conf
+        else
+            echo "  -> Disabling debug-tweaks for production hardware image..."
+            echo 'EXTRA_IMAGE_FEATURES = ""' >> conf/local.conf
+        fi
     fi
 
     # Verify/append layer dependencies to bblayers.conf. Read conf/bblayers.conf
