@@ -63,6 +63,17 @@ compile_inside_container() {
             echo "  -> Disabling debug-tweaks for production hardware image..."
             echo 'EXTRA_IMAGE_FEATURES = ""' >> conf/local.conf
         fi
+
+        # Poky defaults to sysvinit (POKY_INIT_MANAGER in poky.conf), never
+        # overridden anywhere in this repo despite the project committing to
+        # systemd (service units for backend_daemon/UI, systemd sandboxing
+        # hardening). Without this, sshd still runs fine via its sysvinit
+        # init script, but systemctl/journalctl don't exist at all - which
+        # reads as a broken image (see qemu_smoke_test.py's systemd checks)
+        # when it's actually just the wrong init manager for what the rest
+        # of the project assumes.
+        echo "  -> Enabling systemd as init manager..."
+        echo 'INIT_MANAGER = "systemd"' >> conf/local.conf
     fi
 
     # Verify/append layer dependencies to bblayers.conf. Read conf/bblayers.conf
