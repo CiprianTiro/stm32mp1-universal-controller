@@ -3,7 +3,7 @@
 # Target Architecture: STMicroelectronics STM32MP1 (Cortex-A7 + Cortex-M4)
 # =============================================================================
 
-.PHONY: help build-hw build-qemu shell-yocto clean-yocto build-m4 build-a7 test-qemu verify-qemu flash-hw
+.PHONY: help build-hw build-qemu shell-yocto clean-yocto build-m4 build-a7 test-qemu verify-qemu flash-hw netboot
 
 # Default target when just typing 'make'
 help:
@@ -13,6 +13,7 @@ help:
 	@echo "Available Execution Commands:"
 	@echo "  make build-hw      - Build Yocto Linux production image for STM32MP157F-DK2"
 	@echo "  make flash-hw      - Flash the built image to the DK2 over USB (needs recovery boot mode)"
+	@echo "  make netboot       - One-shot TFTP/NFS netboot with the latest build, no eMMC changes (see wiki: Network-Boot)"
 	@echo "  make build-qemu    - Build Yocto Linux simulation image for QEMU ARM64"
 	@echo "  make test-qemu     - Automated headless boot smoke test (systemd/sshd/etc)"
 	@echo "  make verify-qemu   - build-qemu + test-qemu in one shot: run BEFORE build-hw"
@@ -47,6 +48,10 @@ clean-yocto:
 flash-hw:
 	@echo "📲 Flashing production image to DK2 over USB DFU..."
 	@cd yocto_layers && ./flash_hw.sh
+
+netboot:
+	@echo "🔄 Syncing latest build and triggering a one-shot TFTP/NFS netboot..."
+	@cd yocto_layers && ./netboot.sh
 
 test-qemu:
 	@echo "🧪 Running automated QEMU boot smoke test..."
