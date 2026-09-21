@@ -35,6 +35,7 @@ IMAGE_INSTALL += " \
     openssh \
     openssh-sshd \
     openssh-sftp-server \
+    rust-hello \
 "
 
 # Hardware-only: key-based root access (see NOTE above). Not installed on

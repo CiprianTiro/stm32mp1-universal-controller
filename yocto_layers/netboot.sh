@@ -29,10 +29,30 @@ echo "  -> Syncing rootfs into ${NFS_DIR} (this deletes anything in there not fr
 # The rootfs tarball has real root-owned content (mode 700 /root/.ssh, mode
 # 000 systemd credstore, etc.) -- both the extraction and the rsync into
 # /srv/nfs need root to reproduce that ownership, so this needs sudo.
+#
+# --checksum is NOT optional here: Yocto's reproducible builds stamp every
+# file with the same fixed mtime (SOURCE_DATE_EPOCH) across every rebuild,
+# and a recompiled binary can easily land at the exact same byte size too.
+# rsync's default quick-check only compares mtime+size, so without
+# --checksum it silently skips re-copying a changed file whose mtime/size
+# happen to match the stale copy already sitting in NFS_DIR -- which is
+# exactly what was happening: every sync "succeeded" while quietly copying
+# nothing, forever, no matter how many times the image was rebuilt.
 TMP_EXTRACT="$(mktemp -d)"
 trap 'sudo rm -rf "${TMP_EXTRACT}"' EXIT
 sudo tar -xJf "${ROOTFS_TAR}" -C "${TMP_EXTRACT}" --numeric-owner
-sudo rsync -a --delete --numeric-ids "${TMP_EXTRACT}/" "${NFS_DIR}/"
+# --exclude on the SSH host keys, on purpose: each fresh tarball extraction
+# ships brand-new host keys (they're generated once at image-build time,
+# baked into the tarball like any other /etc file), so a plain sync would
+# give the board a new SSH identity -- and therefore a new
+# "REMOTE HOST IDENTIFICATION HAS CHANGED" warning -- on every single
+# rebuild. Excluding them here means whatever keys are already sitting in
+# NFS_DIR (from the very first sync) just stay put: rsync's --delete does
+# NOT remove excluded destination files by default, so this is both "don't
+# overwrite" and "don't delete" in one flag. The board's SSH identity is
+# then stable across every future rebuild+resync, and ssh-keygen -R is only
+# ever needed once, the first time you switch to netboot at all.
+sudo rsync -a --delete --numeric-ids --checksum --exclude 'etc/ssh/ssh_host_*' "${TMP_EXTRACT}/" "${NFS_DIR}/"
 
 # Trigger a one-shot netboot with the freshly synced files. This is RAM-only
 # on the board (see apply_netboot_env.sh) -- bootcmd is never touched and

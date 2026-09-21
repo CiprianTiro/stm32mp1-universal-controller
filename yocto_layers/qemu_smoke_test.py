@@ -224,6 +224,17 @@ def check_rootfs_writable(child, results):
     results.append(("Rootfs is writable (/tmp)", ok, out.strip()))
 
 
+def check_rust_hello(child, results):
+    # Sprint 2 Task 7 (#9): proves the Rust cross-toolchain (cargo.bbclass,
+    # shipped in oe-core) actually produces a working binary for this
+    # target, not just that bitbake accepted the recipe. Checks both the
+    # exit code AND the printed text -- RC=0 alone wouldn't catch a binary
+    # that exited cleanly without actually running its body.
+    out = run_cmd(child, "rust-hello; echo RC=$?")
+    ok = "RC=0" in out and "Hello from the Universal Controller Rust toolchain" in out
+    results.append(("rust-hello runs and exits 0 (Rust cross-toolchain works)", ok, out.strip()))
+
+
 def check_dmesg_for_errors(child, results):
     # Non-fatal signal, not a hard pass/fail: surfaces things worth a human
     # look without failing the whole run on every benign firmware-missing
@@ -301,6 +312,7 @@ def main():
         check_system_running(child, results)
         check_failed_units(child, results)
         check_sshd(child, results)
+        check_rust_hello(child, results)
         check_dmesg_for_errors(child, results)
         clean_shutdown = shutdown(child, args.shutdown_timeout)
         results.append(("Clean shutdown (poweroff -> QEMU exits)", clean_shutdown, ""))
