@@ -36,6 +36,7 @@ IMAGE_INSTALL += " \
     openssh-sshd \
     openssh-sftp-server \
     rust-hello \
+    backend-daemon \
 "
 
 # Hardware-only: key-based root access (see NOTE above). Not installed on

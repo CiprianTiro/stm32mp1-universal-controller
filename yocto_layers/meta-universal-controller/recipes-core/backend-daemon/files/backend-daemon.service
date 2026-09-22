@@ -1,0 +1,10 @@
+[Unit]
+Description=Universal Controller hub daemon
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/backend-daemon
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,11 @@
+[package]
+name = "backend-daemon"
+version = "0.1.0"
+edition = "2021"
+description = "Universal Controller hub daemon (Tokio async runtime)"
+repository = "https://github.com/CiprianTiro/stm32mp1-universal-controller"
+license = "GPL-3.0-only"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time"] }
+libc = "0.2"
