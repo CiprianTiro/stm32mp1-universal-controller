@@ -1,0 +1,27 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Shared memory + mailbox wiring for the RPMsg link to backend_daemon (A7),
+ * needed once we go beyond the plain Hello World (issue #11) into actual
+ * IPC (issue #12). Values match Zephyr's own openamp_rsc_table sample for
+ * this board (samples/subsys/ipc/openamp_rsc_table/boards/stm32mp157c_dk2.overlay)
+ * - not invented here, since getting the carveout sizes/addresses wrong is
+ * a silent-corruption risk, not a build error.
+ */
+
+/ {
+	chosen {
+		/* shared memory reserved for the inter-processor communication */
+		zephyr,ipc_shm = &mcusram3;
+		zephyr,ipc = &mailbox;
+	};
+
+	mcusram3: memory1@10040000 {
+		compatible = "mmio-sram";
+		reg = <0x10040000 DT_SIZE_K(64)>;
+	};
+};
+
+&mcusram {
+	reg = <0x10000000 DT_SIZE_K(256)>;
+};
