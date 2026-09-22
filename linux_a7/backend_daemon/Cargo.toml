@@ -7,5 +7,8 @@ repository = "https://github.com/CiprianTiro/stm32mp1-universal-controller"
 license = "GPL-3.0-only"
 
 [dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time", "sync", "net"] }
 libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+axum = { version = "0.7", features = ["ws"] }
