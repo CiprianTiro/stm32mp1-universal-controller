@@ -10,6 +10,12 @@ services:
     volumes:
       # Mount your whole local yocto folder right into the isolated sandbox environment
       - .:/home/builder/workspace
+      # linux_a7/ lives outside yocto_layers/ (repo root), but recipes like
+      # backend-daemon.bb build straight from the live Rust source there
+      # instead of duplicating it into the layer -- needs its own mount
+      # since it's outside the workspace bind mount above. Read-only: the
+      # build only ever reads this source, never writes into it.
+      - ../linux_a7:/home/builder/linux_a7:ro
     # NOT network_mode: "host" - that only works on Linux hosts. Docker
     # Desktop for Mac (and Windows) runs the daemon inside a VM, so there is
     # no host network namespace to join; "host" mode is silently unsupported

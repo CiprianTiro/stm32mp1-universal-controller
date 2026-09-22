@@ -235,6 +235,20 @@ def check_rust_hello(child, results):
     results.append(("rust-hello runs and exits 0 (Rust cross-toolchain works)", ok, out.strip()))
 
 
+def check_backend_daemon(child, results):
+    # Sprint 2 Task 8 (#10): the systemd unit for backend-daemon must be
+    # active on boot, not just installed -- SYSTEMD_AUTO_ENABLE alone
+    # wouldn't catch a unit that's enabled but crash-looping.
+    out = run_cmd(child, "systemctl is-active backend-daemon.service")
+    active = out.strip().splitlines()[-1].strip() == "active"
+    results.append(("backend-daemon.service is active (Task 8)", active, out.strip()))
+    if not active:
+        status = run_cmd(child, "systemctl status backend-daemon.service --no-pager -l 2>&1")
+        journal = run_cmd(child, "journalctl -u backend-daemon.service --no-pager 2>&1 | tail -n 30")
+        print(f"    backend-daemon.service status:\n{status}")
+        print(f"    backend-daemon.service journal (last 30 lines):\n{journal}")
+
+
 def check_dmesg_for_errors(child, results):
     # Non-fatal signal, not a hard pass/fail: surfaces things worth a human
     # look without failing the whole run on every benign firmware-missing
@@ -313,6 +327,7 @@ def main():
         check_failed_units(child, results)
         check_sshd(child, results)
         check_rust_hello(child, results)
+        check_backend_daemon(child, results)
         check_dmesg_for_errors(child, results)
         clean_shutdown = shutdown(child, args.shutdown_timeout)
         results.append(("Clean shutdown (poweroff -> QEMU exits)", clean_shutdown, ""))
