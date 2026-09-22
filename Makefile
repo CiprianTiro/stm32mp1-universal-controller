@@ -66,9 +66,9 @@ verify-qemu: build-qemu test-qemu
 # -----------------------------------------------------------------------------
 
 build-m4:
-	@echo "⚡ Compiling Cortex-M4 Embedded Firmware Stack..."
-	# Placeholder for your toolchain call (e.g., stm32cubeide or arm-none-eabi-gcc)
-	@cd firmware_m4 && echo "Triggering MCU toolchain compilation wrappers here..."
+	@echo "⚡ Compiling Cortex-M4 Zephyr Firmware..."
+	@. ~/zephyrproject/.venv/bin/activate && \
+		west build -p always -b stm32mp157c_dk2 firmware_m4 -d firmware_m4/build
 
 build-a7:
 	@echo "🦀 Compiling Cortex-A7 Application Daemons via Cargo Matrix..."
