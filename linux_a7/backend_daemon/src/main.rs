@@ -7,6 +7,7 @@ use tokio::time::interval;
  * the final binary at all. It does NOT run anything in them; nothing in
  * either file executes until something below explicitly spawns it. */
 mod mqtt;
+mod rpmsg;
 mod state;
 mod ws;
 
@@ -70,6 +71,12 @@ async fn main() {
      * GetAllDevices) and apply incoming commands (via UpdateDevice) --
      * talking to the exact same single actor as ws.rs, never a copy of it. */
     tokio::spawn(mqtt::run(state_tx));
+
+    /* rpmsg.rs doesn't touch state.rs yet -- it only proves the M4 link
+     * itself works (issue #12's DoD), no state_tx needed. Mapping M4-side
+     * data into actual device state is Sprint 3 work, once there's a real
+     * message protocol instead of this hello-world ping/ack. */
+    tokio::spawn(rpmsg::run());
 
     /* SIGTERM is what systemd sends on stop/restart; SIGINT covers Ctrl-C
      when running this interactively during development. */

@@ -36,6 +36,7 @@ SRC_URI = " \
     file://Cargo.lock \
     file://src/main.rs \
     file://src/mqtt.rs \
+    file://src/rpmsg.rs \
     file://src/state.rs \
     file://src/ws.rs \
 "
