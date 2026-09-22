@@ -6,6 +6,7 @@ use tokio::time::interval;
  * part of this crate" -- this is what actually makes their code exist in
  * the final binary at all. It does NOT run anything in them; nothing in
  * either file executes until something below explicitly spawns it. */
+mod mqtt;
 mod state;
 mod ws;
 
@@ -62,7 +63,13 @@ async fn main() {
      * Msg::GetAllDevices handling), sent back over that one request's own
      * oneshot reply channel. That's a deliberate, on-demand, per-question
      * copy -- not something that happens automatically on connect. */
-    tokio::spawn(ws::run(state_tx));
+    tokio::spawn(ws::run(state_tx.clone()));
+
+    /* Same pattern again: mqtt.rs gets its own clone of the same handle,
+     * so it can both publish periodic state snapshots (asking state.rs via
+     * GetAllDevices) and apply incoming commands (via UpdateDevice) --
+     * talking to the exact same single actor as ws.rs, never a copy of it. */
+    tokio::spawn(mqtt::run(state_tx));
 
     /* SIGTERM is what systemd sends on stop/restart; SIGINT covers Ctrl-C
      when running this interactively during development. */
