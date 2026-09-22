@@ -35,6 +35,7 @@ SRC_URI = " \
     file://Cargo.toml \
     file://Cargo.lock \
     file://src/main.rs \
+    file://src/mqtt.rs \
     file://src/state.rs \
     file://src/ws.rs \
 "
@@ -72,6 +73,7 @@ SRC_URI += " \
     crate://crates.io/data-encoding/2.11.1 \
     crate://crates.io/digest/0.10.7 \
     crate://crates.io/errno/0.3.14 \
+    crate://crates.io/flume/0.11.1 \
     crate://crates.io/form_urlencoded/1.2.2 \
     crate://crates.io/futures-channel/0.3.34 \
     crate://crates.io/futures-core/0.3.34 \
@@ -89,6 +91,7 @@ SRC_URI += " \
     crate://crates.io/hyper-util/0.1.20 \
     crate://crates.io/itoa/1.0.18 \
     crate://crates.io/libc/0.2.189 \
+    crate://crates.io/lock_api/0.4.14 \
     crate://crates.io/log/0.4.34 \
     crate://crates.io/matchit/0.7.3 \
     crate://crates.io/memchr/2.8.3 \
@@ -103,8 +106,10 @@ SRC_URI += " \
     crate://crates.io/rand/0.8.8 \
     crate://crates.io/rand_chacha/0.3.1 \
     crate://crates.io/rand_core/0.6.4 \
+    crate://crates.io/rumqttc/0.24.0 \
     crate://crates.io/rustversion/1.0.23 \
     crate://crates.io/ryu/1.0.23 \
+    crate://crates.io/scopeguard/1.2.0 \
     crate://crates.io/serde/1.0.229 \
     crate://crates.io/serde_core/1.0.229 \
     crate://crates.io/serde_derive/1.0.229 \
@@ -116,6 +121,7 @@ SRC_URI += " \
     crate://crates.io/slab/0.4.12 \
     crate://crates.io/smallvec/1.16.1 \
     crate://crates.io/socket2/0.6.5 \
+    crate://crates.io/spin/0.9.9 \
     crate://crates.io/syn/2.0.119 \
     crate://crates.io/syn/3.0.6 \
     crate://crates.io/sync_wrapper/1.0.2 \
@@ -224,6 +230,11 @@ SRC_URI[windows-sys-0.61.2.sha256sum] = "ae137229bcbd6cdf0f7b80a31df61766145077d
 SRC_URI[zerocopy-0.8.57.sha256sum] = "d35102a9f36d089ccae9e4c6802bc118be4487b80aaffc0ab4e0cf5ce92d2873"
 SRC_URI[zerocopy-derive-0.8.57.sha256sum] = "146c01f5ab44258da43cf276c74a2763db2ff3969c9c652c3f2de07041d0b2bc"
 SRC_URI[zmij-1.0.23.sha256sum] = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
+SRC_URI[flume-0.11.1.sha256sum] = "da0e4dd2a88388a1f4ccc7c9ce104604dab68d9f408dc34cd45823d5a9069095"
+SRC_URI[lock_api-0.4.14.sha256sum] = "224399e74b87b5f3557511d98dff8b14089b3dadafcab6bb93eab67d3aace965"
+SRC_URI[rumqttc-0.24.0.sha256sum] = "e1568e15fab2d546f940ed3a21f48bbbd1c494c90c99c4481339364a497f94a9"
+SRC_URI[scopeguard-1.2.0.sha256sum] = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
+SRC_URI[spin-0.9.9.sha256sum] = "3763264f6b73151db08c50ff20d7d8a0b8796e021cdea7ceedad07b80155fa0e"
 
 SRC_URI += "file://backend-daemon.service"
 
