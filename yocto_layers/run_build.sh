@@ -74,6 +74,25 @@ compile_inside_container() {
         # of the project assumes.
         echo "  -> Enabling systemd as init manager..."
         echo 'INIT_MANAGER = "systemd"' >> conf/local.conf
+
+        # meta-st-stm32mp builds the M4-enabled device tree
+        # (stm32mp157f-dk2-m4-examples.dtb, with the remoteproc/rpmsg
+        # reserved-memory nodes) but boots the plain stm32mp157f-dk2.dtb by
+        # default - the M4 variant is only reachable as a non-default
+        # u-boot extlinux menu entry otherwise. Since backend_daemon talks
+        # to the M4 over RPMsg (issue #11/#12), remoteproc needs to be
+        # present on every boot, not just when someone remembers to pick
+        # the right menu entry by hand.
+        #
+        # The override key here is the extlinux label's internal token
+        # ("rootfs", per meta-st-stm32mp's
+        # st-machine-extlinux-config-stm32mp.inc), not the "OpenSTLinux"
+        # text it displays in the boot menu - that's only a
+        # UBOOT_EXTLINUX_MENU_DESCRIPTION, matching nothing here.
+        if [ "${TARGET_MACHINE}" = "stm32mp1" ]; then
+            echo "  -> Defaulting boot to the M4-enabled (remoteproc) device tree..."
+            echo 'UBOOT_EXTLINUX_DEFAULT_LABEL:rootfs = "stm32mp157f-dk2-m4-examples"' >> conf/local.conf
+        fi
     fi
 
     # Verify/append layer dependencies to bblayers.conf. Read conf/bblayers.conf

@@ -63,17 +63,17 @@ linux_a7/ui_layer/target/
 # ==============================================================================
 # 4. EMBEDDED C/C++ FIRMWARE (firmware_m4/)
 # ==============================================================================
-# STM32CubeIDE / GNU ARM Toolchain build outputs
-firmware_m4/**/Debug/
-firmware_m4/**/Release/
-firmware_m4/**/*.o
-firmware_m4/**/*.su
-firmware_m4/**/*.d
-firmware_m4/**/*.elf
-firmware_m4/**/*.bin
-firmware_m4/**/*.hex
-firmware_m4/**/*.map
-firmware_m4/**/*.list
+# west build output
+firmware_m4/build/
+
+# `west init -l firmware_m4` fetches Zephyr + HAL modules as siblings of
+# firmware_m4/ at the repo root (T2 topology, see firmware_m4/README.md) -
+# multi-GB, never tracked here.
+/zephyr/
+/modules/
+/tools/
+/bootloader/
+/.west/
 
 # Toolchain / IDE project specific user configurations
 firmware_m4/**/*.launch
