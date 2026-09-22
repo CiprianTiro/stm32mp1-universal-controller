@@ -98,8 +98,10 @@ stream by construction, with no separate sync logic required.
 
 ## M4 firmware (`firmware_m4/`)
 
-Starts on FreeRTOS (Task 9), migrates to Zephyr later (Task 15). Talks to
-`backend_daemon` only via RPMsg (Task 10) — no other coupling.
+Built on Zephyr from the start (Task 9, decided 2026-09-22 — supersedes an
+earlier FreeRTOS-first/Zephyr-later staging plan, to avoid bringing up
+OpenAMP/RPMsg twice). Talks to `backend_daemon` only via RPMsg (Task 10) —
+no other coupling.
 
 This side uses a genuinely different concurrency model than the A7, on
 purpose:
