@@ -23,6 +23,10 @@ mod ws_client;
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
 use std::time::Duration;
 
+/// One display frame at 60 fps -- the longest the main loop ever sleeps,
+/// and also how long it sleeps between animation frames.
+const FRAME: Duration = Duration::from_millis(16);
+
 // This macro reads the compiled output of build.rs (which itself compiled
 // ui/app.slint) and makes its `AppWindow` type -- along with the
 // `set_led_on`/`get_led_on`/`set_connected`/`on_toggle_led` methods
@@ -148,16 +152,24 @@ fn main() {
         renderer.draw_if_needed();
 
         // Don't spin the CPU checking all of the above hundreds of times a
-        // second when nothing is happening -- if Slint has no pending
-        // timer/animation that needs a specific wakeup time, fall back to a
-        // fixed ~60fps poll interval, matching typical display refresh
-        // rates without wasting cycles far beyond what a human could
-        // perceive anyway.
-        if !window.has_active_animations() {
-            std::thread::sleep(
-                slint::platform::duration_until_next_timer_update()
-                    .unwrap_or(Duration::from_millis(16)),
-            );
-        }
+        // second -- ALWAYS sleep before the next iteration:
+        //   - while an animation runs (e.g. Button's press effect): one
+        //     frame, ~16 ms = 60 fps, which is all the display can show;
+        //   - otherwise: until Slint's next timer is due, but at most one
+        //     frame, so touch input is still picked up within ~16 ms.
+        //
+        // Before issue #31's measurement this loop didn't sleep at all
+        // during animations -- it redrew as fast as the CPU allowed. Tapping
+        // the button quickly keeps a press animation running almost
+        // constantly, so the UI used a whole A7 core (~50% of the board,
+        // measured) for an effect nobody can see above 60 fps. With the
+        // frame cap, the same tapping costs a few percent.
+        let wait = if window.has_active_animations() {
+            FRAME
+        } else {
+            slint::platform::duration_until_next_timer_update()
+                .map_or(FRAME, |until_timer| until_timer.min(FRAME))
+        };
+        std::thread::sleep(wait);
     }
 }
