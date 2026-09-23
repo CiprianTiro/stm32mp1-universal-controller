@@ -10,7 +10,7 @@
  *   is the "return envelope" -- used only for sending a single reply back
  *   to whoever asked a question. */
 use std::collections::HashMap;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 
 /* `type X = Y;` just gives an existing type a new, more meaningful name --
  * it does NOT create a new type. DeviceId is really just a String
@@ -81,8 +81,16 @@ pub enum Msg {
  * RECEIVING half of a mailbox (created elsewhere, handed in as a
  * parameter). `mut` because pulling messages out of it below changes its
  * internal read position each time.
+ *
+ * `changed_tx` (issue #29): the sending half of a `watch` channel that
+ * carries no data at all -- `()` -- only the fact that something changed.
+ * Every UpdateDevice/RemoveDevice "rings the bell", and mqtt.rs, which
+ * holds the receiving half, wakes up and reports the new state to the cloud
+ * right away instead of at its next periodic tick. (Same idea as rpmsg.rs's
+ * LED watch channel, just without a value, because mqtt.rs asks for the
+ * full device list anyway.)
  */
-pub async fn run(mut rx: mpsc::Receiver<Msg>) {
+pub async fn run(mut rx: mpsc::Receiver<Msg>, changed_tx: watch::Sender<()>) {
     /* THE FILING CABINET. This is the one and only copy of hub state that
      * exists anywhere -- a local variable, private to this function. No
      * other task can ever reach in and touch this directly; the only way
@@ -116,6 +124,10 @@ pub async fn run(mut rx: mpsc::Receiver<Msg>) {
                  * added, existing keys get overwritten with the new value,
                  * anything not mentioned is left alone. */
                 devices.entry(id).or_default().extend(properties);
+                /* send_replace, not send: send fails when nobody is
+                 * listening (e.g. cloud sync disabled), send_replace just
+                 * stores the value regardless -- nothing to handle. */
+                changed_tx.send_replace(());
             }
             Msg::GetDevice { id, reply } => {
                 /* devices.get(&id) looks the device up and returns an
@@ -144,7 +156,9 @@ pub async fn run(mut rx: mpsc::Receiver<Msg>) {
             Msg::RemoveDevice { id } => {
                 /* Deletes this device's entry from the filing cabinet
                  * entirely, if it exists (does nothing if it didn't). */
-                devices.remove(&id);
+                if devices.remove(&id).is_some() {
+                    changed_tx.send_replace(());
+                }
             }
         }
     }
@@ -172,7 +186,10 @@ mod tests {
      * the sending half so each test can send it messages. */
     fn spawn_actor() -> mpsc::Sender<Msg> {
         let (tx, rx) = mpsc::channel(8);
-        tokio::spawn(run(rx));
+        /* The tests don't care about change notifications; the receiving
+         * half is simply dropped. */
+        let (changed_tx, _) = watch::channel(());
+        tokio::spawn(run(rx, changed_tx));
         tx
     }
 

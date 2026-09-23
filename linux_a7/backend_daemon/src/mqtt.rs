@@ -22,6 +22,10 @@
  *   after carrying out a delta, the report also clears the command:
  *              {"state":{"reported":{...},"desired":{"devices":{"lamp-1":null}}}}
  *
+ * Every report also carries a "system" section with the hub's own health
+ * (CPU, memory, temperature, ...; see health.rs, issue #29), and a report
+ * goes out immediately whenever any device changes, not only on the tick.
+ *
  * One device is special: "ld7", the board's real LED (driven by the M4).
  * It doesn't live in state.rs -- its truth is whatever the M4 says -- so
  * it's added to every report from rpmsg.rs's latest known state, and a
@@ -32,11 +36,12 @@
 
 use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS, TlsConfiguration, Transport};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, oneshot, watch};
 
+use crate::health;
 use crate::rpmsg;
 use crate::state::{DeviceId, DeviceState, Msg};
 
@@ -57,8 +62,11 @@ const DEFAULT_PORT: u16 = 8883;
  * certificates are per device, so they must NOT be baked into the image. */
 const DEFAULT_CERT_DIR: &str = "/usr/local/etc/universal-controller/mqtt";
 
-/* How often the full state is published even if nothing asked for it. */
-const REPORT_INTERVAL: Duration = Duration::from_secs(10);
+/* How often the full state (incl. health numbers) is published even if
+ * nothing changed. Overridable with MQTT_REPORT_INTERVAL (seconds) in the
+ * on-device env file: 10 s is ~260k messages/month per board -- fine for
+ * one, but a fleet would rather use 60. */
+const DEFAULT_REPORT_INTERVAL: Duration = Duration::from_secs(10);
 
 /* Reconnect delays: start fast, double on every failure, cap at a minute.
  * A broker that's down for hours then costs one attempt per minute
@@ -81,6 +89,7 @@ struct Config {
     ca_file: String,
     cert_file: String,
     key_file: String,
+    report_interval: Duration,
 }
 
 impl Config {
@@ -96,6 +105,13 @@ impl Config {
         };
         let thing = std::env::var("MQTT_THING_NAME")
             .map_err(|_| "MQTT_BROKER_HOST is set but MQTT_THING_NAME is not".to_string())?;
+        let report_interval = match std::env::var("MQTT_REPORT_INTERVAL") {
+            Ok(v) => match v.parse::<u64>() {
+                Ok(secs) if secs >= 1 => Duration::from_secs(secs),
+                _ => return Err(format!("MQTT_REPORT_INTERVAL must be whole seconds >= 1, got {v}")),
+            },
+            Err(_) => DEFAULT_REPORT_INTERVAL,
+        };
         let file = |var: &str, default: &str| {
             std::env::var(var).unwrap_or_else(|_| format!("{DEFAULT_CERT_DIR}/{default}"))
         };
@@ -106,6 +122,7 @@ impl Config {
             cert_file: file("MQTT_CERT_FILE", "device.crt"),
             key_file: file("MQTT_KEY_FILE", "device.key"),
             thing,
+            report_interval,
         }))
     }
 
@@ -177,11 +194,15 @@ struct GetAcceptedState {
 }
 
 /* `rpmsg_tx` sends LED commands to the M4 actor; `led_rx` reads the LED's
- * latest known state (see rpmsg::run for the watch channel). */
+ * latest known state (see rpmsg::run for the watch channel);
+ * `state_changed_rx` wakes us when any device in state.rs changes;
+ * `local_clients` is ws.rs's count of connected clients (for health.rs). */
 pub async fn run(
     state_tx: mpsc::Sender<Msg>,
     rpmsg_tx: mpsc::Sender<rpmsg::Cmd>,
     led_rx: watch::Receiver<Option<bool>>,
+    state_changed_rx: watch::Receiver<()>,
+    local_clients: Arc<AtomicUsize>,
 ) {
     let config = match Config::from_env() {
         Ok(Some(config)) => config,
@@ -217,14 +238,21 @@ pub async fn run(
      * AtomicBool = a bool both can read/write safely without a lock. */
     let connected = Arc::new(AtomicBool::new(false));
 
+    let reporter = Reporter {
+        state_tx: state_tx.clone(),
+        led_rx: led_rx.clone(),
+        health: Arc::new(Mutex::new(health::Sampler::new(local_clients))),
+    };
+
     let topics = Topics::new(&config.thing);
     tokio::spawn(report_periodically(
         client.clone(),
-        state_tx.clone(),
+        reporter.clone(),
         rpmsg_tx.clone(),
-        led_rx.clone(),
+        state_changed_rx,
         topics.update.clone(),
         connected.clone(),
+        config.report_interval,
     ));
 
     let broker = format!("{}:{}", config.host, config.port);
@@ -273,9 +301,8 @@ pub async fn run(
                     }
                 }
                 /* And tell the cloud our current state straight away,
-                 * instead of up to REPORT_INTERVAL later. */
-                let led = *led_rx.borrow();
-                if let Some(payload) = reported_payload(&state_tx, led, &[]).await {
+                 * instead of up to a whole report interval later. */
+                if let Some(payload) = reporter.payload(&[]).await {
                     let _ = client.try_publish(topics.update.as_str(), QoS::AtLeastOnce, false, payload);
                 }
             }
@@ -301,13 +328,8 @@ pub async fn run(
                          * the cloud keeps showing a delta until the device
                          * reports that it has caught up. The same message
                          * also clears the command from "desired" -- see
-                         * reported_payload() for why that matters.
-                         *
-                         * Copy the LED value out first: borrow() holds a
-                         * read lock on the watch channel, which must not be
-                         * held across the .await below. */
-                        let led = *led_rx.borrow();
-                        let snapshot = reported_payload(&state_tx, led, &commanded).await;
+                         * Reporter::payload() for why that matters. */
+                        let snapshot = reporter.payload(&commanded).await;
                         if let Some(payload) = snapshot {
                             let _ = client.try_publish(
                                 topics.update.as_str(),
@@ -379,9 +401,24 @@ async fn set_led(properties: &DeviceState, rpmsg_tx: &mpsc::Sender<rpmsg::Cmd>) 
     }
 }
 
-/* Builds the shadow "reported" document from state.rs's current snapshot,
- * plus the real LED if we know its state (`led` = None: the M4 hasn't
- * answered yet, so we say nothing rather than guess).
+/* Everything needed to build a shadow report. Cloned into both places that
+ * send reports (the run() loop and report_periodically), so both always
+ * send the same complete picture. Cloning is cheap: a channel handle, a
+ * watch receiver, and an Arc (a shared pointer, not a copy of the Sampler).
+ *
+ * `health` sits behind a Mutex because both tasks use the same Sampler
+ * (it remembers the previous CPU reading). The lock is only held for the
+ * few microseconds of Sampler::sample(), never across an .await. */
+#[derive(Clone)]
+struct Reporter {
+    state_tx: mpsc::Sender<Msg>,
+    led_rx: watch::Receiver<Option<bool>>,
+    health: Arc<Mutex<health::Sampler>>,
+}
+
+/* Builds the shadow "reported" document: state.rs's current devices, plus
+ * the real LED if we know its state (None: the M4 hasn't answered yet, so
+ * we say nothing rather than guess), plus the "system" health section.
  *
  * `clear_desired`: devices whose cloud command has just been carried out.
  * For those, the same message also sets `"desired": {"devices": {id: null}}`
@@ -396,34 +433,50 @@ async fn set_led(properties: &DeviceState, rpmsg_tx: &mpsc::Sender<rpmsg::Cmd>) 
  * locally. (The dev broker just relays this; harmless.)
  *
  * `None` only if state.rs has stopped (the daemon is shutting down). */
-async fn reported_payload(
-    state_tx: &mpsc::Sender<Msg>,
-    led: Option<bool>,
-    clear_desired: &[DeviceId],
-) -> Option<Vec<u8>> {
-    let (reply_tx, reply_rx) = oneshot::channel();
-    state_tx.send(Msg::GetAllDevices { reply: reply_tx }).await.ok()?;
-    let mut devices = reply_rx.await.unwrap_or_default();
-    if let Some(on) = led {
-        devices.insert(
-            LED_DEVICE_ID.to_string(),
-            HashMap::from([("on".to_string(), serde_json::json!(on))]),
-        );
+impl Reporter {
+    async fn payload(&self, clear_desired: &[DeviceId]) -> Option<Vec<u8>> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.state_tx.send(Msg::GetAllDevices { reply: reply_tx }).await.ok()?;
+        let mut devices = reply_rx.await.unwrap_or_default();
+        /* Copy the LED value out in one statement: borrow() holds a read
+         * lock on the watch channel, which must not be kept any longer. */
+        let led = *self.led_rx.borrow();
+        if let Some(on) = led {
+            devices.insert(
+                LED_DEVICE_ID.to_string(),
+                HashMap::from([("on".to_string(), serde_json::json!(on))]),
+            );
+        }
+        /* A poisoned Mutex (another thread panicked while holding it) can't
+         * happen here, but if it did, the Sampler inside is still usable --
+         * into_inner() takes it anyway instead of crashing the report. */
+        let system = self
+            .health
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .sample(devices.len());
+        let mut doc = serde_json::json!({
+            "state": { "reported": { "devices": devices, "system": system } }
+        });
+        if !clear_desired.is_empty() {
+            let cleared: serde_json::Map<String, serde_json::Value> = clear_desired
+                .iter()
+                .map(|id| (id.clone(), serde_json::Value::Null))
+                .collect();
+            doc["state"]["desired"] = serde_json::json!({ "devices": cleared });
+        }
+        serde_json::to_vec(&doc).ok()
     }
-    let mut doc = serde_json::json!({ "state": { "reported": { "devices": devices } } });
-    if !clear_desired.is_empty() {
-        let cleared: serde_json::Map<String, serde_json::Value> = clear_desired
-            .iter()
-            .map(|id| (id.clone(), serde_json::Value::Null))
-            .collect();
-        doc["state"]["desired"] = serde_json::json!({ "devices": cleared });
-    }
-    serde_json::to_vec(&doc).ok()
 }
 
-/* Publishes the reported state every REPORT_INTERVAL, and also right away
- * whenever the LED changes (e.g. someone tapped the touchscreen), so the
- * cloud sees it within a moment instead of up to 10 s later.
+/* Publishes the reported state every `interval`, and also right away
+ * whenever the LED or any state.rs device changes (e.g. someone tapped the
+ * touchscreen, or a phone changed a device over the LAN), so the cloud sees
+ * it within a moment instead of up to a whole interval later.
+ *
+ * A change made BY the cloud gets reported twice (once by the run() loop,
+ * with the "desired" clean-up, and once here because the device changed).
+ * Harmless -- same content -- and simpler than coordinating the two.
  *
  * Only while connected: rumqttc's request queue holds just 10 requests and
  * is only emptied once the connection is back. Reports queued during an
@@ -434,16 +487,21 @@ async fn reported_payload(
  * a fresh report as soon as it reconnects. */
 async fn report_periodically(
     client: AsyncClient,
-    state_tx: mpsc::Sender<Msg>,
+    reporter: Reporter,
     rpmsg_tx: mpsc::Sender<rpmsg::Cmd>,
-    mut led_rx: watch::Receiver<Option<bool>>,
+    mut state_changed_rx: watch::Receiver<()>,
     topic: String,
     connected: Arc<AtomicBool>,
+    interval: Duration,
 ) {
-    let mut tick = tokio::time::interval(REPORT_INTERVAL);
+    /* Our own receiver for the LED, only to be woken by its changes (the
+     * Reporter's copy is for reading the value). */
+    let mut led_rx = reporter.led_rx.clone();
+    let mut tick = tokio::time::interval(interval);
     loop {
         /* select! waits for whichever happens first. `changed()` returns
-         * Err only if rpmsg.rs's actor is gone; then just keep ticking. */
+         * Err only if the sending actor is gone; then that branch is
+         * skipped and we just keep ticking. */
         tokio::select! {
             _ = tick.tick() => {
                 /* Nobody has asked the M4 about the LED yet (e.g. the
@@ -458,14 +516,16 @@ async fn report_periodically(
                 }
             }
             Ok(()) = led_rx.changed() => {}
+            Ok(()) = state_changed_rx.changed() => {}
         }
-        /* borrow_and_update marks the current value as seen, so changed()
+        /* mark_unchanged marks the current value as seen, so changed()
          * above only fires again for a NEW change. */
-        let led = *led_rx.borrow_and_update();
+        led_rx.mark_unchanged();
+        state_changed_rx.mark_unchanged();
         if !connected.load(Ordering::Relaxed) {
             continue;
         }
-        let Some(payload) = reported_payload(&state_tx, led, &[]).await else {
+        let Some(payload) = reporter.payload(&[]).await else {
             break;
         };
         let _ = client.try_publish(topic.as_str(), QoS::AtLeastOnce, false, payload);

@@ -6,6 +6,7 @@ use tokio::time::interval;
  * part of this crate" -- this is what actually makes their code exist in
  * the final binary at all. It does NOT run anything in them; nothing in
  * either file executes until something below explicitly spawns it. */
+mod health;
 mod mqtt;
 mod rpmsg;
 mod state;
@@ -40,13 +41,16 @@ async fn main() {
      *     mailbox except that one task.
      */
     let (state_tx, state_rx) = tokio::sync::mpsc::channel(32);
+    /* state.rs rings this whenever a device changes, so mqtt.rs can report
+     * straight away (see state::run's comment). */
+    let (state_changed_tx, state_changed_rx) = tokio::sync::watch::channel(());
 
     /* This is the ONLY place state::run (the actor from state.rs) is ever
      * spawned in the real, running daemon -- tokio::spawn hands state_rx
      * over, and from this point on, the HashMap of device data inside
      * state::run's function body is the one and only copy of it that
      * exists anywhere in the process. */
-    tokio::spawn(state::run(state_rx));
+    tokio::spawn(state::run(state_rx, state_changed_tx));
 
     /* A second, completely separate mailbox for rpmsg.rs's actor -- this is
      * NOT state_tx again. rpmsg.rs doesn't manage the generic "device
@@ -67,8 +71,19 @@ async fn main() {
      * GetAllDevices) and apply incoming commands (via UpdateDevice) --
      * talking to the exact same single actor as everyone else here, never a
      * copy of it. It also gets the LED's channels, so the real LED shows up
-     * in the cloud as device "ld7" and can be switched from there. */
-    tokio::spawn(mqtt::run(state_tx.clone(), rpmsg_tx.clone(), led_rx));
+     * in the cloud as device "ld7" and can be switched from there.
+     *
+     * local_clients: how many WebSocket clients are connected right now.
+     * ws.rs counts, health.rs (inside mqtt.rs) reports it -- one shared
+     * number, hence Arc (shared ownership) + AtomicUsize (lock-free). */
+    let local_clients = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    tokio::spawn(mqtt::run(
+        state_tx.clone(),
+        rpmsg_tx.clone(),
+        led_rx,
+        state_changed_rx,
+        local_clients.clone(),
+    ));
 
     /* ws.rs is the last user of state_tx, so it gets the original handle
      * moved in (no .clone() needed) -- same reasoning as before, ws.rs's
@@ -76,7 +91,7 @@ async fn main() {
      * client (see ws.rs's ws_handler/handle_socket), and it now also gets
      * rpmsg_tx to forward LED commands from those same clients on to the
      * M4. */
-    tokio::spawn(ws::run(state_tx, rpmsg_tx));
+    tokio::spawn(ws::run(state_tx, rpmsg_tx, local_clients));
 
     /* SIGTERM is what systemd sends on stop/restart; SIGINT covers Ctrl-C
      when running this interactively during development. */
