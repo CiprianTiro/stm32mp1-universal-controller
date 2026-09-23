@@ -1,0 +1,21 @@
+[Unit]
+Description=Universal Controller touchscreen UI
+# Not a hard dependency (ws_client.rs retries its own connection every 2s
+# regardless of start order -- see that file's doc comment), but starting
+# after backend-daemon means the UI is more likely to show real state on
+# its very first frame instead of briefly showing "Not connected".
+After=backend-daemon.service
+
+[Service]
+ExecStart=/usr/bin/ui-layer
+# A couple of seconds' backoff, not systemd's default (near-instant) restart
+# -- this process depends on /dev/fb0 and the touch panel's evdev device
+# both existing already, which come from kernel/DRM driver + udev
+# probing that can still be settling very early in boot; retrying
+# instantly into the same "not ready yet" failure just burns CPU without
+# giving the device nodes those extra couple of seconds to actually appear.
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

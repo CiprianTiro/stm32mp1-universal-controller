@@ -6,29 +6,24 @@ FreeRTOS-first staging plan). Loaded and controlled from the A7 side via
 Linux's `remoteproc` framework; talks to `linux_a7/backend_daemon` over
 RPMsg (issue #12).
 
-Three things run on the M4 concurrently: a heartbeat thread (LED toggle +
-`printk` counter, issue #11 — proof `west`/the SDK/`remoteproc` load-start-
-stop all work before any IPC is layered on top), and two threads handling
-the RPMsg link (issue #12) — see "RPMsg protocol" below.
+The firmware is purely reactive (issue #14): no heartbeat or other
+automatic activity. It waits for LED commands from the A7 over RPMsg and
+drives LD7 accordingly -- see "RPMsg protocol" below.
 
 ## One-time workspace setup
 
-This directory is a [T2-topology](https://docs.zephyrproject.org/latest/develop/west/workspaces.html)
-Zephyr application: it has its own `west.yml` pinning the Zephyr version,
-rather than vendoring Zephyr itself into this repo (it's a multi-GB
-checkout — same reasoning as keeping Yocto's `poky` etc. out of
-hand-written directories, just via a west workspace instead of a
-submodule). `west init` fetches Zephyr and its HAL modules as siblings of
-`firmware_m4/` — run it from the repo root, not from inside this directory:
+The firmware builds against a separate, ordinary Zephyr workspace -- by
+default `~/zephyrproject` -- rather than vendoring Zephyr into this repo
+(it's a multi-GB checkout). `west.yml` in this directory pins the Zephyr
+version this firmware is written against (**v4.4.2**); the workspace must be
+at that same version.
 
 ```bash
-# From the repo root:
-python3.12+ -m venv ~/zephyrproject/.venv   # west needs Python >= 3.12
+python3.12 -m venv ~/zephyrproject/.venv      # west needs Python >= 3.12
 source ~/zephyrproject/.venv/bin/activate
 pip install west
-
-west init -l firmware_m4
-west update                                  # pulls zephyr/ + modules/, ~3-4 GB
+west init -m https://github.com/zephyrproject-rtos/zephyr --mr v4.4.2 ~/zephyrproject
+cd ~/zephyrproject && west update             # ~3-4 GB
 pip install -r zephyr/scripts/requirements.txt
 west sdk install --toolchains arm-zephyr-eabi
 ```
@@ -36,48 +31,52 @@ west sdk install --toolchains arm-zephyr-eabi
 System packages needed first (Ubuntu/Debian): `git cmake ninja-build gperf
 ccache dfu-util device-tree-compiler python3-venv`.
 
-`zephyr/`, `modules/`, `tools/`, `bootloader/`, and `.west/` land at the
-repo root as a side effect of `west init -l` — they're git-ignored, not
-part of this repo.
+A workspace somewhere else works too: pass
+`ZEPHYR_WORKSPACE=/path/to/it` to the make commands below.
 
-## Build
+Don't run `west init -l firmware_m4` inside this repo (an older version of
+this README said to): it turns the repo root into a second west workspace,
+which then shadows `~/zephyrproject` and breaks `make build-m4` with
+`unknown command "build"` until its `zephyr/`/`modules/` are also
+downloaded.
 
-```bash
-source ~/zephyrproject/.venv/bin/activate
-west build -p always -b stm32mp157c_dk2 firmware_m4 -d firmware_m4/build
-```
+## Build and deploy
 
-(`stm32mp157c_dk2` is Zephyr's upstream board target — it matches our
+All from the repo root:
+
+| Command | What it does |
+|---|---|
+| `make build-m4` | Builds only this firmware -> `firmware_m4/build/zephyr/zephyr.elf` |
+| `make build-hw` | Builds **everything**: runs `build-m4` first, then the Yocto image, which packages that ELF (recipe `m4-firmware`) alongside the kernel and A7 apps |
+| `make flash-hw` | Flashes the full image over USB (board in recovery boot mode) |
+| `make flash-m4` | M4-only update on a running board: builds, copies the ELF over SSH, restarts the M4. No reflash, no reboot |
+
+`make flash-m4` targets `stm32mp1.local`; if that name doesn't resolve on
+your network use `make flash-m4 BOARD_HOST=<board IP>`. The copied firmware
+survives reboots; the next `make flash-hw` replaces it with whatever that
+image contains.
+
+(`stm32mp157c_dk2` is Zephyr's upstream board target -- it matches our
 DK2's M4 core, RAM/flash carveouts, and 4" MIPI-DSI touch panel exactly;
 the A7-side security differences between the C/F SoC variants don't affect
 the M4.)
 
-Output: `firmware_m4/build/zephyr/zephyr.elf`.
+### How it's started on the board
 
-## Deploy (on the DK2 target, as root)
-
-```bash
-cp zephyr.elf /lib/firmware/rproc-m4-fw   # matches the board DT's default firmware name
-echo start > /sys/class/remoteproc/remoteproc0/state
-```
-
-Heartbeat output (RAM console, not a wired UART by default — see
-`stm32mp157c_dk2_defconfig`) shows up at:
+The image's `m4-firmware.service` (yocto_layers/meta-universal-controller/
+recipes-core/m4-firmware/) runs at boot, before `backend-daemon`: it
+loads `/lib/firmware/rproc-m4-fw` into the M4 and starts it via remoteproc.
+By hand, as root on the board:
 
 ```bash
-cat /sys/kernel/debug/remoteproc/remoteproc0/trace0
-```
-
-Stop/restart without rebooting the A7:
-
-```bash
-echo stop > /sys/class/remoteproc/remoteproc0/state
-echo start > /sys/class/remoteproc/remoteproc0/state
+systemctl restart m4-firmware    # stop + start (e.g. after copying a new ELF)
+cat /sys/class/remoteproc/remoteproc0/state          # "running" / "offline"
+cat /sys/kernel/debug/remoteproc/remoteproc0/trace0  # M4 printk output (RAM console)
 ```
 
 `stop` can take up to ~15s: the firmware doesn't ack the shutdown request
 (no code here handles it), so remoteproc falls back to force-stopping via
-the RCC reset line after a timeout — `state` stays `running` until then,
+the RCC reset line after a timeout -- `state` stays `running` until then,
 that's expected, not stuck.
 
 ## RPMsg protocol (v0)
@@ -88,18 +87,22 @@ Endpoint channel name: `rpmsg-raw` — the specific name Linux's in-tree
 to open directly once the M4 announces it — no custom kernel module
 needed, unlike ST's own `rpmsg-client-sample`/`rpmsg-tty` samples.
 
-Deliberately minimal, not meant to survive Sprint 3 - just proves the link
-works end to end before any real framing exists:
+One text request per message, one text reply per request (RPMsg frames
+each write as one message, so no delimiters are needed):
 
-- **Request** (A7 → M4): arbitrary text bytes.
-- **Response** (M4 → A7): `ACK <n>: <the request bytes>`, where `<n>` is a
-  message counter kept on the M4 side (state, not just an echo — proof this
-  is a genuine two-way round trip).
+| Request (A7 -> M4) | Reply (M4 -> A7) |
+|---|---|
+| `LED ON` | `LED ON` |
+| `LED OFF` | `LED OFF` |
+| `LED STATUS` | `LED ON` or `LED OFF` (current state, unchanged) |
+| anything else | `ERR: unknown command` |
+
+The reply always states the LED's resulting state.
 
 `linux_a7/backend_daemon/src/rpmsg.rs` is the A7-side counterpart:
 discovers the device dynamically via `/sys/class/rpmsg/rpmsg*/name` (the
-number isn't fixed - depends on boot order), then sends a ping every 10s
-and logs the reply.
+number isn't fixed - depends on boot order), opens it on the first command,
+and reopens it (with one retry) if the M4 was restarted in between.
 
 Manual test from the target shell, without `backend_daemon` running (needs
 a single read-write file descriptor - `cat`+`echo >` as two separate opens
@@ -108,8 +111,8 @@ opens):
 
 ```bash
 exec 3<>/dev/rpmsg0
-echo -n 'hello from A7' >&3
-timeout 3 dd bs=256 count=1 <&3 2>/dev/null   # -> "ACK 1: hello from A7"
+echo -n 'LED ON' >&3
+timeout 3 dd bs=256 count=1 <&3 2>/dev/null   # -> "LED ON"
 exec 3<&-
 ```
 

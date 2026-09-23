@@ -1,0 +1,81 @@
+// app.slint -- the actual UI layout and behavior, in Slint's own markup
+// language (a declarative, CSS/QML-ish syntax -- not Rust). This file gets
+// compiled into generated Rust code by build.rs; nothing in here runs
+// directly, it just describes *what the UI looks like and does*, while
+// main.rs decides *when* things like button clicks actually get acted on.
+
+// Slint's own built-in widget library -- "Button" below is a component
+// defined there, not a language keyword, and has to be imported like any
+// other component this project might have written itself. ("VerticalLayout"
+// further down doesn't need an import -- unlike Button, it's a core layout
+// primitive built into the language itself.)
+import { Button } from "std-widgets.slint";
+
+// Embeds this specific font file into the compiled binary (combined with
+// build.rs's `EmbedForSoftwareRenderer` config) rather than relying on
+// system font discovery -- required, not just a preference: this app runs
+// under Slint's software renderer with no compositor/desktop environment
+// around it, and this board's minimal rootfs has no fontconfig
+// configuration or font cache for system discovery to find anything with
+// anyway. See fonts/DejaVuSans-LICENSE for its (permissive) license.
+import "../fonts/DejaVuSans.ttf";
+
+// "component" is Slint's word for a reusable UI definition, similar to a
+// React/Flutter/etc. "widget". `AppWindow` is the name main.rs's generated
+// code (via `slint::include_modules!()`) will know this as.
+export component AppWindow inherits Window {
+    // "in-out property" means both Rust and this UI file can read AND write
+    // this value -- Rust sets it (via the generated `set_led_on()` method)
+    // whenever the M4 reports a state change; the UI file reads it below to
+    // decide what to display. This is deliberately the *only* piece of
+    // state this whole UI has, matching ui_layer's "dumb, holds no state of
+    // its own" design (see ARCHITECTURE.md) -- it's always just showing
+    // whatever backend_daemon last told it, never guessing.
+    in-out property <bool> led-on: false;
+
+    // Same idea, but for whether we're even connected to backend_daemon at
+    // all right now -- lets the UI honestly say "not connected" instead of
+    // silently showing a stale LED state as if it were current.
+    in-out property <bool> connected: false;
+
+    // "callback" declares an event this component can fire that Rust code
+    // outside this file can react to -- see main.rs's
+    // `ui.on_toggle_led(...)` for where this actually gets handled. This
+    // file only ever *fires* the callback (in the Button's `clicked =>`
+    // below); it never decides what toggling the LED actually does, since
+    // that requires talking to backend_daemon over the network, which is
+    // Rust's job, not this markup's.
+    callback toggle-led();
+
+    // A simple vertical stack, centered on screen -- more than enough for
+    // "one status line, one button" (issue #14's DoD only asks for at least
+    // one interactive element, not a polished dashboard).
+    VerticalLayout {
+        alignment: center;
+        spacing: 24px;
+
+        Text {
+            // Slint string concatenation with `+`, and the ternary-like
+            // `condition ? a : b` operator -- both work directly inside a
+            // property binding like this, recomputed automatically any
+            // time `connected`/`led-on` changes (Slint's properties are
+            // "reactive": nothing here is ever manually told to redraw).
+            text: connected ? ("LED is " + (led-on ? "ON" : "OFF")) : "Not connected to backend_daemon";
+            font-size: 32px;
+            horizontal-alignment: center;
+        }
+
+        Button {
+            text: led-on ? "Turn OFF" : "Turn ON";
+            enabled: connected;
+            // Fires the `toggle-led` callback declared above -- see
+            // main.rs's `ui.on_toggle_led(...)` for what actually happens
+            // next. Note this does NOT set `led-on` itself: the displayed
+            // state only ever changes once backend_daemon (and, behind it,
+            // the M4) actually confirms it, not optimistically on tap.
+            clicked => {
+                toggle-led();
+            }
+        }
+    }
+}

@@ -18,18 +18,30 @@ struct Command {
 }
 
 /* Broker address is configurable via environment variables rather than
- * hardcoded, per the DoD -- defaults match a plain local test broker. */
-fn broker_address() -> (String, u16) {
-    let host = std::env::var("MQTT_BROKER_HOST").unwrap_or_else(|_| "localhost".into());
+ * hardcoded, per the DoD. MQTT_BROKER_HOST is required: returns `None` when
+ * it's unset, meaning "no broker configured". There used to be a
+ * `localhost` fallback, but no broker runs on the board, so that just
+ * failed and retried every second forever (~86k log lines a day). The port
+ * still defaults to MQTT's standard 1883. Production setup (cloud broker,
+ * TLS, per-device identity) is issue #26. */
+fn broker_address() -> Option<(String, u16)> {
+    let host = std::env::var("MQTT_BROKER_HOST").ok()?;
     let port = std::env::var("MQTT_BROKER_PORT")
         .ok()
         .and_then(|p| p.parse().ok())
         .unwrap_or(1883);
-    (host, port)
+    Some((host, port))
 }
 
 pub async fn run(state_tx: mpsc::Sender<Msg>) {
-    let (host, port) = broker_address();
+    let Some((host, port)) = broker_address() else {
+        /* Cloud sync is optional: everything local (touchscreen, LAN
+         * WebSocket, M4) works without it, so just say so once and let
+         * this task end -- the rest of the daemon keeps running. */
+        println!("mqtt: MQTT_BROKER_HOST not set, cloud sync disabled");
+        return;
+    };
+    println!("mqtt: using broker {host}:{port}");
     let mut mqttoptions = MqttOptions::new("backend-daemon", host, port);
     mqttoptions.set_keep_alive(Duration::from_secs(5));
 

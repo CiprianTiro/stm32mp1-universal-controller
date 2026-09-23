@@ -48,35 +48,30 @@ async fn main() {
      * exists anywhere in the process. */
     tokio::spawn(state::run(state_rx));
 
-    /* state_tx (the sender handle, NOT the data) gets moved into ws::run
-     * here. ws.rs's server will go on to clone THIS handle again, once per
-     * connected client (see ws.rs's ws_handler/handle_socket) -- so when a
-     * new WebSocket connection opens, what gets copied is one more small
-     * Sender handle, giving that specific connection's task its own
-     * permission slip to talk to the SAME single actor. The device data
-     * itself never moves, never duplicates, and no per-connection copy of
-     * it is made just because a socket opened.
-     *
-     * The only time an actual copy of real device data gets made at all is
-     * when a client explicitly sends a GetDevice/GetAllDevices request --
-     * and even then, it's state.rs's own actor doing a narrow .clone() of
-     * just what was asked for (see state.rs's Msg::GetDevice /
-     * Msg::GetAllDevices handling), sent back over that one request's own
-     * oneshot reply channel. That's a deliberate, on-demand, per-question
-     * copy -- not something that happens automatically on connect. */
-    tokio::spawn(ws::run(state_tx.clone()));
-
-    /* Same pattern again: mqtt.rs gets its own clone of the same handle,
-     * so it can both publish periodic state snapshots (asking state.rs via
+    /* Same pattern again: mqtt.rs gets its own clone of state_tx, so it can
+     * both publish periodic state snapshots (asking state.rs via
      * GetAllDevices) and apply incoming commands (via UpdateDevice) --
-     * talking to the exact same single actor as ws.rs, never a copy of it. */
-    tokio::spawn(mqtt::run(state_tx));
+     * talking to the exact same single actor as everyone else here, never a
+     * copy of it. */
+    tokio::spawn(mqtt::run(state_tx.clone()));
 
-    /* rpmsg.rs doesn't touch state.rs yet -- it only proves the M4 link
-     * itself works (issue #12's DoD), no state_tx needed. Mapping M4-side
-     * data into actual device state is Sprint 3 work, once there's a real
-     * message protocol instead of this hello-world ping/ack. */
-    tokio::spawn(rpmsg::run());
+    /* A second, completely separate mailbox for rpmsg.rs's actor -- this is
+     * NOT state_tx again. rpmsg.rs doesn't manage the generic "device
+     * property bag" state.rs owns; it manages one specific piece of real
+     * hardware (the M4's LED) that only makes sense to talk to via a direct
+     * command/reply round trip, not a stored property. See rpmsg.rs's own
+     * header comment for why this stays a separate actor instead of being
+     * folded into state.rs's Msg enum. */
+    let (rpmsg_tx, rpmsg_rx) = tokio::sync::mpsc::channel(8);
+    tokio::spawn(rpmsg::run(rpmsg_rx));
+
+    /* ws.rs is the last user of state_tx, so it gets the original handle
+     * moved in (no .clone() needed) -- same reasoning as before, ws.rs's
+     * server will go on to clone THIS handle again once per connected
+     * client (see ws.rs's ws_handler/handle_socket), and it now also gets
+     * rpmsg_tx to forward LED commands from those same clients on to the
+     * M4. */
+    tokio::spawn(ws::run(state_tx, rpmsg_tx));
 
     /* SIGTERM is what systemd sends on stop/restart; SIGINT covers Ctrl-C
      when running this interactively during development. */
