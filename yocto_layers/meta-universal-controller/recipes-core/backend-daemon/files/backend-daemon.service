@@ -1,13 +1,25 @@
 [Unit]
 Description=Universal Controller hub daemon
 After=network.target
+# /usr/local (userfs) holds the per-device config read by EnvironmentFile=
+# below -- start after it's mounted, or the file would look missing.
+# Wants=, not Requires=: if userfs ever failed to mount, the daemon must
+# still start (cloud sync off, local UI/WebSocket/M4 unaffected) rather
+# than a storage problem taking the whole hub down. (usr-local.mount is
+# systemd's unit name for the /usr/local fstab entry; on machines without
+# that entry, e.g. QEMU, these two lines simply have no effect.)
+Wants=usr-local.mount
+After=usr-local.mount
 
 [Service]
-# Optional per-device settings, e.g. MQTT_BROKER_HOST=192.168.1.10 (cloud
-# sync stays off until that's set -- see linux_a7/backend_daemon/src/mqtt.rs).
-# The leading "-" means a missing file is fine. Edit it on the board and
+# Optional per-device settings, e.g. MQTT_BROKER_HOST / MQTT_THING_NAME
+# (cloud sync stays off until those are set -- see
+# linux_a7/backend_daemon/src/mqtt.rs). Lives on the userfs partition
+# (/usr/local), next to the device certificate, not in /etc: it differs per
+# unit and must survive rootfs updates and a read-only rootfs. The leading
+# "-" means a missing file is fine. Edit it on the board and
 # `systemctl restart backend-daemon`; no rebuild needed.
-EnvironmentFile=-/etc/default/backend-daemon
+EnvironmentFile=-/usr/local/etc/universal-controller/backend-daemon.env
 ExecStart=/usr/bin/backend-daemon
 Restart=on-failure
 

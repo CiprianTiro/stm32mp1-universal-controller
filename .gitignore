@@ -66,12 +66,14 @@ linux_a7/ui_layer/target/
 # west build output
 firmware_m4/build/
 
-# `west init -l firmware_m4` fetches Zephyr + HAL modules as siblings of
-# firmware_m4/ at the repo root (T2 topology, see firmware_m4/README.md) -
-# multi-GB, never tracked here.
+# Safety net: the firmware is built against a separate Zephyr workspace
+# (~/zephyrproject, see firmware_m4/README.md), but if anyone runs
+# `west init -l firmware_m4` in this repo anyway, Zephyr + HAL modules
+# (multi-GB) land at the repo root -- never track them. (Zephyr's own
+# tools/ folder isn't listed: /tools/ holds this repo's dev tooling, e.g.
+# tools/mqtt-dev-broker/.)
 /zephyr/
 /modules/
-/tools/
 /bootloader/
 /.west/
 
