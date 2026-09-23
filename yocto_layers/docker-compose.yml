@@ -16,6 +16,11 @@ services:
       # since it's outside the workspace bind mount above. Read-only: the
       # build only ever reads this source, never writes into it.
       - ../linux_a7:/home/builder/linux_a7:ro
+      # Same idea for the M4 firmware: m4-firmware.bb packages the ELF that
+      # `make build-m4` builds on the host (firmware_m4/build/zephyr/).
+      # Zephyr's toolchain isn't in this container, so bitbake only copies
+      # the finished ELF, it never compiles it.
+      - ../firmware_m4:/home/builder/firmware_m4:ro
     # NOT network_mode: "host" - that only works on Linux hosts. Docker
     # Desktop for Mac (and Windows) runs the daemon inside a VM, so there is
     # no host network namespace to join; "host" mode is silently unsupported

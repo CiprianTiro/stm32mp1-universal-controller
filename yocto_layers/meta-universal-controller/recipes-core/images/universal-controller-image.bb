@@ -42,3 +42,13 @@ IMAGE_INSTALL += " \
 # Hardware-only: key-based root access (see NOTE above). Not installed on
 # qemuarm64, where debug-tweaks' blank-password root already covers dev access.
 IMAGE_INSTALL:append:stm32mp1common = " ssh-root-key"
+
+# Hardware-only: the touchscreen GUI (issue #14). QEMU has no /dev/fb0
+# (no real display) and no touch panel evdev device for it to talk to --
+# installing it there would just be a service crash-looping forever.
+IMAGE_INSTALL:append:stm32mp1common = " ui-layer"
+
+# Hardware-only: the Cortex-M4 firmware + the service that starts it at
+# boot (backend-daemon's LED commands go to the M4 over RPMsg). QEMU has no
+# M4 core at all.
+IMAGE_INSTALL:append:stm32mp1common = " m4-firmware"

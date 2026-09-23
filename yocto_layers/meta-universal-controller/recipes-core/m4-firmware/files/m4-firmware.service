@@ -1,0 +1,21 @@
+[Unit]
+Description=Start Cortex-M4 firmware (remoteproc)
+# Start the M4 before backend-daemon, so the RPMsg device (/dev/rpmsgN)
+# usually exists by the time the daemon gets its first LED command. Not a
+# hard requirement: backend-daemon reopens the device lazily on every
+# command until it succeeds (see linux_a7/backend_daemon/src/rpmsg.rs).
+Before=backend-daemon.service
+After=systemd-modules-load.service
+
+[Service]
+# oneshot + RemainAfterExit: the script just kicks the M4 off and exits;
+# the unit then stays "active" to reflect that the M4 is running, so
+# `systemctl stop m4-firmware` / `restart` behave as expected (e.g. restart
+# after copying a new firmware ELF to /lib/firmware/rproc-m4-fw).
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/m4-firmware.sh start
+ExecStop=/usr/bin/m4-firmware.sh stop
+
+[Install]
+WantedBy=multi-user.target
