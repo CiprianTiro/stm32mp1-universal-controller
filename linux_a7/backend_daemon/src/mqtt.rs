@@ -19,6 +19,8 @@
  * Shadow document shape used here (all devices under one "devices" key):
  *   reported:  {"state":{"reported":{"devices":{"lamp-1":{"on":true}}}}}
  *   delta:     {"version":7,"state":{"devices":{"lamp-1":{"on":false}}},...}
+ *   after carrying out a delta, the report also clears the command:
+ *              {"state":{"reported":{...},"desired":{"devices":{"lamp-1":null}}}}
  *
  * One device is special: "ld7", the board's real LED (driven by the M4).
  * It doesn't live in state.rs -- its truth is whatever the M4 says -- so
@@ -273,7 +275,7 @@ pub async fn run(
                 /* And tell the cloud our current state straight away,
                  * instead of up to REPORT_INTERVAL later. */
                 let led = *led_rx.borrow();
-                if let Some(payload) = reported_payload(&state_tx, led).await {
+                if let Some(payload) = reported_payload(&state_tx, led, &[]).await {
                     let _ = client.try_publish(topics.update.as_str(), QoS::AtLeastOnce, false, payload);
                 }
             }
@@ -291,15 +293,21 @@ pub async fn run(
                 };
                 match devices {
                     Ok(devices) if !devices.is_empty() => {
+                        /* Remember which devices the cloud commanded
+                         * before apply_desired() takes ownership of them. */
+                        let commanded: Vec<DeviceId> = devices.keys().cloned().collect();
                         apply_desired(devices, &state_tx, &rpmsg_tx).await;
                         /* Report right away rather than at the next tick:
                          * the cloud keeps showing a delta until the device
-                         * reports that it has caught up. */
-                        /* Copy the LED value out first: borrow() holds a
+                         * reports that it has caught up. The same message
+                         * also clears the command from "desired" -- see
+                         * reported_payload() for why that matters.
+                         *
+                         * Copy the LED value out first: borrow() holds a
                          * read lock on the watch channel, which must not be
                          * held across the .await below. */
                         let led = *led_rx.borrow();
-                        let snapshot = reported_payload(&state_tx, led).await;
+                        let snapshot = reported_payload(&state_tx, led, &commanded).await;
                         if let Some(payload) = snapshot {
                             let _ = client.try_publish(
                                 topics.update.as_str(),
@@ -374,8 +382,25 @@ async fn set_led(properties: &DeviceState, rpmsg_tx: &mpsc::Sender<rpmsg::Cmd>) 
 /* Builds the shadow "reported" document from state.rs's current snapshot,
  * plus the real LED if we know its state (`led` = None: the M4 hasn't
  * answered yet, so we say nothing rather than guess).
+ *
+ * `clear_desired`: devices whose cloud command has just been carried out.
+ * For those, the same message also sets `"desired": {"devices": {id: null}}`
+ * -- in a shadow update, null means "delete this key". Why: AWS keeps
+ * "desired" until someone removes it, and sends a new delta whenever
+ * reported differs from it. So if the cloud once said "ld7 on" and a user
+ * later turned the LED off on the touchscreen, AWS would immediately send
+ * "turn it on" again -- the old command would override local control
+ * forever (found testing against real AWS; the dev broker has no shadow
+ * service, so it can't show this). Clearing "desired" once the command is
+ * done is AWS's documented pattern for devices that can also be changed
+ * locally. (The dev broker just relays this; harmless.)
+ *
  * `None` only if state.rs has stopped (the daemon is shutting down). */
-async fn reported_payload(state_tx: &mpsc::Sender<Msg>, led: Option<bool>) -> Option<Vec<u8>> {
+async fn reported_payload(
+    state_tx: &mpsc::Sender<Msg>,
+    led: Option<bool>,
+    clear_desired: &[DeviceId],
+) -> Option<Vec<u8>> {
     let (reply_tx, reply_rx) = oneshot::channel();
     state_tx.send(Msg::GetAllDevices { reply: reply_tx }).await.ok()?;
     let mut devices = reply_rx.await.unwrap_or_default();
@@ -385,7 +410,14 @@ async fn reported_payload(state_tx: &mpsc::Sender<Msg>, led: Option<bool>) -> Op
             HashMap::from([("on".to_string(), serde_json::json!(on))]),
         );
     }
-    let doc = serde_json::json!({ "state": { "reported": { "devices": devices } } });
+    let mut doc = serde_json::json!({ "state": { "reported": { "devices": devices } } });
+    if !clear_desired.is_empty() {
+        let cleared: serde_json::Map<String, serde_json::Value> = clear_desired
+            .iter()
+            .map(|id| (id.clone(), serde_json::Value::Null))
+            .collect();
+        doc["state"]["desired"] = serde_json::json!({ "devices": cleared });
+    }
     serde_json::to_vec(&doc).ok()
 }
 
@@ -433,7 +465,7 @@ async fn report_periodically(
         if !connected.load(Ordering::Relaxed) {
             continue;
         }
-        let Some(payload) = reported_payload(&state_tx, led).await else {
+        let Some(payload) = reported_payload(&state_tx, led, &[]).await else {
             break;
         };
         let _ = client.try_publish(topic.as_str(), QoS::AtLeastOnce, false, payload);

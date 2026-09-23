@@ -12,9 +12,14 @@
 # and future rootfs updates. A full `make flash-hw` may rewrite userfs --
 # re-run this script after flashing.
 #
-# For AWS IoT later: same file layout, just different files -- Amazon's
-# root CA as ca.crt, the certificate/key AWS generated for the Thing, and
-# the AWS endpoint as broker host.
+# AWS IoT Core: same file layout, just different files. Put Amazon's root
+# CA (AmazonRootCA1.pem) as ca.crt and the certificate/key AWS generated for
+# the Thing as <thing>.crt / <thing>.key in certs/aws/ (git-ignored, like
+# all of certs/), then point CERTS_DIR at it and use the AWS endpoint:
+#   CERTS_DIR=certs/aws ./provision_board.sh stm32mp1.local \
+#       a1q88gwapwaxnn-ats.iot.eu-central-1.amazonaws.com
+# Switching back to the dev broker is just running it again without
+# CERTS_DIR and with the PC's IP.
 set -euo pipefail
 
 BOARD="${1:?usage: $0 <board-host> <broker-host> [thing-name]}"
@@ -22,12 +27,18 @@ BROKER="${2:?usage: $0 <board-host> <broker-host> [thing-name]}"
 THING="${3:-dk2-01}"
 
 cd "$(dirname "$0")"
-CERTS=certs
+# Which certificate set to install: the dev CA's (default) or AWS's.
+CERTS="${CERTS_DIR:-certs}"
 DEST=/usr/local/etc/universal-controller
 SSH_OPTS=(-o StrictHostKeyChecking=accept-new)
 
-# Create the device's certificate if it doesn't exist yet.
+# Create the device's certificate if it doesn't exist yet (dev CA only --
+# AWS certificates can only come from AWS).
 if [ ! -f "${CERTS}/${THING}.crt" ]; then
+  if [ "${CERTS}" != certs ]; then
+    echo "error: ${CERTS}/${THING}.crt not found" >&2
+    exit 1
+  fi
   ./gen_certs.sh "$BROKER" "$THING"
 fi
 
