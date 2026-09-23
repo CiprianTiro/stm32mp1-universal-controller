@@ -34,6 +34,7 @@ FILESEXTRAPATHS:prepend := "/home/builder/linux_a7/backend_daemon:"
 SRC_URI = " \
     file://Cargo.toml \
     file://Cargo.lock \
+    file://src/health.rs \
     file://src/main.rs \
     file://src/mqtt.rs \
     file://src/rpmsg.rs \

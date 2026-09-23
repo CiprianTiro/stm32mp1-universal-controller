@@ -52,3 +52,8 @@ IMAGE_INSTALL:append:stm32mp1common = " ui-layer"
 # boot (backend-daemon's LED commands go to the M4 over RPMsg). QEMU has no
 # M4 core at all.
 IMAGE_INSTALL:append:stm32mp1common = " m4-firmware"
+
+# Hardware-only: public DNS servers next to the router's (see the recipe's
+# 50-public-dns.conf). QEMU's user-mode network brings its own DNS proxy,
+# so there's nothing to fix there.
+IMAGE_INSTALL:append:stm32mp1common = " resolved-public-dns"

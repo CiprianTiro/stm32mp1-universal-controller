@@ -9,6 +9,8 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::rpmsg;
@@ -75,15 +77,44 @@ enum ServerResponse {
 struct AppState {
     state_tx: mpsc::Sender<Msg>,
     rpmsg_tx: mpsc::Sender<rpmsg::Cmd>,
+    /* How many clients are connected right now (issue #29) -- shared with
+     * health.rs, which reports it to the cloud as "local_clients". */
+    local_clients: Arc<AtomicUsize>,
+}
+
+/* Counts one connected client for as long as it exists: +1 when created,
+ * -1 when dropped. Tying the -1 to `Drop` (Rust runs it automatically when
+ * the value goes out of scope) means it happens however the connection
+ * ends -- clean close, network error, or the task being cancelled -- with
+ * no way to forget it on some early-return path. */
+struct ClientCount(Arc<AtomicUsize>);
+
+impl ClientCount {
+    fn new(counter: &Arc<AtomicUsize>) -> Self {
+        counter.fetch_add(1, Ordering::Relaxed);
+        ClientCount(counter.clone())
+    }
+}
+
+impl Drop for ClientCount {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
+    }
 }
 
 /* Entry point, spawned once from main(). Both `Sender`s are moved in once
  * here; every connected client's task gets its own clone of each, same
  * pattern as everywhere else in this project. */
-pub async fn run(state_tx: mpsc::Sender<Msg>, rpmsg_tx: mpsc::Sender<rpmsg::Cmd>) {
-    let app = Router::new()
-        .route("/ws", get(ws_handler))
-        .with_state(AppState { state_tx, rpmsg_tx });
+pub async fn run(
+    state_tx: mpsc::Sender<Msg>,
+    rpmsg_tx: mpsc::Sender<rpmsg::Cmd>,
+    local_clients: Arc<AtomicUsize>,
+) {
+    let app = Router::new().route("/ws", get(ws_handler)).with_state(AppState {
+        state_tx,
+        rpmsg_tx,
+        local_clients,
+    });
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080")
         .await
@@ -111,6 +142,10 @@ async fn ws_handler(ws: WebSocketUpgrade, State(app_state): State<AppState>) -> 
  * connected -- this is the per-device-task pattern from earlier, just
  * per-connection instead of per-device. */
 async fn handle_socket(mut socket: WebSocket, app_state: AppState) {
+    /* `_count` is never used by name -- it only has to live until this
+     * function returns, and then its Drop lowers the count again. (A plain
+     * `_` would drop it immediately, so the name matters.) */
+    let _count = ClientCount::new(&app_state.local_clients);
     while let Some(Ok(msg)) = socket.recv().await {
         let Message::Text(text) = msg else {
             continue;
