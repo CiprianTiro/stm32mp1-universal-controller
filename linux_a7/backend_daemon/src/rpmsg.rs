@@ -17,7 +17,7 @@
 
 use std::path::PathBuf;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 
 /* Must match firmware_m4/src/main.c's RPMSG_RAW_CHANNEL_NAME exactly -- it's
  * also the one specific name Linux's in-tree rpmsg_char kernel driver
@@ -61,8 +61,16 @@ pub enum Cmd {
  * Unlike the old version of this file (issue #12's ping/ack demo), there's
  * no periodic anything here -- issue #14 removed the M4's heartbeat
  * entirely, so there's nothing to poll on a timer anymore. This loop simply
- * waits for a real command to arrive and only then, if needed, connects. */
-pub async fn run(mut rx: mpsc::Receiver<Cmd>) {
+ * waits for a real command to arrive and only then, if needed, connects.
+ *
+ * `led_tx` (issue #26): the other half of a `watch` channel. A watch
+ * channel holds exactly ONE value -- the latest -- that any number of
+ * receivers can read at any time, and it can wake them up when that value
+ * changes. Here it holds "the LED's state as the M4 last reported it"
+ * (`None` = we haven't heard from the M4 yet). Every successful reply from
+ * the M4 updates it, whoever asked -- so mqtt.rs learns about a tap on the
+ * touchscreen without ws.rs having to tell it anything. */
+pub async fn run(mut rx: mpsc::Receiver<Cmd>, led_tx: watch::Sender<Option<bool>>) {
     /* The open connection to the M4, if we have one right now. `None` means
      * "not connected yet, or the last attempt failed" -- reconnecting is
      * handled lazily, the next time a command actually needs the link,
@@ -121,7 +129,18 @@ pub async fn run(mut rx: mpsc::Receiver<Cmd>) {
         }
 
         match result {
-            Ok(response) => reply_ok(cmd, &response),
+            Ok(response) => {
+                /* send_if_modified only wakes up the watchers when the
+                 * value actually changed: asking "is it on?" every second
+                 * (as ui_layer does) must not look like a change each time. */
+                let on = parse_led(&response);
+                led_tx.send_if_modified(|last| {
+                    let changed = *last != Some(on);
+                    *last = Some(on);
+                    changed
+                });
+                reply_ok(cmd, &response)
+            }
             Err(message) => reply_err(cmd, message),
         }
     }
@@ -155,7 +174,7 @@ async fn round_trip(file: &mut tokio::fs::File, request: &str) -> std::io::Resul
  * "LED ON"/"LED OFF" string -- this is the one place that string gets
  * parsed, so a future protocol change only needs to change it here. */
 fn reply_ok(cmd: Cmd, response: &str) {
-    let on = response.trim() == "LED ON";
+    let on = parse_led(response);
     match cmd {
         Cmd::SetLed { reply, .. } => {
             /* `let _ =` discards the Result that `oneshot::Sender::send`
@@ -169,6 +188,11 @@ fn reply_ok(cmd: Cmd, response: &str) {
             let _ = reply.send(Ok(on));
         }
     }
+}
+
+/* The M4 answers every request with "LED ON" or "LED OFF". */
+fn parse_led(response: &str) -> bool {
+    response.trim() == "LED ON"
 }
 
 /// Sends an `Err` back on whichever `Cmd` variant this is -- factored out

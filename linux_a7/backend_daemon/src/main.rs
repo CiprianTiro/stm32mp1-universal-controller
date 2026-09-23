@@ -48,22 +48,27 @@ async fn main() {
      * exists anywhere in the process. */
     tokio::spawn(state::run(state_rx));
 
-    /* Same pattern again: mqtt.rs gets its own clone of state_tx, so it can
-     * both publish periodic state snapshots (asking state.rs via
-     * GetAllDevices) and apply incoming commands (via UpdateDevice) --
-     * talking to the exact same single actor as everyone else here, never a
-     * copy of it. */
-    tokio::spawn(mqtt::run(state_tx.clone()));
-
     /* A second, completely separate mailbox for rpmsg.rs's actor -- this is
      * NOT state_tx again. rpmsg.rs doesn't manage the generic "device
      * property bag" state.rs owns; it manages one specific piece of real
      * hardware (the M4's LED) that only makes sense to talk to via a direct
      * command/reply round trip, not a stored property. See rpmsg.rs's own
      * header comment for why this stays a separate actor instead of being
-     * folded into state.rs's Msg enum. */
+     * folded into state.rs's Msg enum.
+     *
+     * led_tx/led_rx is a `watch` channel: rpmsg.rs writes the LED's latest
+     * known state into it, mqtt.rs reads it (see rpmsg::run's comment). */
     let (rpmsg_tx, rpmsg_rx) = tokio::sync::mpsc::channel(8);
-    tokio::spawn(rpmsg::run(rpmsg_rx));
+    let (led_tx, led_rx) = tokio::sync::watch::channel(None);
+    tokio::spawn(rpmsg::run(rpmsg_rx, led_tx));
+
+    /* Same pattern again: mqtt.rs gets its own clone of state_tx, so it can
+     * both publish periodic state snapshots (asking state.rs via
+     * GetAllDevices) and apply incoming commands (via UpdateDevice) --
+     * talking to the exact same single actor as everyone else here, never a
+     * copy of it. It also gets the LED's channels, so the real LED shows up
+     * in the cloud as device "ld7" and can be switched from there. */
+    tokio::spawn(mqtt::run(state_tx.clone(), rpmsg_tx.clone(), led_rx));
 
     /* ws.rs is the last user of state_tx, so it gets the original handle
      * moved in (no .clone() needed) -- same reasoning as before, ws.rs's
