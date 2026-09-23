@@ -9,6 +9,7 @@ use tokio::time::interval;
 mod health;
 mod mqtt;
 mod rpmsg;
+mod shadow;
 mod state;
 mod ws;
 

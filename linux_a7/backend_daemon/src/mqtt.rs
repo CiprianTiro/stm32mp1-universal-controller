@@ -3,10 +3,14 @@
  * What it does:
  *   - connects to a broker over TLS, proving the board's identity with its
  *     own X.509 client certificate (mutual TLS -- no username/password);
- *   - keeps an AWS-style "Device Shadow" in sync: periodically publishes
- *     the board's device states as the shadow's "reported" section, and
- *     applies "delta" messages (what the cloud WANTS to differ from what's
- *     reported) to state.rs, exactly like a WebSocket UpdateDevice would.
+ *   - keeps AWS-style "Device Shadows" in sync: one NAMED shadow per
+ *     device (issue #31, see shadow.rs for the layout), published whenever
+ *     that device changes; "delta" messages (what the cloud WANTS to
+ *     differ from what's reported) are applied to state.rs, exactly like a
+ *     WebSocket UpdateDevice would; deleting a device's shadow in the cloud
+ *     removes the device, and removing a device locally deletes its shadow;
+ *   - reports the hub's own health (health.rs, #29) to the classic shadow
+ *     every report interval.
  *
  * The topics and JSON are AWS IoT's real Device Shadow format, so the same
  * code works against AWS and against the development Mosquitto broker in
@@ -16,21 +20,17 @@
  * if no broker is configured, or the cloud is unreachable, the rest of
  * the daemon never notices.
  *
- * Shadow document shape used here (all devices under one "devices" key):
- *   reported:  {"state":{"reported":{"devices":{"lamp-1":{"on":true}}}}}
- *   delta:     {"version":7,"state":{"devices":{"lamp-1":{"on":false}}},...}
+ * Documents (per device, on $aws/things/<thing>/shadow/name/<id>/...):
+ *   reported:  {"state":{"reported":{"on":true}}}
+ *   delta:     {"version":7,"state":{"on":false},...}
  *   after carrying out a delta, the report also clears the command:
- *              {"state":{"reported":{...},"desired":{"devices":{"lamp-1":null}}}}
- *
- * Every report also carries a "system" section with the hub's own health
- * (CPU, memory, temperature, ...; see health.rs, issue #29), and a report
- * goes out immediately whenever any device changes, not only on the tick.
+ *              {"state":{"reported":{"on":false},"desired":null}}
  *
  * One device is special: "ld7", the board's real LED (driven by the M4).
  * It doesn't live in state.rs -- its truth is whatever the M4 says -- so
- * it's added to every report from rpmsg.rs's latest known state, and a
+ * it's added to the device list from rpmsg.rs's latest known state, and a
  * delta for it becomes an rpmsg SetLed command instead of a state.rs
- * update. Tapping the touchscreen is therefore reported to the cloud, and
+ * update. Deleting its shadow just recreates it -- it's hardware. Tapping the touchscreen is therefore reported to the cloud, and
  * a cloud command switches the physical LED (and the screen follows).
  */
 
@@ -43,6 +43,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::health;
 use crate::rpmsg;
+use crate::shadow;
 use crate::state::{DeviceId, DeviceState, Msg};
 
 /* The shadow name of the board's real LED (LD7 on the DK2 silkscreen). */
@@ -62,8 +63,8 @@ const DEFAULT_PORT: u16 = 8883;
  * certificates are per device, so they must NOT be baked into the image. */
 const DEFAULT_CERT_DIR: &str = "/usr/local/etc/universal-controller/mqtt";
 
-/* How often the full state (incl. health numbers) is published even if
- * nothing changed. Overridable with MQTT_REPORT_INTERVAL (seconds) in the
+/* How often the hub's health (`system`, classic shadow) is published.
+ * Devices are NOT repeated on this timer -- only sent when they change. Overridable with MQTT_REPORT_INTERVAL (seconds) in the
  * on-device env file: 10 s is ~260k messages/month per board -- fine for
  * one, but a fleet would rather use 60. */
 const DEFAULT_REPORT_INTERVAL: Duration = Duration::from_secs(10);
@@ -73,6 +74,11 @@ const DEFAULT_REPORT_INTERVAL: Duration = Duration::from_secs(10);
  * instead of one per second. */
 const BACKOFF_MIN: Duration = Duration::from_secs(1);
 const BACKOFF_MAX: Duration = Duration::from_secs(60);
+
+/* rumqttc's request queue (messages waiting to be sent). A resync needs
+ * ~2 per device plus 3 subscribes; 64 leaves room for a few dozen devices
+ * before the reporting task simply waits its turn. */
+const REQUEST_QUEUE: usize = 64;
 
 /* How long to wait for NTP before connecting anyway -- see
  * wait_for_time_sync(). */
@@ -140,57 +146,19 @@ impl Config {
     }
 }
 
-/* AWS IoT's topic names for one thing's (classic, unnamed) shadow. */
-struct Topics {
-    /* we publish our reported state here */
-    update: String,
-    /* the broker/cloud tells us here what differs from desired */
-    delta: String,
-    /* we publish an empty message here to ask for the whole shadow... */
-    get: String,
-    /* ...and the answer arrives here (AWS only -- the dev broker has no
-     * shadow service, so nothing ever answers; harmless) */
-    get_accepted: String,
-}
-
-impl Topics {
-    fn new(thing: &str) -> Self {
-        let base = format!("$aws/things/{thing}/shadow");
-        Topics {
-            update: format!("{base}/update"),
-            delta: format!("{base}/update/delta"),
-            get: format!("{base}/get"),
-            get_accepted: format!("{base}/get/accepted"),
-        }
-    }
-}
-
-/* The part of the shadow this daemon owns: every device's properties. */
-#[derive(serde::Deserialize, Default)]
-struct DevicesDoc {
-    #[serde(default)]
-    devices: HashMap<DeviceId, DeviceState>,
-}
-
-/* A message on .../update/delta. Only "state" matters here; AWS also sends
- * version/timestamp/metadata, which serde ignores. */
-#[derive(serde::Deserialize)]
-struct DeltaMsg {
-    state: DevicesDoc,
-}
-
-/* A message on .../get/accepted: the whole shadow. Only its "delta" part
- * (desired-but-not-yet-reported changes, e.g. commands sent while the
- * board was offline) needs applying. */
-#[derive(serde::Deserialize)]
-struct GetAcceptedMsg {
-    state: GetAcceptedState,
-}
-
-#[derive(serde::Deserialize)]
-struct GetAcceptedState {
-    #[serde(default)]
-    delta: Option<DevicesDoc>,
+/* Messages from the run() loop (which receives from the cloud) to the
+ * reporting task (which is the only place that publishes). One publisher
+ * keeps the bookkeeping of "what did we last send" in one place. */
+enum Sync {
+    /* Just (re)connected: publish everything, and ask each device's shadow
+     * for commands that arrived while we were offline. */
+    Resync,
+    /* A cloud command for this device was carried out: report it and clear
+     * its "desired", even if nothing actually changed (e.g. "turn on" for
+     * a lamp that was already on -- the command still has to be removed). */
+    CommandDone(DeviceId),
+    /* This device's shadow was deleted (in the console, or by us). */
+    ShadowDeleted(DeviceId),
 }
 
 /* `rpmsg_tx` sends LED commands to the M4 actor; `led_rx` reads the LED's
@@ -231,10 +199,13 @@ pub async fn run(
     /* 30 s is the shortest keep-alive AWS IoT accepts. */
     options.set_keep_alive(Duration::from_secs(30));
     options.set_transport(Transport::Tls(tls));
-    let (client, mut eventloop) = AsyncClient::new(options, 10);
+    /* The request queue: big enough for a full resync (a report and a get
+     * per device, plus the subscribes) -- see reporting_task for why the
+     * queue must never fill up. */
+    let (client, mut eventloop) = AsyncClient::new(options, REQUEST_QUEUE);
 
     /* Whether we're connected right now -- set by the loop below, read by
-     * report_periodically. Arc = shared ownership between the two tasks;
+     * the reporting task. Arc = shared ownership between the two tasks;
      * AtomicBool = a bool both can read/write safely without a lock. */
     let connected = Arc::new(AtomicBool::new(false));
 
@@ -244,17 +215,19 @@ pub async fn run(
         health: Arc::new(Mutex::new(health::Sampler::new(local_clients))),
     };
 
-    let topics = Topics::new(&config.thing);
-    tokio::spawn(report_periodically(
+    let (sync_tx, sync_rx) = mpsc::channel(32);
+    tokio::spawn(reporting_task(
         client.clone(),
-        reporter.clone(),
+        reporter,
         rpmsg_tx.clone(),
         state_changed_rx,
-        topics.update.clone(),
+        sync_rx,
+        shadow::Topics::new(&config.thing),
         connected.clone(),
         config.report_interval,
     ));
 
+    let topics = shadow::Topics::new(&config.thing);
     let broker = format!("{}:{}", config.host, config.port);
     println!("mqtt: connecting to {broker} as \"{}\"", config.thing);
 
@@ -268,80 +241,37 @@ pub async fn run(
      * after an error; this loop just paces those retries and reacts to
      * what arrives.
      *
-     * Note the `try_` calls (try_subscribe/try_publish) inside this loop:
-     * they queue the request without waiting. The awaiting versions would
-     * wait for room in rumqttc's request queue -- but that queue is only
-     * emptied by eventloop.poll(), i.e. by this very loop, so waiting
-     * here could deadlock. */
+     * Nothing in this loop may WAIT on rumqttc's request queue or on the
+     * reporting task: the queue is only emptied by eventloop.poll(), i.e.
+     * by this very loop, and the reporting task itself waits on that queue.
+     * Hence try_subscribe and try_send (queue the request, don't wait). */
     loop {
         match eventloop.poll().await {
             Ok(Event::Incoming(Packet::ConnAck(_))) => {
                 println!("mqtt: connected to {broker}");
                 last_error = None;
                 backoff = BACKOFF_MIN;
-                connected.store(true, Ordering::Relaxed);
                 /* Subscriptions don't survive a reconnect (clean session),
-                 * so (re)subscribe on EVERY connect, not once at startup.
-                 * Then ask for the full shadow, to catch commands that were
-                 * sent while the board was offline.
-                 *
-                 * These MUST get into rumqttc's request queue: a lost
-                 * subscribe means the board silently stops hearing commands
-                 * until the daemon restarts (this happened, see
-                 * report_periodically for how the queue used to fill up).
-                 * So a failure is logged, never ignored. */
-                let requests = [
-                    client.try_subscribe(topics.delta.as_str(), QoS::AtLeastOnce),
-                    client.try_subscribe(topics.get_accepted.as_str(), QoS::AtLeastOnce),
-                    client.try_publish(topics.get.as_str(), QoS::AtLeastOnce, false, ""),
-                ];
-                for result in requests {
-                    if let Err(e) = result {
-                        println!("mqtt: could not queue subscribe/get after connecting: {e}");
+                 * so (re)subscribe on EVERY connect -- and BEFORE the
+                 * reporting task starts its resync, so they're first in the
+                 * queue. A lost subscribe means the board silently stops
+                 * hearing commands (this happened in #26), so a failure is
+                 * logged, never ignored. */
+                for topic in topics.subscriptions() {
+                    if let Err(e) = client.try_subscribe(topic.as_str(), QoS::AtLeastOnce) {
+                        println!("mqtt: could not subscribe to {topic}: {e}");
                     }
                 }
-                /* And tell the cloud our current state straight away,
-                 * instead of up to a whole report interval later. */
-                if let Some(payload) = reporter.payload(&[]).await {
-                    let _ = client.try_publish(topics.update.as_str(), QoS::AtLeastOnce, false, payload);
+                connected.store(true, Ordering::Relaxed);
+                if sync_tx.try_send(Sync::Resync).is_err() {
+                    println!("mqtt: reporting task busy, resync skipped");
                 }
             }
             Ok(Event::Incoming(Packet::Publish(publish))) => {
-                let devices = if publish.topic == topics.delta {
-                    serde_json::from_slice::<DeltaMsg>(&publish.payload)
-                        .map(|m| m.state.devices)
-                        .map_err(|e| e.to_string())
-                } else if publish.topic == topics.get_accepted {
-                    serde_json::from_slice::<GetAcceptedMsg>(&publish.payload)
-                        .map(|m| m.state.delta.unwrap_or_default().devices)
-                        .map_err(|e| e.to_string())
-                } else {
+                let Some((id, event)) = topics.parse(&publish.topic) else {
                     continue;
                 };
-                match devices {
-                    Ok(devices) if !devices.is_empty() => {
-                        /* Remember which devices the cloud commanded
-                         * before apply_desired() takes ownership of them. */
-                        let commanded: Vec<DeviceId> = devices.keys().cloned().collect();
-                        apply_desired(devices, &state_tx, &rpmsg_tx).await;
-                        /* Report right away rather than at the next tick:
-                         * the cloud keeps showing a delta until the device
-                         * reports that it has caught up. The same message
-                         * also clears the command from "desired" -- see
-                         * Reporter::payload() for why that matters. */
-                        let snapshot = reporter.payload(&commanded).await;
-                        if let Some(payload) = snapshot {
-                            let _ = client.try_publish(
-                                topics.update.as_str(),
-                                QoS::AtLeastOnce,
-                                false,
-                                payload,
-                            );
-                        }
-                    }
-                    Ok(_) => {}
-                    Err(e) => println!("mqtt: ignoring malformed message on {}: {e}", publish.topic),
-                }
+                handle_event(id, event, &publish.payload, &state_tx, &rpmsg_tx, &sync_tx).await;
             }
             Ok(_) => {}
             Err(e) => {
@@ -358,22 +288,48 @@ pub async fn run(
     }
 }
 
-/* Applies the cloud's desired changes, one device at a time, through the
- * same state.rs message a WebSocket client would send. state.rs merges
- * properties, which matches the delta's semantics (only changed fields).
- * The real LED is the exception: it goes to the M4 instead. */
-async fn apply_desired(
-    devices: HashMap<DeviceId, DeviceState>,
+/* Reacts to one message on a device's shadow. */
+async fn handle_event(
+    id: DeviceId,
+    event: shadow::Event,
+    payload: &[u8],
     state_tx: &mpsc::Sender<Msg>,
     rpmsg_tx: &mpsc::Sender<rpmsg::Cmd>,
+    sync_tx: &mpsc::Sender<Sync>,
 ) {
-    for (id, properties) in devices {
-        println!("mqtt: applying desired state for {id}");
-        if id == LED_DEVICE_ID {
-            set_led(&properties, rpmsg_tx).await;
-        } else {
-            let _ = state_tx.send(Msg::UpdateDevice { id, properties }).await;
+    let command = match event {
+        shadow::Event::Delta => shadow::parse_delta(payload).map(Some),
+        shadow::Event::GetAccepted => shadow::parse_get_accepted(payload),
+        shadow::Event::DeleteAccepted => {
+            /* The reporting task does the removal itself (see
+             * Sync::ShadowDeleted) -- that way no publish can slip in
+             * between and recreate the shadow while the device still
+             * exists here. */
+            if sync_tx.try_send(Sync::ShadowDeleted(id.clone())).is_err() {
+                println!("mqtt: reporting task busy, deletion of {id} not handled");
+            }
+            return;
         }
+    };
+    match command {
+        Ok(Some(properties)) if !properties.is_empty() => {
+            println!("mqtt: applying desired state for {id}");
+            if id == LED_DEVICE_ID {
+                set_led(&properties, rpmsg_tx).await;
+            } else {
+                /* state.rs merges properties, which matches a delta's
+                 * meaning (only the fields that should change). */
+                let _ = state_tx
+                    .send(Msg::UpdateDevice {
+                        id: id.clone(),
+                        properties,
+                    })
+                    .await;
+            }
+            let _ = sync_tx.try_send(Sync::CommandDone(id));
+        }
+        Ok(_) => {} /* nothing pending */
+        Err(e) => println!("mqtt: ignoring malformed message for {id}: {e}"),
     }
 }
 
@@ -401,43 +357,27 @@ async fn set_led(properties: &DeviceState, rpmsg_tx: &mpsc::Sender<rpmsg::Cmd>) 
     }
 }
 
-/* Everything needed to build a shadow report. Cloned into both places that
- * send reports (the run() loop and report_periodically), so both always
- * send the same complete picture. Cloning is cheap: a channel handle, a
- * watch receiver, and an Arc (a shared pointer, not a copy of the Sampler).
+/* Where the reporting task gets its data from. Cloning is cheap: a channel
+ * handle, a watch receiver, and an Arc (a shared pointer, not a copy).
  *
- * `health` sits behind a Mutex because both tasks use the same Sampler
- * (it remembers the previous CPU reading). The lock is only held for the
- * few microseconds of Sampler::sample(), never across an .await. */
-#[derive(Clone)]
+ * `health` sits behind a Mutex out of caution, even though only the
+ * reporting task uses it now; the lock is only held for the few
+ * microseconds of Sampler::sample(), never across an .await. */
 struct Reporter {
     state_tx: mpsc::Sender<Msg>,
     led_rx: watch::Receiver<Option<bool>>,
     health: Arc<Mutex<health::Sampler>>,
 }
 
-/* Builds the shadow "reported" document: state.rs's current devices, plus
- * the real LED if we know its state (None: the M4 hasn't answered yet, so
- * we say nothing rather than guess), plus the "system" health section.
- *
- * `clear_desired`: devices whose cloud command has just been carried out.
- * For those, the same message also sets `"desired": {"devices": {id: null}}`
- * -- in a shadow update, null means "delete this key". Why: AWS keeps
- * "desired" until someone removes it, and sends a new delta whenever
- * reported differs from it. So if the cloud once said "ld7 on" and a user
- * later turned the LED off on the touchscreen, AWS would immediately send
- * "turn it on" again -- the old command would override local control
- * forever (found testing against real AWS; the dev broker has no shadow
- * service, so it can't show this). Clearing "desired" once the command is
- * done is AWS's documented pattern for devices that can also be changed
- * locally. (The dev broker just relays this; harmless.)
- *
- * `None` only if state.rs has stopped (the daemon is shutting down). */
 impl Reporter {
-    async fn payload(&self, clear_desired: &[DeviceId]) -> Option<Vec<u8>> {
+    /* Every device the hub has right now: state.rs's devices plus the real
+     * LED, if we know its state yet (None: the M4 hasn't answered yet, so
+     * we say nothing rather than guess). `None` only if state.rs has
+     * stopped (the daemon is shutting down). */
+    async fn devices(&self) -> Option<HashMap<DeviceId, DeviceState>> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.state_tx.send(Msg::GetAllDevices { reply: reply_tx }).await.ok()?;
-        let mut devices = reply_rx.await.unwrap_or_default();
+        let mut devices = reply_rx.await.ok()?;
         /* Copy the LED value out in one statement: borrow() holds a read
          * lock on the watch channel, which must not be kept any longer. */
         let led = *self.led_rx.borrow();
@@ -447,66 +387,139 @@ impl Reporter {
                 HashMap::from([("on".to_string(), serde_json::json!(on))]),
             );
         }
-        /* A poisoned Mutex (another thread panicked while holding it) can't
-         * happen here, but if it did, the Sampler inside is still usable --
-         * into_inner() takes it anyway instead of crashing the report. */
-        let system = self
-            .health
+        Some(devices)
+    }
+
+    /* Removes a device from state.rs and waits until that has actually
+     * happened: state.rs handles its messages strictly in order, so once
+     * the GetDevice sent right after RemoveDevice is answered, the removal
+     * is done. false only if state.rs has stopped. */
+    async fn remove_device(&self, id: &DeviceId) -> bool {
+        if self.state_tx.send(Msg::RemoveDevice { id: id.clone() }).await.is_err() {
+            return false;
+        }
+        let (reply_tx, reply_rx) = oneshot::channel();
+        let asked = self.state_tx.send(Msg::GetDevice { id: id.clone(), reply: reply_tx }).await;
+        asked.is_ok() && reply_rx.await.is_ok()
+    }
+
+    /* The hub's health section (see health.rs). A poisoned Mutex (another
+     * thread panicked while holding it) can't happen here, but if it did,
+     * the Sampler inside is still usable -- into_inner() takes it anyway
+     * instead of crashing the report. */
+    fn system(&self, device_count: usize) -> serde_json::Value {
+        self.health
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .sample(devices.len());
-        let mut doc = serde_json::json!({
-            "state": { "reported": { "devices": devices, "system": system } }
-        });
-        if !clear_desired.is_empty() {
-            let cleared: serde_json::Map<String, serde_json::Value> = clear_desired
-                .iter()
-                .map(|id| (id.clone(), serde_json::Value::Null))
-                .collect();
-            doc["state"]["desired"] = serde_json::json!({ "devices": cleared });
-        }
-        serde_json::to_vec(&doc).ok()
+            .sample(device_count)
     }
 }
 
-/* Publishes the reported state every `interval`, and also right away
- * whenever the LED or any state.rs device changes (e.g. someone tapped the
- * touchscreen, or a phone changed a device over the LAN), so the cloud sees
- * it within a moment instead of up to a whole interval later.
+/* The ONLY place that publishes. It keeps `published`: the properties of
+ * each device as last sent to the cloud. Whenever something might have
+ * changed, it compares that with what the hub has now (shadow::changes)
+ * and sends exactly the difference: a report for each new or changed
+ * device, a delete for each device that's gone. So devices are only sent
+ * when they change, and nothing needs to tell this task WHICH device
+ * changed.
  *
- * A change made BY the cloud gets reported twice (once by the run() loop,
- * with the "desired" clean-up, and once here because the device changed).
- * Harmless -- same content -- and simpler than coordinating the two.
+ * It wakes up on:
+ *   - a Sync message from run()  (reconnect, command done, shadow deleted)
+ *   - the LED or state.rs changing
+ *   - the timer: the hub's `system` report, every `interval`
  *
- * Only while connected: rumqttc's request queue holds just 10 requests and
- * is only emptied once the connection is back. Reports queued during an
- * outage used to fill it completely, so after reconnecting (a) the cloud
- * first received a batch of old, stale states, and (b) the resubscribe
- * requests no longer fit, so the board never heard commands again. While
- * disconnected there's nothing worth queueing anyway: the run() loop sends
- * a fresh report as soon as it reconnects. */
-async fn report_periodically(
+ * Only while connected: rumqttc's request queue is only emptied once the
+ * connection is back. In #26, reports queued during an outage filled it
+ * completely, so after reconnecting the cloud first got stale states and
+ * the resubscribes no longer fit -- the board never heard commands again.
+ * While disconnected nothing is sent; the Resync after reconnecting brings
+ * the cloud up to date in one go. Unlike run(), this task CAN wait for
+ * room in the queue (publish().await): run() keeps emptying it. */
+#[allow(clippy::too_many_arguments)] /* all distinct handles; a struct would just rename them */
+async fn reporting_task(
     client: AsyncClient,
     reporter: Reporter,
     rpmsg_tx: mpsc::Sender<rpmsg::Cmd>,
     mut state_changed_rx: watch::Receiver<()>,
-    topic: String,
+    mut sync_rx: mpsc::Receiver<Sync>,
+    topics: shadow::Topics,
     connected: Arc<AtomicBool>,
     interval: Duration,
 ) {
+    let mut published: HashMap<DeviceId, DeviceState> = HashMap::new();
     /* Our own receiver for the LED, only to be woken by its changes (the
      * Reporter's copy is for reading the value). */
     let mut led_rx = reporter.led_rx.clone();
     let mut tick = tokio::time::interval(interval);
+    let publisher = Publisher {
+        client: &client,
+        connected: &connected,
+    };
+
     loop {
-        /* select! waits for whichever happens first. `changed()` returns
-         * Err only if the sending actor is gone; then that branch is
-         * skipped and we just keep ticking. */
+        /* select! waits for whichever happens first. `biased` = check the
+         * branches in this order instead of randomly, so a Sync message
+         * (e.g. "shadow deleted") is always handled before a state change
+         * that was caused by it. `changed()` returns Err only if the
+         * sending actor is gone; then that branch is simply skipped. */
         tokio::select! {
+            biased;
+            Some(msg) = sync_rx.recv() => match msg {
+                Sync::Resync => {
+                    let Some(devices) = reporter.devices().await else { break };
+                    /* First delete the shadows of devices removed while we
+                     * were offline (still in `published`, gone here)... */
+                    sync_devices(&publisher, &topics, &mut published, &devices, None).await;
+                    /* ...then send every device again: the cloud may have
+                     * changed while we were away (e.g. a shadow deleted and
+                     * recreated), so don't trust `published` for those. */
+                    published.retain(|id, _| !devices.contains_key(id));
+                    sync_devices(&publisher, &topics, &mut published, &devices, None).await;
+                    for id in devices.keys() {
+                        publisher.send(&topics.device_get(id), Vec::new()).await;
+                    }
+                    let system = reporter.system(devices.len());
+                    publisher.send(&topics.classic_update(), shadow::classic_report(&system, true)).await;
+                    continue;
+                }
+                Sync::CommandDone(id) => {
+                    let Some(devices) = reporter.devices().await else { break };
+                    sync_devices(&publisher, &topics, &mut published, &devices, Some(&id)).await;
+                    continue;
+                }
+                Sync::ShadowDeleted(id) => {
+                    /* It's gone in the cloud: forget it was ever sent.
+                     * AWS also sends this as confirmation when WE deleted
+                     * the shadow (device removed locally). We recognise that
+                     * echo because sync_devices already took the device out
+                     * of `published` when it sent the delete -- nothing
+                     * left to do then. */
+                    let ours = published.remove(&id).is_none();
+                    if ours {
+                        continue;
+                    }
+                    if id == LED_DEVICE_ID {
+                        /* Real hardware can't be removed: fall through to
+                         * the sync below, which sees ld7 as new and
+                         * recreates its shadow. */
+                        println!("mqtt: shadow of {LED_DEVICE_ID} was deleted; it's built-in hardware, recreating it");
+                    } else {
+                        /* Remove the device here and WAIT until state.rs
+                         * has done it, before this task does anything else
+                         * -- so no sync can see it still there and recreate
+                         * its shadow. The bell state.rs rings afterwards
+                         * finds nothing to do: gone here, gone in the cloud. */
+                        if reporter.remove_device(&id).await {
+                            println!("mqtt: shadow of {id} was deleted in the cloud, device removed");
+                        }
+                        continue;
+                    }
+                }
+            },
             _ = tick.tick() => {
                 /* Nobody has asked the M4 about the LED yet (e.g. the
-                 * touchscreen UI isn't running): ask once per tick until
-                 * it answers, so the LED appears in the shadow anyway. The
+                 * touchscreen UI isn't running): ask once per tick until it
+                 * answers, so the LED appears in the cloud anyway. The
                  * answer lands in led_rx through rpmsg.rs's watch channel. */
                 if led_rx.borrow().is_none() {
                     let (reply_tx, reply_rx) = oneshot::channel();
@@ -514,21 +527,80 @@ async fn report_periodically(
                         let _ = tokio::time::timeout(M4_REPLY_TIMEOUT, reply_rx).await;
                     }
                 }
+                let Some(devices) = reporter.devices().await else { break };
+                let system = reporter.system(devices.len());
+                publisher.send(&topics.classic_update(), shadow::classic_report(&system, false)).await;
+                continue;
             }
             Ok(()) = led_rx.changed() => {}
             Ok(()) = state_changed_rx.changed() => {}
         }
-        /* mark_unchanged marks the current value as seen, so changed()
-         * above only fires again for a NEW change. */
+        /* A device may have changed: send the difference. mark_unchanged
+         * marks the current values as seen, so changed() above only fires
+         * again for a NEW change. */
         led_rx.mark_unchanged();
         state_changed_rx.mark_unchanged();
-        if !connected.load(Ordering::Relaxed) {
-            continue;
+        let Some(devices) = reporter.devices().await else { break };
+        sync_devices(&publisher, &topics, &mut published, &devices, None).await;
+    }
+}
+
+/* Brings the cloud from `published` to `current`, and records what was
+ * sent. `command_done`: a device whose cloud command was just carried out
+ * -- its report also clears "desired" (see shadow::device_report), and it's
+ * sent even if its properties didn't change.
+ *
+ * Nothing is recorded while disconnected, so the next Resync still sends
+ * it. A change made BY the cloud can occasionally be reported twice (once
+ * when the device changes, once for CommandDone) -- same content, harmless. */
+async fn sync_devices(
+    publisher: &Publisher<'_>,
+    topics: &shadow::Topics,
+    published: &mut HashMap<DeviceId, DeviceState>,
+    current: &HashMap<DeviceId, DeviceState>,
+    command_done: Option<&DeviceId>,
+) {
+    let mut changes = shadow::changes(published, current);
+    if let Some(id) = command_done {
+        if current.contains_key(id) && !changes.updated.contains(id) {
+            changes.updated.push(id.clone());
         }
-        let Some(payload) = reporter.payload(&[]).await else {
-            break;
-        };
-        let _ = client.try_publish(topic.as_str(), QoS::AtLeastOnce, false, payload);
+    }
+    for id in changes.updated {
+        let properties = &current[&id];
+        let clear = command_done == Some(&id);
+        if publisher.send(&topics.device_update(&id), shadow::device_report(properties, clear)).await {
+            published.insert(id, properties.clone());
+        }
+    }
+    for id in changes.removed {
+        if publisher.send(&topics.device_delete(&id), Vec::new()).await {
+            println!("mqtt: {id} was removed, deleting its shadow");
+            published.remove(&id);
+        }
+    }
+}
+
+/* Publishes only while connected (see reporting_task for why). */
+struct Publisher<'a> {
+    client: &'a AsyncClient,
+    connected: &'a AtomicBool,
+}
+
+impl Publisher<'_> {
+    /* true = handed to rumqttc (it delivers it once the broker is
+     * reachable); false = not sent, because we're offline. */
+    async fn send(&self, topic: &str, payload: Vec<u8>) -> bool {
+        if !self.connected.load(Ordering::Relaxed) {
+            return false;
+        }
+        match self.client.publish(topic, QoS::AtLeastOnce, false, payload).await {
+            Ok(()) => true,
+            Err(e) => {
+                println!("mqtt: could not publish to {topic}: {e}");
+                false
+            }
+        }
     }
 }
 

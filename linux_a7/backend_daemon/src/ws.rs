@@ -14,6 +14,7 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::rpmsg;
+use crate::shadow;
 use crate::state::{DeviceId, DeviceState, Msg};
 
 /* What a connected client is allowed to ask for. This deliberately mirrors
@@ -210,6 +211,17 @@ async fn handle_request(req: ClientRequest, app_state: &AppState) -> ServerRespo
             ServerResponse::AllDevices { devices }
         }
         ClientRequest::UpdateDevice { id, properties } => {
+            /* Every device becomes an AWS shadow named after its id
+             * (shadow.rs), so only ids AWS accepts as names get in --
+             * refused here with a clear reason, rather than failing later,
+             * silently, somewhere in the cloud sync. */
+            if !shadow::valid_name(&id) {
+                return ServerResponse::Error {
+                    message: format!(
+                        "invalid device id {id:?}: use 1-64 letters, digits, '-', '_' or ':'"
+                    ),
+                };
+            }
             if state_tx
                 .send(Msg::UpdateDevice { id, properties })
                 .await

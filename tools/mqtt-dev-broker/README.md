@@ -61,13 +61,18 @@ O="--cert /mosquitto/certs/operator.crt --key /mosquitto/certs/operator.key"
 # See everything the board reports (every 10 s, and after each change)
 $X mosquitto_sub $H $O -t '$aws/things/dk2-01/shadow/#' -v
 
-# Send the board a command (a "delta": what should change)
-$X mosquitto_pub $H $O -t '$aws/things/dk2-01/shadow/update/delta' \
-  -m '{"state":{"devices":{"lamp-1":{"on":true}}}}'
+# Send one device a command (a "delta": what should change). Every
+# device has its own named shadow: .../shadow/name/<device-id>/...
+$X mosquitto_pub $H $O -t '$aws/things/dk2-01/shadow/name/ld7/update/delta' \
+  -m '{"state":{"on":true}}'
+
+# Pretend the cloud deleted a device's shadow -> the board removes the device
+$X mosquitto_pub $H $O -t '$aws/things/dk2-01/shadow/name/lamp-1/delete/accepted' -m '{}'
 ```
 
-The board applies the delta to its device state and immediately reports
-back `{"state":{"reported":{"devices":{...}}}}`.
+The board applies the delta and immediately reports that device back on
+its own shadow, `{"state":{"reported":{"on":true},"desired":null}}`. The
+hub's health goes to the classic shadow (`.../shadow/update`) every 10 s.
 
 ## Board-side settings
 
