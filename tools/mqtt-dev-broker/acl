@@ -1,0 +1,15 @@
+# Per-device access rules -- the dev equivalent of an AWS IoT policy.
+# %u = the client's username = the Common Name of its certificate (see
+# use_identity_as_username in mosquitto.conf). So a device can read and
+# write only its own shadow, and one hub can never see or command another.
+#
+# The topics are AWS IoT's real Device Shadow topics ($aws/things/<name>/
+# shadow/...). Mosquitto relays them like any other topic, so the board's
+# code is identical against this broker and against AWS.
+pattern readwrite $aws/things/%u/#
+
+# The "operator" identity (a certificate with CN=operator, created with
+# `./gen_certs.sh <ip> operator`) plays the cloud/app side during testing:
+# it may read every device's shadow and send any device a desired state.
+user operator
+topic readwrite $aws/things/#

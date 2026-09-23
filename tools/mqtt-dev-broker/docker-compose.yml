@@ -1,0 +1,19 @@
+# Development MQTT broker (Mosquitto) for backend_daemon's cloud sync.
+# Runs on the dev PC; the board connects to it over the LAN on port 8883.
+# Start: `docker compose up -d`   Logs: `docker compose logs -f`
+# See README.md for the full workflow.
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: uc-mqtt-dev-broker
+    ports:
+      - "8883:8883"
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./acl:/mosquitto/config/acl:ro
+      - ./certs:/mosquitto/certs:ro
+      - mqtt-data:/mosquitto/data
+    restart: unless-stopped
+
+volumes:
+  mqtt-data:
