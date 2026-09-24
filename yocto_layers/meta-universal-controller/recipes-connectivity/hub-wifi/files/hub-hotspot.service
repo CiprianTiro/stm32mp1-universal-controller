@@ -1,0 +1,16 @@
+# The setup hotspot (issue #36): the hub's own WiFi network "UC-Setup-XXXX",
+# for setting it up when it has no network at all. NOT enabled: backend_daemon
+# starts and stops it (hotspot.rs) -- automatically when there's no network
+# after boot, or by a tap on the touchscreen -- after writing hostapd's
+# config (with a fresh password) to /run/hub-hotspot/hostapd.conf.
+[Unit]
+Description=Universal Controller setup hotspot
+# The hotspot is a second interface ON the WiFi chip (uap0 next to wlan0);
+# without wlan0 there's no chip to put it on.
+BindsTo=sys-subsystem-net-devices-wlan0.device
+After=sys-subsystem-net-devices-wlan0.device wpa_supplicant@wlan0.service
+
+[Service]
+ExecStartPre=/usr/libexec/hub-hotspot-if up
+ExecStart=/usr/sbin/hostapd /run/hub-hotspot/hostapd.conf
+ExecStopPost=/usr/libexec/hub-hotspot-if down

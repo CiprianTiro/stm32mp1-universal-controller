@@ -156,9 +156,41 @@ impl Auth {
         status_of(self.lock().pairing.as_ref())
     }
 
+    /* For Bluetooth setup (ble.rs, issue #36), which proves knowledge of
+     * the code WITHOUT sending it (SPAKE2): one attempt begins. Returns
+     * the code the key exchange is built on, and counts the attempt
+     * against the same MAX_WRONG_CODES as a typed code -- counted at the
+     * START, not only on failure, because the exchange's answer already
+     * tells the other side whether its guess was right: without counting
+     * here, a fake app could test code after code for free. */
+    pub fn begin_code_attempt(&self) -> Result<String, String> {
+        let mut inner = self.lock();
+        let Some(pairing) = inner.pairing.as_mut() else {
+            return Err("no pairing in progress: start it on the hub's screen".into());
+        };
+        match status_of(Some(pairing)).state {
+            "waiting" => {}
+            "paired" => return Err("this code was already used: start a new pairing on the hub's screen".into()),
+            "locked" => return Err("too many attempts: start a new pairing on the hub's screen".into()),
+            _ => return Err("the code expired: start a new pairing on the hub's screen".into()),
+        }
+        pairing.wrong += 1;
+        Ok(pairing.code.clone())
+    }
+
     /* A client offers `code`. On success it's paired: a new client entry
      * with a fresh key, which is returned (and never again). */
     pub fn pair(&self, code: &str, client_name: &str) -> Result<Paired, String> {
+        self.pair_inner(code, client_name, false)
+    }
+
+    /* Bluetooth setup: the code was already proven by the key exchange
+     * (whose attempt was counted in begin_code_attempt). */
+    pub fn pair_proven(&self, code: &str, client_name: &str) -> Result<Paired, String> {
+        self.pair_inner(code, client_name, true)
+    }
+
+    fn pair_inner(&self, code: &str, client_name: &str, proven: bool) -> Result<Paired, String> {
         let name = client_name.trim();
         if name.is_empty() || name.chars().count() > 40 || name.chars().any(char::is_control) {
             return Err("client_name must be 1-40 characters".into());
@@ -167,8 +199,12 @@ impl Auth {
         let Some(pairing) = inner.pairing.as_mut() else {
             return Err("no pairing in progress: start it on the hub's screen".into());
         };
+        /* A Bluetooth attempt that got this far (begin_code_attempt) has
+         * already used up its try; `Proven` skips the state check it would
+         * otherwise fail after the 5th attempt. */
         match status_of(Some(pairing)).state {
             "waiting" => {}
+            "locked" if proven => {}
             "paired" => return Err("this code was already used: start a new pairing on the hub's screen".into()),
             "locked" => return Err("too many wrong codes: start a new pairing on the hub's screen".into()),
             _ => return Err("the code expired: start a new pairing on the hub's screen".into()),
@@ -458,6 +494,21 @@ mod tests {
         let codes: std::collections::HashSet<String> = (0..20).map(|_| a.random_code()).collect();
         assert!(codes.iter().all(|c| c.len() == 6 && c.bytes().all(|b| b.is_ascii_digit())));
         assert!(codes.len() > 15);
+    }
+
+    #[test]
+    fn bluetooth_attempts_count_up_front() {
+        let (a, _) = auth();
+        let code = a.start_pairing().code.unwrap();
+        for _ in 0..MAX_WRONG_CODES {
+            assert_eq!(a.begin_code_attempt().unwrap(), code);
+        }
+        /* The 6th attempt is refused... */
+        assert!(a.begin_code_attempt().unwrap_err().contains("too many"));
+        /* ...but the 5th, if its exchange succeeded, may still finish. */
+        assert!(a.pair_proven(&code, "Phone").is_ok());
+        /* A typed code is refused at that point. */
+        assert!(a.pair(&code, "Other").is_err());
     }
 
     #[test]

@@ -100,6 +100,9 @@ pub struct WifiStatus {
     /* The network we're joined to, else the saved one we're trying to join. */
     pub ssid: Option<String>,
     pub signal_dbm: Option<i32>,
+    /* The 2.4 GHz channel (1-14) while connected. The setup hotspot must
+     * use the same one (#36): the chip can only be on one channel. */
+    pub channel: Option<u8>,
     /* 0-4, for a signal icon (see bars()). */
     pub bars: u8,
     pub ip: Option<String>,
@@ -118,6 +121,10 @@ pub struct Network {
     pub secure: bool,
     /* The saved network. */
     pub saved: bool,
+    /* Its 2.4 GHz channel (of the strongest router with this name). The
+     * setup hotspot uses it to decide whether it can stay open while the
+     * hub tries this network (#36). */
+    pub channel: Option<u8>,
 }
 
 /* ------------------------------------------------------------------ */
@@ -207,15 +214,88 @@ pub async fn watch_uplink(tx: tokio::sync::watch::Sender<Option<String>>) {
         tick.tick().await;
         let table = std::fs::read_to_string("/proc/net/route").unwrap_or_default();
         let now = default_route_interface(&table);
-        tx.send_if_modified(|current| {
+        let changed = tx.send_if_modified(|current| {
             if *current == now {
                 return false;
             }
             println!("network: traffic now goes over {}", now.as_deref().unwrap_or("nothing (offline)"));
-            *current = now;
+            *current = now.clone();
             true
         });
+        /* The hub's .local name follows the link too (see follow_avahi). */
+        if let (true, Some(iface)) = (changed, now) {
+            if let Err(e) = follow_avahi(&iface).await {
+                println!("network: could not move the .local name to {iface}: {e}");
+            }
+        }
     }
+}
+
+/* Where avahi's one-interface config goes (hub-avahi-start in the hub-wifi
+ * recipe starts avahi with it). */
+const AVAHI_STOCK_CONF: &str = "/etc/avahi/avahi-daemon.conf";
+const AVAHI_HUB_CONF: &str = "/run/hub-avahi/avahi-daemon.conf";
+
+/* Announces the hub's .local name (stm32mp1.local) only on `iface`, the
+ * link that carries traffic: with the cable AND WiFi on the same network,
+ * avahi on both hears its own announcement from the other interface with
+ * a different address, takes it for another device, and renames the hub
+ * "stm32mp1-2.local" (see hub-avahi-start in the hub-wifi recipe). Writes
+ * avahi's config with that one interface and restarts avahi -- about a
+ * second without the name, only when the link changes. */
+async fn follow_avahi(iface: &str) -> Result<(), String> {
+    let iface = iface.to_string();
+    tokio::task::spawn_blocking(move || {
+        let stock = std::fs::read_to_string(AVAHI_STOCK_CONF).map_err(|e| format!("{AVAHI_STOCK_CONF}: {e}"))?;
+        let conf = avahi_config(&stock, &iface);
+        if std::fs::read_to_string(AVAHI_HUB_CONF).ok().as_deref() == Some(conf.as_str()) {
+            return Ok(()); /* already on this interface */
+        }
+        let dir = std::path::Path::new(AVAHI_HUB_CONF).parent().unwrap_or(Path::new("/run"));
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        std::fs::write(AVAHI_HUB_CONF, conf).map_err(|e| e.to_string())?;
+        let status = std::process::Command::new("systemctl")
+            .args(["restart", "avahi-daemon.service"])
+            .status()
+            .map_err(|e| format!("systemctl: {e}"))?;
+        if !status.success() {
+            return Err("systemctl restart avahi-daemon failed".into());
+        }
+        println!("network: the .local name is now announced on {iface} only");
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/* The stock avahi config with `allow-interfaces=<iface>` in its [server]
+ * section (replacing one that's already there). */
+fn avahi_config(stock: &str, iface: &str) -> String {
+    let mut out = String::new();
+    let mut in_server = false;
+    let mut done = false;
+    for line in stock.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            if in_server && !done {
+                out.push_str(&format!("allow-interfaces={iface}\n"));
+                done = true;
+            }
+            in_server = trimmed == "[server]";
+        }
+        if in_server && trimmed.trim_start_matches('#').trim_start().starts_with("allow-interfaces") {
+            continue; /* ours replaces it */
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    if !done {
+        if !in_server {
+            out.push_str("[server]\n");
+        }
+        out.push_str(&format!("allow-interfaces={iface}\n"));
+    }
+    out
 }
 
 /* ------------------------------------------------------------------ */
@@ -242,6 +322,7 @@ async fn status() -> Status {
             let fields = parse_key_values(&text);
             wifi.connected = fields.get("wpa_state").map(String::as_str) == Some("COMPLETED");
             wifi.ssid = fields.get("ssid").map(|s| unescape_ssid(s));
+            wifi.channel = fields.get("freq").and_then(|f| f.parse().ok()).and_then(channel_of);
         }
         if wifi.connected {
             if let Ok(text) = ctrl.request("SIGNAL_POLL").await {
@@ -600,7 +681,7 @@ fn parse_scan_results(text: &str, saved_ssid: Option<&str>) -> Vec<Network> {
     let mut by_name: HashMap<String, Network> = HashMap::new();
     for line in text.lines().skip(1) {
         let cols: Vec<&str> = line.split('\t').collect();
-        let [_bssid, _freq, signal, flags, ssid] = cols.as_slice() else {
+        let [_bssid, freq, signal, flags, ssid] = cols.as_slice() else {
             continue;
         };
         let ssid = unescape_ssid(ssid);
@@ -616,6 +697,7 @@ fn parse_scan_results(text: &str, saved_ssid: Option<&str>) -> Vec<Network> {
             signal_dbm,
             bars: bars(signal_dbm),
             ssid: ssid.clone(),
+            channel: freq.parse().ok().and_then(channel_of),
         };
         let better = by_name.get(&ssid).map_or(true, |known| signal_dbm > known.signal_dbm);
         if better {
@@ -675,6 +757,17 @@ fn most_common(items: &[String]) -> Option<String> {
         .into_iter()
         .max_by(|(a, ca), (b, cb)| ca.cmp(cb).then_with(|| b.cmp(a)))
         .map(|(item, _)| item.clone())
+}
+
+/* A 2.4 GHz frequency in MHz -> its channel: 2412 = 1, every 5 MHz one
+ * more up to 13 (2472); 14 is the odd one out at 2484. None for anything
+ * else (5 GHz, which this chip doesn't do anyway). */
+fn channel_of(mhz: u32) -> Option<u8> {
+    match mhz {
+        2484 => Some(14),
+        2412..=2472 if (mhz - 2412) % 5 == 0 => Some(((mhz - 2412) / 5 + 1) as u8),
+        _ => None,
+    }
 }
 
 /* Signal strength in dBm (always negative; closer to 0 = stronger) ->
@@ -833,6 +926,8 @@ mod tests {
         assert_eq!(networks[0].signal_dbm, -26);
         assert!(networks[0].saved && networks[0].secure);
         assert!(!networks[2].secure && !networks[2].saved);
+        assert_eq!(networks[0].channel, Some(3));
+        assert_eq!(networks[2].channel, Some(6));
         assert_eq!(networks[2].bars, 0);
     }
 
@@ -906,6 +1001,27 @@ mod tests {
             wlan0\t00000000\t0101A8C0\t0003\t0\t0\t20\n";
         assert_eq!(default_route_interface(wifi_only), Some("wlan0".to_string()));
         assert_eq!(default_route_interface("Iface\tDestination\n"), None);
+    }
+
+    #[test]
+    fn avahi_on_one_interface() {
+        let stock = "[server]\nuse-ipv4=yes\n#allow-interfaces=eth0\n[publish]\npublish-hinfo=no\n";
+        let conf = avahi_config(stock, "wlan0");
+        assert_eq!(conf, "[server]\nuse-ipv4=yes\nallow-interfaces=wlan0\n[publish]\npublish-hinfo=no\n");
+        /* Applied again: still exactly one line. */
+        assert_eq!(avahi_config(&conf, "end0").matches("allow-interfaces").count(), 1);
+        /* No [server] section at all: one is added. */
+        assert!(avahi_config("[publish]\n", "end0").ends_with("[server]\nallow-interfaces=end0\n"));
+    }
+
+    #[test]
+    fn channels() {
+        assert_eq!(channel_of(2412), Some(1));
+        assert_eq!(channel_of(2422), Some(3));
+        assert_eq!(channel_of(2472), Some(13));
+        assert_eq!(channel_of(2484), Some(14));
+        assert_eq!(channel_of(5180), None);
+        assert_eq!(channel_of(2413), None);
     }
 
     #[test]

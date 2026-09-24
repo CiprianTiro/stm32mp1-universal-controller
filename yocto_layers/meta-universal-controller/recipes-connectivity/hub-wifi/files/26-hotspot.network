@@ -1,0 +1,21 @@
+# The setup hotspot's interface (issue #36): a fixed address, and a DHCP
+# server (built into systemd-networkd) that gives phones joining the hotspot
+# an address, so they can open the setup page at http://192.168.4.1.
+[Match]
+Name=uap0
+
+[Network]
+Address=192.168.4.1/24
+DHCPServer=yes
+# Only IPv4: the setup page is reached by one fixed address.
+LinkLocalAddressing=no
+IPv6AcceptRA=no
+
+[DHCPServer]
+PoolOffset=10
+PoolSize=40
+# No router and no DNS: the hotspot leads nowhere but the setup page. Phones
+# then mark it "no internet" and keep using mobile data for everything else,
+# instead of trying to reach the internet through the hub.
+EmitRouter=no
+EmitDNS=no

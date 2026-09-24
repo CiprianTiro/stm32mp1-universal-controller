@@ -7,9 +7,11 @@ use tokio::time::interval;
  * the final binary at all. It does NOT run anything in them; nothing in
  * either file executes until something below explicitly spawns it. */
 mod auth;
+mod ble;
 mod control;
 mod device;
 mod health;
+mod hotspot;
 mod mqtt;
 mod network;
 mod rpmsg;
@@ -96,6 +98,11 @@ async fn main() {
     let (network_tx, network_rx) = tokio::sync::mpsc::channel(8);
     tokio::spawn(network::run(network_rx));
 
+    /* The setup hotspot (issue #36): opens by itself when the hub has had
+     * no network for a while after start, or by a tap on the touchscreen. */
+    let hotspot = hotspot::Hotspot::new(network_tx.clone());
+    tokio::spawn(hotspot::run_auto(hotspot.clone()));
+
     /* Who may use the LAN (issue #35): the paired clients (auth.rs, saved
      * as clients.json next to the registry) and the hub's TLS identity
      * (tls.rs, created on first start). Without a TLS identity the LAN
@@ -117,9 +124,17 @@ async fn main() {
         }
     };
 
+    /* Bluetooth setup (issue #36): while a pairing code is on the screen,
+     * the phone app can send the WiFi details over Bluetooth and get paired
+     * in the same step. Advertised under the same name as the setup
+     * hotspot. */
+    let fingerprint = identity.as_ref().map(|i| i.fingerprint.clone()).unwrap_or_default();
+    let ble = ble::Ble::new(auth.clone(), network_tx.clone(), fingerprint, hotspot.status().ssid);
+    tokio::spawn(ble::run(ble));
+
     /* The WebSocket API (ws.rs), protocol v2: ws://127.0.0.1:8080 for the
      * hub itself, wss://<hub>:8443 (paired clients only) for the LAN. */
-    tokio::spawn(ws::run(control, auth, identity, network_tx, events_tx, local_clients));
+    tokio::spawn(ws::run(control, auth, hotspot, identity, network_tx, events_tx, local_clients));
 
     /* SIGTERM is what systemd sends on stop/restart; SIGINT covers Ctrl-C
      when running this interactively during development. */

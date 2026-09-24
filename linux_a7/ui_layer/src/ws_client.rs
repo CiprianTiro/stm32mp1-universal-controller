@@ -51,6 +51,9 @@ pub enum Request {
     CancelPairing,
     ListClients,
     RevokeClient { id: String },
+    // The setup hotspot (issue #36; only accepted from the hub itself).
+    StartHotspot,
+    StopHotspot,
 }
 
 /// A device as backend_daemon describes it (its device.rs). Only what this
@@ -110,6 +113,22 @@ pub struct NetworkStatus {
     pub uplink: Option<String>,
     pub ethernet: EthernetStatus,
     pub wifi: WifiStatus,
+    /// Not part of network.rs's status: ws.rs sends it next to it, in the
+    /// same message (see ServerMessage::NetworkStatus); filled in there.
+    #[serde(skip)]
+    pub hotspot: Hotspot,
+}
+
+/// The setup hotspot (backend_daemon's hotspot.rs, issue #36).
+#[derive(Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct Hotspot {
+    pub active: bool,
+    pub ssid: String,
+    /// Only sent to the hub's own screen.
+    pub password: Option<String>,
+    pub url: String,
+    pub last_error: Option<String>,
+    pub connecting: bool,
 }
 
 #[derive(Deserialize, Clone, Debug, Default, PartialEq)]
@@ -169,7 +188,14 @@ pub struct WifiNetwork {
 enum ServerMessage {
     Devices { devices: Vec<Device> },
     Device {},
-    NetworkStatus { status: NetworkStatus },
+    NetworkStatus {
+        status: NetworkStatus,
+        #[serde(default)]
+        hotspot: Hotspot,
+    },
+    /// The reply to StartHotspot/StopHotspot. Its content isn't needed: the
+    /// network status asked for right afterwards carries the same.
+    Hotspot {},
     WifiNetworks { networks: Vec<WifiNetwork> },
     Pairing(Pairing),
     Clients { clients: Vec<Client> },
@@ -190,6 +216,7 @@ pub enum Action {
     Forget,
     Country,
     Revoke,
+    Hotspot,
 }
 
 /// What this module reports back to the GUI thread. main.rs drains these
@@ -365,11 +392,18 @@ fn to_update(request: &Request, reply: ServerMessage) -> Option<Update> {
         Request::WifiForget => Some(Action::Forget),
         Request::SetWifiCountry { .. } => Some(Action::Country),
         Request::RevokeClient { .. } => Some(Action::Revoke),
+        Request::StartHotspot | Request::StopHotspot => Some(Action::Hotspot),
         _ => None,
     };
     match (request, reply) {
         (_, ServerMessage::Devices { devices }) => Some(Update::Devices(devices)),
-        (_, ServerMessage::NetworkStatus { status }) => Some(Update::Network(status)),
+        (_, ServerMessage::NetworkStatus { mut status, hotspot }) => {
+            status.hotspot = hotspot;
+            Some(Update::Network(status))
+        }
+        // Started/stopped: the next network status (asked for right away,
+        // see ActionDone in serve) shows it.
+        (_, ServerMessage::Hotspot {}) => action.map(|a| Update::ActionDone(a, Ok(()))),
         (_, ServerMessage::WifiNetworks { networks }) => Some(Update::Networks(networks)),
         (_, ServerMessage::Pairing(pairing)) => Some(Update::Pairing(pairing)),
         (_, ServerMessage::Clients { clients }) => Some(Update::Clients(clients)),
