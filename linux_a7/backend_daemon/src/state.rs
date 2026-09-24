@@ -9,7 +9,7 @@
  * - oneshot: a channel built for exactly one message, then it's done. This
  *   is the "return envelope" -- used only for sending a single reply back
  *   to whoever asked a question. */
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use tokio::sync::{mpsc, oneshot, watch};
 
 /* `type X = Y;` just gives an existing type a new, more meaningful name --
@@ -65,17 +65,11 @@ pub enum Msg {
 /*
  * THIS FUNCTION IS THE ACTOR ITSELF.
  *
- * IMPORTANT, since this was the actual question: calling `run(...)` here in
- * this file does NOT start it running. Like any async fn, calling it just
- * builds an inert Future -- nothing executes until something spawns it onto
- * the Tokio runtime. Search this whole crate right now and `run` is only
- * ever actually spawned in ONE place: `spawn_actor()` in the test module
- * below (`tokio::spawn(run(rx))`), which only runs when you execute
- * `cargo test` -- never when you run the real compiled daemon. `main.rs`
- * currently only has `mod state;`, which just tells the compiler "compile
- * this file as part of the crate" -- it does not call or spawn anything in
- * it. That wiring (main.rs actually spawning this actor for real) is
- * future work, for when ws.rs exists and needs something to talk to.
+ * Calling `run(...)` does NOT start it running. Like any async fn,
+ * calling it just builds an inert Future -- nothing executes until
+ * something spawns it onto the Tokio runtime. In the real daemon that
+ * happens in exactly one place, main.rs (`tokio::spawn(state::run(...))`);
+ * in the tests, in `spawn_actor()` below.
  *
  * `mut rx: mpsc::Receiver<Msg>` -- this function takes ownership of the
  * RECEIVING half of a mailbox (created elsewhere, handed in as a
@@ -90,13 +84,25 @@ pub enum Msg {
  * LED watch channel, just without a value, because mqtt.rs asks for the
  * full device list anyway.)
  */
-pub async fn run(mut rx: mpsc::Receiver<Msg>, changed_tx: watch::Sender<()>) {
-    /* THE FILING CABINET. This is the one and only copy of hub state that
-     * exists anywhere -- a local variable, private to this function. No
-     * other task can ever reach in and touch this directly; the only way
+/*
+ * `devices` (issue #33): the registry as loaded from disk at start (see
+ * load_registry), so devices survive restarts. `save_tx`: store.rs's
+ * writer for the registry file -- after every real change the whole
+ * registry is encoded and handed over; the writer puts it on the flash in
+ * the background, so this loop never waits for a slow fsync.
+ */
+pub async fn run(
+    mut rx: mpsc::Receiver<Msg>,
+    changed_tx: watch::Sender<()>,
+    mut devices: HashMap<DeviceId, DeviceState>,
+    save_tx: watch::Sender<Vec<u8>>,
+) {
+    /* THE FILING CABINET is `devices` above. It's the one and only copy of
+     * hub state that exists anywhere -- owned by this function, so no
+     * other task can ever reach in and touch it directly; the only way
      * anyone else affects it is by sending a Msg through the channel above,
-     * which this same function reads and acts on, below. Starts empty. */
-    let mut devices: HashMap<DeviceId, DeviceState> = HashMap::new();
+     * which this same function reads and acts on, below. It starts out as
+     * whatever the registry file held (empty on the very first start). */
 
     /* THE MAIN LOOP. `rx.recv().await` pulls the next message out of the
      * mailbox -- if none is waiting yet, this suspends right here
@@ -123,7 +129,16 @@ pub async fn run(mut rx: mpsc::Receiver<Msg>, changed_tx: watch::Sender<()>) {
                  * then merges the new key/value pairs in: new keys get
                  * added, existing keys get overwritten with the new value,
                  * anything not mentioned is left alone. */
-                devices.entry(id).or_default().extend(properties);
+                let is_new = !devices.contains_key(&id);
+                let entry = devices.entry(id).or_default();
+                /* Remember the old properties, so we only write to the
+                 * flash when something really changed -- a command that
+                 * sets a lamp that's already on to "on" costs no write. */
+                let before = entry.clone();
+                entry.extend(properties);
+                if is_new || *entry != before {
+                    save_tx.send_replace(encode_registry(&devices));
+                }
                 /* send_replace, not send: send fails when nobody is
                  * listening (e.g. cloud sync disabled), send_replace just
                  * stores the value regardless -- nothing to handle. */
@@ -157,10 +172,41 @@ pub async fn run(mut rx: mpsc::Receiver<Msg>, changed_tx: watch::Sender<()>) {
                 /* Deletes this device's entry from the filing cabinet
                  * entirely, if it exists (does nothing if it didn't). */
                 if devices.remove(&id).is_some() {
+                    save_tx.send_replace(encode_registry(&devices));
                     changed_tx.send_replace(());
                 }
             }
         }
+    }
+}
+
+/* THE REGISTRY FILE (issue #33) -- the devices, as saved by store.rs.
+ *
+ * The layout of the payload, schema 1: one JSON object, device id ->
+ * that device's properties, e.g. {"lamp-1": {"on": true}}. When the layout
+ * changes (the capability model), REGISTRY_SCHEMA goes up and
+ * decode_registry gets a branch that converts schema-1 files. */
+pub const REGISTRY_SCHEMA: u32 = 1;
+
+/* Registry -> payload bytes. Written through a BTreeMap (a map that keeps
+ * its keys sorted) so the file lists devices alphabetically every time --
+ * easier to read on the board, and saving the same devices twice gives
+ * byte-identical files. Pretty-printed: it's small, and humans read it. */
+pub fn encode_registry(devices: &HashMap<DeviceId, DeviceState>) -> Vec<u8> {
+    let sorted: BTreeMap<&DeviceId, BTreeMap<&String, &serde_json::Value>> = devices
+        .iter()
+        .map(|(id, properties)| (id, properties.iter().collect()))
+        .collect();
+    /* Serializing maps of strings and JSON values can't fail. */
+    serde_json::to_vec_pretty(&sorted).expect("device map serializes")
+}
+
+/* Payload bytes -> registry; handed to store.rs's load (see there for
+ * what happens on Err). */
+pub fn decode_registry(schema: u32, payload: &[u8]) -> Result<HashMap<DeviceId, DeviceState>, String> {
+    match schema {
+        1 => serde_json::from_slice(payload).map_err(|e| format!("invalid registry: {e}")),
+        other => Err(format!("registry schema {other} is newer than this daemon understands ({REGISTRY_SCHEMA})")),
     }
 }
 
@@ -189,8 +235,74 @@ mod tests {
         /* The tests don't care about change notifications; the receiving
          * half is simply dropped. */
         let (changed_tx, _) = watch::channel(());
-        tokio::spawn(run(rx, changed_tx));
+        let (save_tx, _) = watch::channel(Vec::new());
+        tokio::spawn(run(rx, changed_tx, HashMap::new(), save_tx));
         tx
+    }
+
+    /* Sends one message, then a GetAllDevices round trip: state.rs handles
+     * messages strictly in order, so once that is answered, the message
+     * before it has been fully handled (including any save). */
+    async fn send_and_settle(tx: &mpsc::Sender<Msg>, msg: Msg) {
+        tx.send(msg).await.unwrap();
+        let (reply_tx, reply_rx) = oneshot::channel();
+        tx.send(Msg::GetAllDevices { reply: reply_tx }).await.unwrap();
+        reply_rx.await.unwrap();
+    }
+
+    fn update(id: &str, key: &str, value: serde_json::Value) -> Msg {
+        Msg::UpdateDevice {
+            id: id.into(),
+            properties: HashMap::from([(key.into(), value)]),
+        }
+    }
+
+    #[test]
+    fn registry_round_trip_and_sorted_output() {
+        let devices = HashMap::from([
+            ("lamp-2".to_string(), HashMap::from([("on".to_string(), json!(false))])),
+            (
+                "lamp-1".to_string(),
+                HashMap::from([("on".to_string(), json!(true)), ("brightness".to_string(), json!(80))]),
+            ),
+        ]);
+        let bytes = encode_registry(&devices);
+        assert_eq!(decode_registry(REGISTRY_SCHEMA, &bytes), Ok(devices.clone()));
+        /* Same devices -> same bytes, and lamp-1 comes first. */
+        assert_eq!(encode_registry(&devices), bytes);
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(text.find("lamp-1").unwrap() < text.find("lamp-2").unwrap());
+    }
+
+    #[test]
+    fn registry_rejects_unknown_schema_and_bad_json() {
+        assert!(decode_registry(2, b"{}").unwrap_err().contains("newer"));
+        assert!(decode_registry(1, b"[1, 2]").is_err());
+    }
+
+    /* Devices loaded at start are there, and every real change hands the
+     * writer a fresh copy of the registry -- but a no-op update doesn't. */
+    #[tokio::test]
+    async fn changes_are_saved_and_loaded_devices_kept() {
+        let (tx, rx) = mpsc::channel(8);
+        let (changed_tx, _) = watch::channel(());
+        let (save_tx, mut save_rx) = watch::channel(Vec::new());
+        let loaded = HashMap::from([("lamp-1".to_string(), HashMap::from([("on".to_string(), json!(true))]))]);
+        tokio::spawn(run(rx, changed_tx, loaded, save_tx));
+
+        /* Setting "on" to the value it already has: nothing to save. */
+        send_and_settle(&tx, update("lamp-1", "on", json!(true))).await;
+        assert!(!save_rx.has_changed().unwrap());
+
+        send_and_settle(&tx, update("lamp-2", "on", json!(false))).await;
+        assert!(save_rx.has_changed().unwrap());
+        let saved = decode_registry(REGISTRY_SCHEMA, &save_rx.borrow_and_update()).unwrap();
+        assert_eq!(saved.len(), 2);
+        assert_eq!(saved["lamp-1"]["on"], json!(true));
+
+        send_and_settle(&tx, Msg::RemoveDevice { id: "lamp-1".into() }).await;
+        let saved = decode_registry(REGISTRY_SCHEMA, &save_rx.borrow_and_update()).unwrap();
+        assert_eq!(saved.keys().collect::<Vec<_>>(), vec!["lamp-2"]);
     }
 
     /* #[tokio::test] is like #[tokio::main] but for a single test function

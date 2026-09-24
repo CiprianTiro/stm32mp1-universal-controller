@@ -11,6 +11,7 @@ mod mqtt;
 mod rpmsg;
 mod shadow;
 mod state;
+mod store;
 mod ws;
 
 /* worker_threads = 2 -- pinned explicitly to match the DK2's 2 physical
@@ -51,7 +52,19 @@ async fn main() {
      * over, and from this point on, the HashMap of device data inside
      * state::run's function body is the one and only copy of it that
      * exists anywhere in the process. */
-    tokio::spawn(state::run(state_rx, state_changed_tx));
+    /* The device registry (issue #33): loaded from the userfs partition
+     * BEFORE the actor starts, so the first client to connect already sees
+     * every device from before the restart. Loading is a quick read of one
+     * small file, fine to do right here once at start. Every outcome --
+     * first start, a damaged file, a fallback to the previous copy -- is
+     * logged by load_or_default (see store.rs). */
+    let registry = store::Store::new(&store::data_dir(), "devices.json");
+    let devices = registry.load_or_default("device registry", state::decode_registry);
+    /* No file name here: when the previous copy had to be used, the line
+     * store.rs logged just before says so (and names the file). */
+    println!("state: {} device(s) loaded", devices.len());
+    let save_tx = store::writer(registry, state::REGISTRY_SCHEMA);
+    tokio::spawn(state::run(state_rx, state_changed_tx, devices, save_tx));
 
     /* A second, completely separate mailbox for rpmsg.rs's actor -- this is
      * NOT state_tx again. rpmsg.rs doesn't manage the generic "device

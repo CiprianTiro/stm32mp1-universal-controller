@@ -35,7 +35,7 @@
  */
 
 use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS, TlsConfiguration, Transport};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -45,6 +45,7 @@ use crate::health;
 use crate::rpmsg;
 use crate::shadow;
 use crate::state::{DeviceId, DeviceState, Msg};
+use crate::store;
 
 /* The shadow name of the board's real LED (LD7 on the DK2 silkscreen). */
 const LED_DEVICE_ID: &str = "ld7";
@@ -215,6 +216,12 @@ pub async fn run(
         health: Arc::new(Mutex::new(health::Sampler::new(local_clients))),
     };
 
+    /* Which shadows exist in the cloud, as far as we know (issue #33, see
+     * shadow::SHADOWS_SCHEMA for why this is saved). */
+    let shadow_list = store::Store::new(&store::data_dir(), "shadows.json");
+    let known_shadows = shadow_list.load_or_default("cloud shadow list", shadow::decode_names);
+    let shadows_tx = store::writer(shadow_list, shadow::SHADOWS_SCHEMA);
+
     let (sync_tx, sync_rx) = mpsc::channel(32);
     tokio::spawn(reporting_task(
         client.clone(),
@@ -225,6 +232,8 @@ pub async fn run(
         shadow::Topics::new(&config.thing),
         connected.clone(),
         config.report_interval,
+        known_shadows,
+        shadows_tx,
     ));
 
     let topics = shadow::Topics::new(&config.thing);
@@ -434,7 +443,13 @@ impl Reporter {
  * the resubscribes no longer fit -- the board never heard commands again.
  * While disconnected nothing is sent; the Resync after reconnecting brings
  * the cloud up to date in one go. Unlike run(), this task CAN wait for
- * room in the queue (publish().await): run() keeps emptying it. */
+ * room in the queue (publish().await): run() keeps emptying it.
+ *
+ * Across restarts (issue #33): `known_shadows` is the list of shadows
+ * that existed in the cloud when the daemon last ran. They start out in
+ * `published` (with empty properties), so the first Resync deletes the
+ * ones whose device is gone and re-reports the rest. Whenever the SET of
+ * ids in `published` changes, it's saved again through `shadows_tx`. */
 #[allow(clippy::too_many_arguments)] /* all distinct handles; a struct would just rename them */
 async fn reporting_task(
     client: AsyncClient,
@@ -445,8 +460,20 @@ async fn reporting_task(
     topics: shadow::Topics,
     connected: Arc<AtomicBool>,
     interval: Duration,
+    known_shadows: BTreeSet<DeviceId>,
+    shadows_tx: watch::Sender<Vec<u8>>,
 ) {
-    let mut published: HashMap<DeviceId, DeviceState> = HashMap::new();
+    /* The LED is left out: it's built-in hardware, its shadow is never
+     * stale. And while the M4 hasn't answered yet, ld7 is missing from the
+     * device list, so a seeded ld7 would be deleted at the first Resync
+     * and recreated a moment later. */
+    let mut published: HashMap<DeviceId, DeviceState> = known_shadows
+        .into_iter()
+        .filter(|id| id != LED_DEVICE_ID)
+        .map(|id| (id, DeviceState::new()))
+        .collect();
+    /* The id set last handed to shadows_tx. */
+    let mut saved_names: BTreeSet<DeviceId> = published.keys().cloned().collect();
     /* Our own receiver for the LED, only to be woken by its changes (the
      * Reporter's copy is for reading the value). */
     let mut led_rx = reporter.led_rx.clone();
@@ -457,6 +484,15 @@ async fn reporting_task(
     };
 
     loop {
+        /* Every branch below ends up back here, so this one check catches
+         * any change to which shadows exist. Comparing the id sets costs
+         * microseconds; the (rare) actual save happens in store.rs's
+         * background writer. */
+        if published.len() != saved_names.len() || !published.keys().all(|id| saved_names.contains(id)) {
+            saved_names = published.keys().cloned().collect();
+            shadows_tx.send_replace(shadow::encode_names(&saved_names));
+        }
+
         /* select! waits for whichever happens first. `biased` = check the
          * branches in this order instead of randomly, so a Sync message
          * (e.g. "shadow deleted") is always handled before a state change
