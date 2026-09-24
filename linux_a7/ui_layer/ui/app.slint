@@ -21,18 +21,14 @@ import { Button, Palette } from "std-widgets.slint";
 // anyway. See fonts/DejaVuSans-LICENSE for its (permissive) license.
 import "../fonts/DejaVuSans.ttf";
 
-// The colors of the welcome screen (issue #59). They MUST stay identical to
-// tools/welcome/make_welcome.py, which draws the same design into the boot
-// image U-Boot shows: the UI's welcome screen takes over from that image
-// without a visible jump. A `global` is a set of values shared by every
-// component in this file.
-global Theme {
-    out property <color> background: #0F172A;
-    out property <color> accent: #38BDF8;
-    out property <color> title: #E2E8F0;
-    out property <color> muted: #94A3B8;
-    out property <color> dot-off: #334155;
-}
+// The colors (shared with the boot image, see theme.slint) and the network
+// screens (issue #61).
+import { Theme } from "theme.slint";
+import { NetStatus, WifiNetwork, NetIndicator, NetworkPage, PasswordPage, CountryPage } from "network.slint";
+
+// Re-exported so main.rs can use these types (the Rust side only sees what
+// the main file exports).
+export { NetStatus, WifiNetwork }
 
 // Shown from the UI's start until backend_daemon answers for the first time
 // (issue #59). The background picture (icon + name) is the very same file
@@ -117,6 +113,41 @@ export component AppWindow inherits Window {
     // below).
     property <bool> starting-slow: false;
 
+    // ---- Network (issue #61) ----------------------------------------
+    // Which screen is shown: 0 = main, 1 = network, 2 = WiFi password,
+    // 3 = WiFi country.
+    in-out property <int> page: 0;
+    // Filled in by main.rs from backend_daemon's answers.
+    in property <NetStatus> net;
+    in property <[WifiNetwork]> networks;
+    in-out property <bool> scanning: false;
+    // A WiFi connect is in progress.
+    in-out property <bool> busy: false;
+    // The network page's message line (result of the last action).
+    in-out property <string> net-message;
+    in-out property <bool> net-message-is-error;
+    // The password page: which network, what's typed, and an error from
+    // the last attempt.
+    in-out property <string> join-ssid;
+    in-out property <string> password;
+    in-out property <string> join-message;
+    // The country page.
+    in-out property <string> country-code;
+    in-out property <string> country-message;
+
+    // Requests to main.rs, which forwards them to backend_daemon.
+    callback wifi-scan();
+    callback wifi-connect(string, string);
+    callback wifi-forget();
+    callback set-country(string);
+    // Remove the last character of the given text (Slint's language has
+    // no string slicing; done in Rust).
+    pure callback drop-last(string) -> string;
+    // The same text with every character replaced by a dot, for showing a
+    // password (again: no string functions for this in Slint). `pure`: it
+    // only computes, so Slint may call it whenever `password` changes.
+    pure callback mask(string) -> string;
+
     // "callback" declares an event this component can fire that Rust code
     // outside this file can react to -- see main.rs's
     // `ui.on_toggle_led(...)` for where this actually gets handled. This
@@ -143,9 +174,25 @@ export component AppWindow inherits Window {
         }
     }
 
-    // The normal screen: one status line, one button (issue #14's DoD only
-    // asks for at least one interactive element, not a polished dashboard).
-    VerticalLayout {
+    // The normal screen: a top bar with the network indicator, then one
+    // status line and one button (issue #14's DoD only asks for at least
+    // one interactive element, not a polished dashboard).
+    if page == 0: HorizontalLayout {
+        y: 8px;
+        height: Theme.touch-height;
+        padding-right: 8px;
+        alignment: end;
+        NetIndicator {
+            net: root.net;
+            clicked => {
+                net-message = "";
+                page = 1;
+                wifi-scan();
+            }
+        }
+    }
+
+    if page == 0: VerticalLayout {
         alignment: center;
         spacing: 24px;
 
@@ -167,6 +214,90 @@ export component AppWindow inherits Window {
             clicked => {
                 toggle-led();
             }
+        }
+    }
+
+    if page == 1: NetworkPage {
+        width: parent.width;
+        height: parent.height;
+        // `root.` everywhere: inside an element, a bare `net` would mean
+        // the element's OWN property of that name (binding it to itself).
+        net: root.net;
+        networks: root.networks;
+        scanning: root.scanning;
+        message: root.net-message;
+        message-is-error: root.net-message-is-error;
+        back => {
+            page = 0;
+        }
+        scan => {
+            wifi-scan();
+        }
+        pick(n) => {
+            if (net.wifi-connected && n.ssid == net.wifi-ssid) {
+                // Already on it: nothing to do.
+                return;
+            }
+            join-ssid = n.ssid;
+            password = "";
+            join-message = "";
+            net-message = "";
+            if (n.secure) {
+                page = 2;
+            } else {
+                // An open network needs no password.
+                busy = true;
+                wifi-connect(n.ssid, "");
+            }
+        }
+        forget => {
+            net-message = "";
+            wifi-forget();
+        }
+        change-country => {
+            country-code = "";
+            country-message = "";
+            page = 3;
+        }
+    }
+
+    if page == 2: PasswordPage {
+        width: parent.width;
+        height: parent.height;
+        ssid: root.join-ssid;
+        // Two-way: the keyboard types into the window's `password`.
+        password <=> root.password;
+        masked: mask(root.password);
+        busy: root.busy;
+        message: root.join-message;
+        back => {
+            password = "";
+            page = 1;
+        }
+        backspace => {
+            password = drop-last(password);
+        }
+        connect => {
+            join-message = "";
+            busy = true;
+            wifi-connect(join-ssid, password);
+        }
+    }
+
+    if page == 3: CountryPage {
+        width: parent.width;
+        height: parent.height;
+        current: root.net.wifi-country;
+        code <=> root.country-code;
+        message: root.country-message;
+        back => {
+            page = 1;
+        }
+        backspace => {
+            country-code = drop-last(country-code);
+        }
+        save => {
+            set-country(country-code);
         }
     }
 

@@ -1,0 +1,141 @@
+// keyboard.slint -- an on-screen keyboard (issue #61), for typing a WiFi
+// password or a country code on the touchscreen.
+//
+// Slint's own text input fields expect a real keyboard or the operating
+// system's on-screen keyboard -- neither exists on this hub (no desktop,
+// no window system). So this is a plain grid of buttons that appends to a
+// `text` property. Kept in its own file, and knowing nothing about WiFi,
+// so the UI sprint (#38/#39) can restyle or replace it in one place.
+//
+// Removing the last character needs string slicing, which Slint's language
+// doesn't have: the `backspace` callback asks the owner (and in the end
+// Rust, see main.rs) to do it.
+
+import { Theme } from "theme.slint";
+
+// One key. `pressed` fires on tap.
+component Key inherits Rectangle {
+    in property <string> label;
+    in property <length> key-width: 42px;
+    in property <bool> highlighted: false;
+    callback pressed();
+
+    width: key-width;
+    height: 48px;
+    border-radius: 6px;
+    background: touch.pressed ? Theme.surface-pressed : (highlighted ? Theme.accent : Theme.surface);
+
+    Text {
+        text: label;
+        color: highlighted ? Theme.background : Theme.title;
+        font-size: 20px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    touch := TouchArea {
+        clicked => {
+            pressed();
+        }
+    }
+}
+
+export component Keyboard inherits Rectangle {
+    // What has been typed. `in-out`: the owner can also clear it.
+    in-out property <string> text;
+    // Typing stops at this many characters (WiFi passwords: 63).
+    in property <int> max-length: 63;
+    // Start in capitals and stay there (for country codes).
+    in property <bool> caps-lock: false;
+    callback backspace();
+    callback done();
+
+    // 0 = letters, 1 = digits and symbols.
+    property <int> mode: 0;
+    // Shift is for the next letter only, like on a phone.
+    property <bool> shift: false;
+
+    // The layouts. Each inner list is one row of keys; at most 10 keys of
+    // 42 px plus 5 px gaps = 465 px, just inside the 480 px wide screen.
+    property <[[string]]> letters: [
+        ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"],
+        ["q", "w", "e", "r", "t", "y", "u", "i", "o", "p"],
+        ["a", "s", "d", "f", "g", "h", "j", "k", "l"],
+        ["z", "x", "c", "v", "b", "n", "m", "-", "_"],
+    ];
+    property <[[string]]> symbols: [
+        ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"],
+        ["!", "@", "#", "$", "%", "^", "&", "*", "(", ")"],
+        ["-", "_", "=", "+", "[", "]", "{", "}", "\\", "|"],
+        [";", ":", "'", "\"", ",", ".", "<", ">", "/", "?"],
+        ["`", "~"],
+    ];
+
+    background: Theme.background;
+    height: layout.preferred-height;
+
+    layout := VerticalLayout {
+        padding: 6px;
+        spacing: 6px;
+
+        for row in (mode == 0 ? letters : symbols): HorizontalLayout {
+            alignment: center;
+            spacing: 5px;
+            for k in row: Key {
+                // `to-uppercase()` only changes letters; digits and symbols
+                // stay as they are.
+                label: (shift || caps-lock) ? k.to-uppercase() : k;
+                pressed => {
+                    if (text.character-count < max-length) {
+                        text += self.label;
+                    }
+                    shift = false;
+                }
+            }
+        }
+
+        HorizontalLayout {
+            alignment: center;
+            spacing: 5px;
+            Key {
+                label: "Shift";
+                key-width: 70px;
+                highlighted: shift;
+                pressed => {
+                    shift = !shift;
+                }
+            }
+            Key {
+                label: mode == 0 ? "#+=" : "abc";
+                key-width: 60px;
+                pressed => {
+                    mode = mode == 0 ? 1 : 0;
+                }
+            }
+            Key {
+                label: "space";
+                key-width: 130px;
+                pressed => {
+                    if (text.character-count < max-length) {
+                        text += " ";
+                    }
+                }
+            }
+            Key {
+                label: "Del";
+                key-width: 60px;
+                pressed => {
+                    backspace();
+                }
+            }
+            Key {
+                label: "Done";
+                key-width: 80px;
+                highlighted: true;
+                pressed => {
+                    done();
+                }
+            }
+        }
+    }
+}

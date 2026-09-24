@@ -37,6 +37,7 @@ SRC_URI = " \
     file://src/health.rs \
     file://src/main.rs \
     file://src/mqtt.rs \
+    file://src/network.rs \
     file://src/rpmsg.rs \
     file://src/shadow.rs \
     file://src/state.rs \

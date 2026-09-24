@@ -1,0 +1,22 @@
+// theme.slint -- the UI's colors and a few shared sizes, in one place.
+//
+// The first five MUST stay identical to tools/welcome/make_welcome.py,
+// which draws the same design into the boot image U-Boot shows (issue #59):
+// the UI's welcome screen takes over from that image without a visible
+// jump. A `global` is a set of values any component can read, like
+// `Theme.accent`. The UI sprint (#39, themes) will turn this into
+// user-selectable presets.
+export global Theme {
+    out property <color> background: #0F172A;
+    out property <color> accent: #38BDF8;
+    out property <color> title: #E2E8F0;
+    out property <color> muted: #94A3B8;
+    out property <color> dot-off: #334155;
+    // Issue #61: surfaces (cards, keys), and colors for results.
+    out property <color> surface: #1E293B;
+    out property <color> surface-pressed: #334155;
+    out property <color> error: #F87171;
+    out property <color> ok: #4ADE80;
+    // Big enough to hit with a finger on the DK2's 4" screen.
+    out property <length> touch-height: 48px;
+}

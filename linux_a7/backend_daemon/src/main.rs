@@ -8,6 +8,7 @@ use tokio::time::interval;
  * either file executes until something below explicitly spawns it. */
 mod health;
 mod mqtt;
+mod network;
 mod rpmsg;
 mod shadow;
 mod state;
@@ -91,11 +92,16 @@ async fn main() {
      * ws.rs counts, health.rs (inside mqtt.rs) reports it -- one shared
      * number, hence Arc (shared ownership) + AtomicUsize (lock-free). */
     let local_clients = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    /* Which link carries traffic (issue #61): network.rs keeps it up to
+     * date, mqtt.rs reconnects when it changes. */
+    let (uplink_tx, uplink_rx) = tokio::sync::watch::channel(None);
+    tokio::spawn(network::watch_uplink(uplink_tx));
     tokio::spawn(mqtt::run(
         state_tx.clone(),
         rpmsg_tx.clone(),
         led_rx,
         state_changed_rx,
+        uplink_rx,
         local_clients.clone(),
     ));
 
@@ -105,7 +111,12 @@ async fn main() {
      * client (see ws.rs's ws_handler/handle_socket), and it now also gets
      * rpmsg_tx to forward LED commands from those same clients on to the
      * M4. */
-    tokio::spawn(ws::run(state_tx, rpmsg_tx, local_clients));
+    /* The network actor (issue #61): Ethernet/WiFi status, WiFi scan,
+     * connect, forget, country. Only ws.rs talks to it. */
+    let (network_tx, network_rx) = tokio::sync::mpsc::channel(8);
+    tokio::spawn(network::run(network_rx));
+
+    tokio::spawn(ws::run(state_tx, rpmsg_tx, network_tx, local_clients));
 
     /* SIGTERM is what systemd sends on stop/restart; SIGINT covers Ctrl-C
      when running this interactively during development. */

@@ -165,12 +165,15 @@ enum Sync {
 /* `rpmsg_tx` sends LED commands to the M4 actor; `led_rx` reads the LED's
  * latest known state (see rpmsg::run for the watch channel);
  * `state_changed_rx` wakes us when any device in state.rs changes;
- * `local_clients` is ws.rs's count of connected clients (for health.rs). */
+ * `uplink_rx` says which network link carries traffic (issue #61, see the
+ * run loop); `local_clients` is ws.rs's count of
+ * connected clients (for health.rs). */
 pub async fn run(
     state_tx: mpsc::Sender<Msg>,
     rpmsg_tx: mpsc::Sender<rpmsg::Cmd>,
     led_rx: watch::Receiver<Option<bool>>,
     state_changed_rx: watch::Receiver<()>,
+    uplink_rx: watch::Receiver<Option<String>>,
     local_clients: Arc<AtomicUsize>,
 ) {
     let config = match Config::from_env() {
@@ -254,8 +257,38 @@ pub async fn run(
      * reporting task: the queue is only emptied by eventloop.poll(), i.e.
      * by this very loop, and the reporting task itself waits on that queue.
      * Hence try_subscribe and try_send (queue the request, don't wait). */
+    let mut uplink_rx = uplink_rx;
+    /* The first value is just the link at start, not a change. */
+    uplink_rx.mark_unchanged();
     loop {
-        match eventloop.poll().await {
+        /* Wait for the next MQTT event -- or for the network link to change
+         * (issue #61). When traffic moves to another link (cable pulled ->
+         * WiFi, or back), the TCP connection to AWS is usually dead: it's
+         * tied to the old link's address. Nothing tells the socket, though;
+         * MQTT would only notice when a keep-alive goes unanswered, which
+         * took 45 s on the DK2. Politely disconnecting doesn't help either:
+         * that message goes into the same dead connection and waits there.
+         *
+         * So the connection is dropped right here: clean() closes it
+         * locally and puts unconfirmed messages back in the queue, and the
+         * next poll() connects anew -- over the new link. Interrupting
+         * poll() for this is safe precisely because the connection it was
+         * working on is thrown away. */
+        let event = tokio::select! {
+            event = eventloop.poll() => event,
+            Ok(()) = uplink_rx.changed() => {
+                let uplink = uplink_rx.borrow_and_update().clone();
+                /* Offline: nothing to reconnect over yet; the next change
+                 * (a link coming back) triggers it. */
+                if uplink.is_some() && connected.load(Ordering::Relaxed) {
+                    println!("mqtt: network link changed, reconnecting over it");
+                    connected.store(false, Ordering::Relaxed);
+                    eventloop.clean();
+                }
+                continue;
+            }
+        };
+        match event {
             Ok(Event::Incoming(Packet::ConnAck(_))) => {
                 println!("mqtt: connected to {broker}");
                 last_error = None;
