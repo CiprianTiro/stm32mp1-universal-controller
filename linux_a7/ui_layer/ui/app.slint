@@ -6,7 +6,7 @@
 
 // Slint's own built-in widget library. `Palette` holds the colors its
 // widgets (buttons, lists) use; it's switched to dark below.
-import { Palette } from "std-widgets.slint";
+import { Button, Palette } from "std-widgets.slint";
 
 // Embeds this specific font file into the compiled binary (combined with
 // build.rs's `EmbedForSoftwareRenderer` config) rather than relying on
@@ -21,11 +21,12 @@ import "../fonts/DejaVuSans.ttf";
 // screens (issue #61).
 import { Theme, Glyphs } from "theme.slint";
 import { DeviceItem, DeviceList } from "devices.slint";
+import { ClientItem, SettingsPage, ClientsPage, PairingPage } from "settings.slint";
 import { NetStatus, WifiNetwork, NetIndicator, NetworkPage, PasswordPage, CountryPage } from "network.slint";
 
 // Re-exported so main.rs can use these types (the Rust side only sees what
 // the main file exports).
-export { NetStatus, WifiNetwork, DeviceItem }
+export { NetStatus, WifiNetwork, DeviceItem, ClientItem }
 
 // Shown from the UI's start until backend_daemon answers for the first time
 // (issue #59). The background picture (icon + name) is the very same file
@@ -113,8 +114,10 @@ export component AppWindow inherits Window {
 
     // ---- Network (issue #61) ----------------------------------------
     // Which screen is shown: 0 = main, 1 = network, 2 = WiFi password,
-    // 3 = WiFi country.
+    // 3 = WiFi country, 4 = settings, 5 = paired devices, 6 = pairing.
     in-out property <int> page: 0;
+    // Where the network page's Back goes (main screen or settings).
+    property <int> network-back: 0;
     // Filled in by main.rs from backend_daemon's answers.
     in property <NetStatus> net;
     in property <[WifiNetwork]> networks;
@@ -132,6 +135,22 @@ export component AppWindow inherits Window {
     // The country page.
     in-out property <string> country-code;
     in-out property <string> country-message;
+
+    // ---- Paired devices and pairing (issue #35) ----------------------
+    in property <[ClientItem]> clients;
+    in-out property <string> clients-message;
+    // The pairing screen, filled in by main.rs (see PairingPage).
+    in property <string> pairing-state;
+    in property <string> pairing-code;
+    in property <int> pairing-seconds;
+    in property <string> pairing-client;
+    in property <image> pairing-qr;
+    in property <string> pairing-fingerprint;
+    in property <string> pairing-address;
+    callback open-clients();
+    callback start-pairing();
+    callback cancel-pairing();
+    callback revoke-client(string);
 
     // Requests to main.rs, which forwards them to backend_daemon.
     callback wifi-scan();
@@ -186,10 +205,17 @@ export component AppWindow inherits Window {
                 vertical-alignment: center;
                 horizontal-stretch: 1;
             }
+            Button {
+                text: "Settings";
+                clicked => {
+                    page = 4;
+                }
+            }
             NetIndicator {
                 net: root.net;
                 clicked => {
                     net-message = "";
+                    network-back = 0;
                     page = 1;
                     wifi-scan();
                 }
@@ -224,6 +250,68 @@ export component AppWindow inherits Window {
         }
     }
 
+    if page == 4: SettingsPage {
+        width: parent.width;
+        height: parent.height;
+        network-detail: root.net.uplink == "ethernet" ? "Connected by cable"
+            : root.net.uplink == "wifi" ? ("WiFi " + root.net.wifi-ssid) : "Offline";
+        client-count: root.clients.length;
+        back => {
+            page = 0;
+        }
+        open-network => {
+            net-message = "";
+            network-back = 4;
+            page = 1;
+            wifi-scan();
+        }
+        open-clients => {
+            clients-message = "";
+            page = 5;
+            open-clients();
+        }
+    }
+
+    if page == 5: ClientsPage {
+        width: parent.width;
+        height: parent.height;
+        clients: root.clients;
+        message: root.clients-message;
+        back => {
+            page = 4;
+        }
+        pair-new => {
+            page = 6;
+            start-pairing();
+        }
+        revoke(id) => {
+            revoke-client(id);
+        }
+    }
+
+    if page == 6: PairingPage {
+        width: parent.width;
+        height: parent.height;
+        state: root.pairing-state;
+        code: root.pairing-code;
+        seconds-left: root.pairing-seconds;
+        client-name: root.pairing-client;
+        qr: root.pairing-qr;
+        fingerprint-short: root.pairing-fingerprint;
+        address: root.pairing-address;
+        back => {
+            // Leaving the screen ends a pairing still waiting: a code
+            // shouldn't stay valid while nobody is looking at it.
+            cancel-pairing();
+            clients-message = "";
+            page = 5;
+            open-clients();
+        }
+        restart => {
+            start-pairing();
+        }
+    }
+
     // Never visible (zero size, transparent): only here so the extra
     // characters in theme.slint's Glyphs are embedded in the build (see
     // there). Being part of the window keeps it from being optimized away.
@@ -245,7 +333,7 @@ export component AppWindow inherits Window {
         message: root.net-message;
         message-is-error: root.net-message-is-error;
         back => {
-            page = 0;
+            page = network-back;
         }
         scan => {
             wifi-scan();

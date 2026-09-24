@@ -1,0 +1,302 @@
+// settings.slint -- the settings pages (issue #35): a small settings menu,
+// the list of paired devices (phones, PCs) with "Remove", and the pairing
+// screen that shows the code and QR code a new device needs.
+//
+// Like everything in ui_layer these only show what backend_daemon reports
+// and pass taps on (callbacks); main.rs does the talking. Pairing and the
+// list of paired devices are only available on the hub's own screen --
+// backend_daemon refuses them from the network.
+
+import { Button, ListView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+
+// A paired device, as the list shows it.
+export struct ClientItem {
+    id: string,
+    name: string,
+    // e.g. "last seen 5 min ago"
+    seen-text: string,
+}
+
+// A title row with a back button (same look as the network pages).
+component Header inherits HorizontalLayout {
+    in property <string> title;
+    callback back();
+    spacing: 12px;
+    height: Theme.touch-height;
+    Button {
+        text: "< Back";
+        clicked => {
+            back();
+        }
+    }
+    Text {
+        text: title;
+        color: Theme.title;
+        font-size: 24px;
+        vertical-alignment: center;
+    }
+}
+
+// One tappable row of the settings menu.
+component MenuRow inherits Rectangle {
+    in property <string> title;
+    in property <string> detail;
+    callback clicked();
+
+    height: 64px;
+    border-radius: 8px;
+    background: touch.pressed ? Theme.surface-pressed : Theme.surface;
+
+    VerticalLayout {
+        padding-left: 14px;
+        alignment: center;
+        Text {
+            text: title;
+            color: Theme.title;
+            font-size: 18px;
+        }
+        if detail != "": Text {
+            text: detail;
+            color: Theme.muted;
+            font-size: 14px;
+        }
+    }
+
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+export component SettingsPage inherits Rectangle {
+    in property <string> network-detail;
+    in property <int> client-count;
+    callback back();
+    callback open-network();
+    callback open-clients();
+
+    background: Theme.background;
+
+    VerticalLayout {
+        padding: 12px;
+        spacing: 10px;
+        alignment: start;
+
+        Header {
+            title: "Settings";
+            back => {
+                root.back();
+            }
+        }
+        MenuRow {
+            title: "Network";
+            detail: network-detail;
+            clicked => {
+                open-network();
+            }
+        }
+        MenuRow {
+            title: "Paired devices";
+            detail: client-count == 0 ? "No phones or computers paired yet"
+                : client-count == 1 ? "1 device can control this hub"
+                : client-count + " devices can control this hub";
+            clicked => {
+                open-clients();
+            }
+        }
+    }
+}
+
+// The paired devices, each removable.
+export component ClientsPage inherits Rectangle {
+    in property <[ClientItem]> clients;
+    in property <string> message;
+    callback back();
+    callback pair-new();
+    callback revoke(string);
+
+    background: Theme.background;
+
+    VerticalLayout {
+        padding: 12px;
+        spacing: 10px;
+
+        Header {
+            title: "Paired devices";
+            back => {
+                root.back();
+            }
+        }
+
+        Text {
+            text: "These phones and computers can control the hub over the network. Remove one you no longer use (a lost phone, an old computer): it's locked out at once.";
+            color: Theme.muted;
+            font-size: 15px;
+            wrap: word-wrap;
+        }
+
+        if message != "": Text {
+            text: message;
+            color: Theme.ok;
+            font-size: 16px;
+            wrap: word-wrap;
+        }
+
+        if clients.length == 0: Text {
+            text: "None yet.";
+            color: Theme.muted;
+            font-size: 18px;
+        }
+
+        ListView {
+            vertical-stretch: 1;
+            for c in clients: VerticalLayout {
+                padding-bottom: 8px;
+                Rectangle {
+                    border-radius: 8px;
+                    background: Theme.surface;
+                    HorizontalLayout {
+                        padding: 12px;
+                        spacing: 10px;
+                        VerticalLayout {
+                            alignment: center;
+                            horizontal-stretch: 1;
+                            Text {
+                                text: c.name;
+                                color: Theme.title;
+                                font-size: 18px;
+                                overflow: elide;
+                            }
+                            Text {
+                                text: c.seen-text;
+                                color: Theme.muted;
+                                font-size: 14px;
+                            }
+                        }
+                        Button {
+                            text: "Remove";
+                            clicked => {
+                                revoke(c.id);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Button {
+            text: "Pair a new device";
+            primary: true;
+            clicked => {
+                pair-new();
+            }
+        }
+    }
+}
+
+// The pairing screen: the code in big digits, the QR code the phone app
+// scans (it also carries the hub's address and certificate fingerprint),
+// and what happened.
+export component PairingPage inherits Rectangle {
+    // "waiting", "paired", "locked", "expired" or "none".
+    in property <string> state;
+    in property <string> code;
+    in property <int> seconds-left;
+    in property <string> client-name;
+    in property <image> qr;
+    in property <string> fingerprint-short;
+    in property <string> address;
+    callback back();
+    callback restart();
+
+    background: Theme.background;
+
+    VerticalLayout {
+        padding: 12px;
+        spacing: 12px;
+
+        Header {
+            title: "Pair a new device";
+            back => {
+                root.back();
+            }
+        }
+
+        if state == "waiting": VerticalLayout {
+            spacing: 10px;
+            Text {
+                text: "Scan the code with the app, or type the numbers.";
+                color: Theme.muted;
+                font-size: 16px;
+                wrap: word-wrap;
+                horizontal-alignment: center;
+            }
+            // The QR code on a white square (scanners need contrast and a
+            // light border around it; the image already has that border).
+            HorizontalLayout {
+                alignment: center;
+                Image {
+                    source: qr;
+                    width: 240px;
+                    height: 240px;
+                    image-rendering: pixelated;
+                }
+            }
+            Text {
+                // Two groups of three digits read easier: "212 570".
+                text: code;
+                color: Theme.title;
+                font-size: 48px;
+                letter-spacing: 6px;
+                horizontal-alignment: center;
+            }
+            Text {
+                text: "Valid for " + seconds-left + " s, once.";
+                color: Theme.muted;
+                font-size: 16px;
+                horizontal-alignment: center;
+            }
+            Text {
+                text: "Hub " + address + "   Certificate " + fingerprint-short;
+                color: Theme.muted;
+                font-size: 14px;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+        }
+
+        if state == "paired": Text {
+            text: "Paired: " + client-name + ". It can control the hub now.";
+            color: Theme.ok;
+            font-size: 20px;
+            wrap: word-wrap;
+            horizontal-alignment: center;
+        }
+        if state == "locked": Text {
+            text: "Too many wrong codes. Start again if it was you.";
+            color: Theme.error;
+            font-size: 20px;
+            wrap: word-wrap;
+            horizontal-alignment: center;
+        }
+        if state == "expired" || state == "none": Text {
+            text: "The code expired.";
+            color: Theme.muted;
+            font-size: 20px;
+            horizontal-alignment: center;
+        }
+
+        Rectangle {
+            vertical-stretch: 1;
+        }
+
+        if state != "waiting": Button {
+            text: state == "paired" ? "Pair another device" : "New code";
+            clicked => {
+                restart();
+            }
+        }
+    }
+}

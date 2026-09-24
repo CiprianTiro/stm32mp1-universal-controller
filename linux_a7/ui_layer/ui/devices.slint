@@ -78,7 +78,11 @@ component LevelBar inherits Rectangle {
     // -1 = not being dragged / nothing pending.
     property <int> drag-level: -1;
     property <int> pending: -1;
-    property <int> shown: drag-level >= 0 ? drag-level : (pending >= 0 ? pending : level);
+    // What the bar shows: the finger's position while dragging, then the
+    // released value until confirmed, otherwise the device's level.
+    // `out`: the row's "%" text shows the same number, so it follows the
+    // finger too instead of only changing after release.
+    out property <int> shown: drag-level >= 0 ? drag-level : (pending >= 0 ? pending : level);
 
     // The confirmation arrived (or someone else changed it): show the truth.
     changed level => {
@@ -201,7 +205,7 @@ component DeviceRow inherits Rectangle {
 
         if item.has-dimmer: HorizontalLayout {
             spacing: 12px;
-            LevelBar {
+            bar := LevelBar {
                 horizontal-stretch: 1;
                 level: item.level;
                 // A device that can be switched off: the level only
@@ -215,7 +219,7 @@ component DeviceRow inherits Rectangle {
                 }
             }
             Text {
-                text: item.level + "%";
+                text: bar.shown + "%";
                 color: (!item.has-switch || item.on) ? Theme.title : Theme.muted;
                 font-size: 16px;
                 vertical-alignment: center;

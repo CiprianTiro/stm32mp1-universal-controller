@@ -6,6 +6,7 @@ use tokio::time::interval;
  * part of this crate" -- this is what actually makes their code exist in
  * the final binary at all. It does NOT run anything in them; nothing in
  * either file executes until something below explicitly spawns it. */
+mod auth;
 mod control;
 mod device;
 mod health;
@@ -15,6 +16,7 @@ mod rpmsg;
 mod shadow;
 mod state;
 mod store;
+mod tls;
 mod ws;
 
 /* worker_threads = 2 -- pinned explicitly to match the DK2's 2 physical
@@ -94,8 +96,30 @@ async fn main() {
     let (network_tx, network_rx) = tokio::sync::mpsc::channel(8);
     tokio::spawn(network::run(network_rx));
 
-    /* The local WebSocket API (ws.rs), protocol v2. */
-    tokio::spawn(ws::run(control, network_tx, events_tx, local_clients));
+    /* Who may use the LAN (issue #35): the paired clients (auth.rs, saved
+     * as clients.json next to the registry) and the hub's TLS identity
+     * (tls.rs, created on first start). Without a TLS identity the LAN
+     * door stays closed; the touchscreen's local door works regardless. */
+    let clients_store = store::Store::new(&store::data_dir(), "clients.json");
+    let clients = clients_store.load_or_default("paired clients", auth::decode_clients);
+    let auth = std::sync::Arc::new(auth::Auth::new(
+        clients,
+        store::writer(clients_store, auth::CLIENTS_SCHEMA),
+    ));
+    let identity = match tls::load_or_create(&tls::tls_dir()) {
+        Ok(identity) => {
+            println!("tls: hub certificate fingerprint {}", identity.fingerprint);
+            Some(identity)
+        }
+        Err(e) => {
+            println!("tls: ERROR {e} -- LAN connections disabled");
+            None
+        }
+    };
+
+    /* The WebSocket API (ws.rs), protocol v2: ws://127.0.0.1:8080 for the
+     * hub itself, wss://<hub>:8443 (paired clients only) for the LAN. */
+    tokio::spawn(ws::run(control, auth, identity, network_tx, events_tx, local_clients));
 
     /* SIGTERM is what systemd sends on stop/restart; SIGINT covers Ctrl-C
      when running this interactively during development. */

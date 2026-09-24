@@ -107,6 +107,12 @@ fn main() {
     let mut rows = DeviceRows::new(&ui);
     // When the current error message under the list goes away again.
     let mut device_message_until: Option<std::time::Instant> = None;
+    // Pairing screen (issue #35): the last network status (to put the
+    // hub's current address into the QR code), the code the current QR
+    // image was made for, and when the status was last asked for.
+    let mut last_net = ws_client::NetworkStatus::default();
+    let mut qr_code_for = String::new();
+    let mut pairing_polled = std::time::Instant::now();
 
     // Toggle and level bar (devices.slint): turned into a command for
     // that capability. The row does NOT change by itself -- it changes
@@ -164,6 +170,24 @@ fn main() {
             country: country.to_string(),
         });
     });
+    // Paired devices and pairing (issue #35).
+    let tx = request_tx.clone();
+    ui.on_open_clients(move || {
+        let _ = tx.send(ws_client::Request::ListClients);
+    });
+    let tx = request_tx.clone();
+    ui.on_start_pairing(move || {
+        let _ = tx.send(ws_client::Request::StartPairing);
+    });
+    let tx = request_tx.clone();
+    ui.on_cancel_pairing(move || {
+        let _ = tx.send(ws_client::Request::CancelPairing);
+    });
+    let tx = request_tx.clone();
+    ui.on_revoke_client(move |id| {
+        let _ = tx.send(ws_client::Request::RevokeClient { id: id.to_string() });
+    });
+
     // The two string helpers app.slint can't do itself.
     ui.on_drop_last(|text| {
         let mut text = text.to_string();
@@ -209,6 +233,8 @@ fn main() {
                 ws_client::Update::Connected => {
                     ui.set_connected(true);
                     ui.set_ever_connected(true);
+                    // For the settings page's "N devices can control this hub".
+                    let _ = request_tx.send(ws_client::Request::ListClients);
                 }
                 ws_client::Update::Disconnected => ui.set_connected(false),
                 ws_client::Update::Devices(list) => rows.replace_all(list),
@@ -218,7 +244,18 @@ fn main() {
                     ui.set_device_message(message.into());
                     device_message_until = Some(std::time::Instant::now() + DEVICE_MESSAGE_TIME);
                 }
-                ws_client::Update::Network(status) => ui.set_net(to_net_status(&status)),
+                ws_client::Update::Network(status) => {
+                    ui.set_net(to_net_status(&status));
+                    last_net = status;
+                }
+                ws_client::Update::Pairing(pairing) => {
+                    if pairing.state == "paired" && ui.get_pairing_state() != "paired" {
+                        // A new device: refresh the list (and its count).
+                        let _ = request_tx.send(ws_client::Request::ListClients);
+                    }
+                    show_pairing(&ui, &pairing, &last_net, &mut qr_code_for);
+                }
+                ws_client::Update::Clients(clients) => ui.set_clients(client_rows(&clients)),
                 ws_client::Update::Networks(networks) => {
                     ui.set_scanning(false);
                     let rows: Vec<WifiNetwork> = networks
@@ -238,8 +275,23 @@ fn main() {
                     ui.set_scanning(false);
                     show_net_message(&ui, format!("Scan failed: {message}"), true);
                 }
-                ws_client::Update::ActionDone(action, result) => apply_action_result(&ui, action, result),
+                ws_client::Update::ActionDone(action, result) => {
+                    if action == ws_client::Action::Revoke {
+                        let _ = request_tx.send(ws_client::Request::ListClients);
+                    }
+                    apply_action_result(&ui, action, result)
+                }
             }
+        }
+
+        // While the pairing screen shows a code, ask once a second how the
+        // pairing is going (countdown, and "paired" the moment it happens).
+        if ui.get_page() == 6
+            && ui.get_pairing_state() == "waiting"
+            && pairing_polled.elapsed() >= Duration::from_secs(1)
+        {
+            pairing_polled = std::time::Instant::now();
+            let _ = request_tx.send(ws_client::Request::PairingStatus);
         }
 
         if device_message_until.is_some_and(|until| std::time::Instant::now() >= until) {
@@ -348,6 +400,9 @@ fn apply_action_result(ui: &AppWindow, action: ws_client::Action, result: Result
             ui.set_page(1);
         }
         (Action::Country, Err(message)) => ui.set_country_message(message.into()),
+        // The list itself is refreshed by the caller (see the main loop).
+        (Action::Revoke, Ok(())) => ui.set_clients_message("Removed. It can no longer control the hub.".into()),
+        (Action::Revoke, Err(message)) => ui.set_clients_message(message.into()),
     }
 }
 
@@ -459,4 +514,98 @@ fn color_of(color: &ws_client::Color) -> (slint::Color, String) {
         slint::Color::from_rgb_u8(mix(255.0, 201.0), mix(167.0, 218.0), mix(87.0, 255.0)),
         format!("{kelvin} K"),
     )
+}
+
+/// Puts the pairing data on the pairing screen. The QR code is only drawn
+/// again when the code changes (not on every once-a-second update).
+fn show_pairing(ui: &AppWindow, p: &ws_client::Pairing, net: &ws_client::NetworkStatus, qr_code_for: &mut String) {
+    ui.set_pairing_state(p.state.clone().into());
+    ui.set_pairing_seconds(p.seconds_left.min(i32::MAX as u64) as i32);
+    ui.set_pairing_client(p.client_name.clone().unwrap_or_default().into());
+    ui.set_pairing_fingerprint(p.fingerprint_short.clone().into());
+
+    // The address the phone should use: the one of the link that carries
+    // traffic right now, if the backend lists it; else the first one.
+    let uplink_ip = match net.uplink.as_deref() {
+        Some("ethernet") => net.ethernet.ip.clone(),
+        Some("wifi") => net.wifi.ip.clone(),
+        _ => None,
+    };
+    let address = uplink_ip
+        .filter(|ip| p.addresses.contains(ip))
+        .or_else(|| p.addresses.first().cloned())
+        .unwrap_or_default();
+    ui.set_pairing_address(address.clone().into());
+
+    let Some(code) = &p.code else {
+        ui.set_pairing_code("".into());
+        return;
+    };
+    // "212 570": two groups of three read and type easier.
+    ui.set_pairing_code(format!("{} {}", &code[..3.min(code.len())], &code[3.min(code.len())..]).into());
+    if *code != *qr_code_for {
+        // What the phone app reads from the QR code: where the hub is, the
+        // one-time code, and the certificate fingerprint to pin (see
+        // backend_daemon's tls.rs). A URI of our own ("uchub:"), so the
+        // app recognises it as a hub pairing code and nothing else.
+        let uri = format!(
+            "uchub://pair?host={address}&port={}&code={code}&fp={}",
+            p.port, p.fingerprint
+        );
+        ui.set_pairing_qr(qr_image(&uri));
+        *qr_code_for = code.clone();
+    }
+}
+
+/// Draws `text` as a QR code image: black modules on white, with the
+/// 4-module white border scanners need, each module a whole number of
+/// pixels (so the image stays sharp) and the whole about 240 px wide.
+fn qr_image(text: &str) -> slint::Image {
+    use qrcodegen::{QrCode, QrCodeEcc};
+    // Medium error correction: still readable with ~15 % of it unreadable
+    // (glare on the screen). A pairing URI always fits, so encoding can't
+    // fail; if it somehow did, an empty image is better than a crash.
+    let Ok(qr) = QrCode::encode_text(text, QrCodeEcc::Medium) else {
+        return slint::Image::default();
+    };
+    const BORDER: i32 = 4;
+    let modules = qr.size() + 2 * BORDER;
+    let scale = (240 / modules).max(1);
+    let side = (modules * scale) as u32;
+    let mut pixels = slint::SharedPixelBuffer::<slint::Rgb8Pixel>::new(side, side);
+    let width = side as usize;
+    for (i, pixel) in pixels.make_mut_slice().iter_mut().enumerate() {
+        let x = (i % width) as i32 / scale - BORDER;
+        let y = (i / width) as i32 / scale - BORDER;
+        // get_module is false outside the code, so the border is white.
+        let v = if qr.get_module(x, y) { 0 } else { 255 };
+        *pixel = slint::Rgb8Pixel { r: v, g: v, b: v };
+    }
+    slint::Image::from_rgb8(pixels)
+}
+
+/// The paired devices as list rows, with "last seen ..." worked out from
+/// the hub's clock.
+fn client_rows(clients: &[ws_client::Client]) -> slint::ModelRc<ClientItem> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let rows: Vec<ClientItem> = clients
+        .iter()
+        .map(|c| {
+            let ago = now.saturating_sub(c.last_seen);
+            let seen = match ago {
+                0..=59 => "last seen just now".to_string(),
+                60..=3599 => format!("last seen {} min ago", ago / 60),
+                3600..=86399 => format!("last seen {} h ago", ago / 3600),
+                _ => format!("last seen {} days ago", ago / 86400),
+            };
+            ClientItem {
+                id: c.id.clone().into(),
+                name: c.name.clone().into(),
+                seen_text: seen.into(),
+            }
+        })
+        .collect();
+    std::rc::Rc::new(slint::VecModel::from(rows)).into()
 }
