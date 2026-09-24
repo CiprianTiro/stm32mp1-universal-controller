@@ -112,6 +112,11 @@ pub struct FbRenderer {
     /// here made every row start 32 px too early, shearing the picture into
     /// diagonal garbage -- the bug this field's sysfs read fixes.
     stride: usize,
+    /// The hidden buffer every frame is drawn into first (issue #34):
+    /// same layout as the framebuffer (stride x height pixels). Only the
+    /// finished, changed area is then copied to the screen -- see
+    /// draw_if_needed.
+    back: RefCell<Vec<Rgb565Pixel>>,
 }
 
 impl FbRenderer {
@@ -179,7 +184,16 @@ impl FbRenderer {
         let mem = unsafe { MmapOptions::new().len(len).map_mut(&file) }
             .map_err(|e| format!("failed to mmap {FB_PATH} ({len} bytes): {e}"))?;
 
-        Ok(Self { window, mem: RefCell::new(mem), stride })
+        // Starts black, like the freshly initialised screen; the first frame
+        // redraws (and copies) everything anyway.
+        let back = vec![Rgb565Pixel::default(); stride * height as usize];
+
+        Ok(Self {
+            window,
+            mem: RefCell::new(mem),
+            stride,
+            back: RefCell::new(back),
+        })
     }
 
     /// Draws the current UI state into the framebuffer, if (and only if)
@@ -189,22 +203,46 @@ impl FbRenderer {
     /// iteration.
     pub fn draw_if_needed(&self) {
         self.window.draw_if_needed(|renderer| {
+            // WHY TWO STEPS (issue #34): Slint draws a frame in layers --
+            // a row's background, then a toggle's track, then its knob,
+            // then the soft (anti-aliased) edges -- touching the same
+            // pixels several times. The display controller reads the
+            // framebuffer ~60 times a second at moments of its own choosing,
+            // so when Slint drew straight into it, the screen sometimes
+            // showed a half-drawn frame: visible as flickering pixels while
+            // a toggle's knob slid across (seen on the DK2). Drawing into
+            // `back` first and then copying only the FINISHED pixels means
+            // the screen never sees an in-between state; the copy of a
+            // changed area is one fast memcpy per line.
+            let mut back = self.back.borrow_mut();
+            // `render` returns which parts it changed (RepaintBufferType::
+            // ReusedBuffer: it relies on `back` still holding the previous
+            // frame, which it does -- it's ours, and only Slint writes it).
+            let changed = renderer.render(&mut back, self.stride);
+
             // Borrow the mapping made once in `new()` (no per-frame mmap).
             let mut frame = self.mem.borrow_mut();
 
             // The framebuffer's mapped memory comes back as raw bytes
-            // (`&mut [u8]`); Slint's renderer wants a slice of `Rgb565Pixel`
-            // (each one exactly 2 bytes) instead. `align_to_mut` is how you
-            // safely reinterpret one byte slice as a slice of a different,
-            // POD ("plain old data") type in Rust without copying -- the
-            // `unsafe` here is only unsafe in the sense that the compiler
-            // can't itself prove the byte alignment works out, not because
-            // anything genuinely risky is happening; RGB565 framebuffers
-            // are 2-byte-aligned by construction, which is exactly what's
-            // being asserted here.
-            let (_, pixels, _) = unsafe { frame.align_to_mut::<Rgb565Pixel>() };
+            // (`&mut [u8]`); here it's viewed as a slice of `Rgb565Pixel`
+            // (each one exactly 2 bytes). `align_to_mut` is how you
+            // reinterpret one slice as another plain-data type in Rust
+            // without copying -- `unsafe` only because the compiler can't
+            // itself prove the alignment works out; RGB565 framebuffers are
+            // 2-byte-aligned by construction.
+            let (_, screen, _) = unsafe { frame.align_to_mut::<Rgb565Pixel>() };
 
-            renderer.render(pixels, self.stride);
+            // Copy the changed rectangles, line by line.
+            for (origin, size) in changed.iter() {
+                let (x, y) = (origin.x.max(0) as usize, origin.y.max(0) as usize);
+                for line in y..y + size.height as usize {
+                    let start = line * self.stride + x;
+                    let end = start + size.width as usize;
+                    if end <= back.len() && end <= screen.len() {
+                        screen[start..end].copy_from_slice(&back[start..end]);
+                    }
+                }
+            }
         });
     }
 }

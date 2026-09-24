@@ -70,6 +70,9 @@ component Toggle inherits Rectangle {
 // which the real level shows again.
 component LevelBar inherits Rectangle {
     in property <int> level;
+    // false: greyed out and not touchable (e.g. a lamp that's switched
+    // off); it still shows the level the device will have when turned on.
+    in property <bool> enabled: true;
     callback set(int);
 
     // -1 = not being dragged / nothing pending.
@@ -102,7 +105,7 @@ component LevelBar inherits Rectangle {
             x: 0;
             width: parent.width * shown / 100;
             border-radius: 4px;
-            background: Theme.accent;
+            background: enabled ? Theme.accent : Theme.muted;
         }
     }
 
@@ -113,10 +116,11 @@ component LevelBar inherits Rectangle {
         border-radius: 13px;
         x: (parent.width - self.width) * shown / 100;
         y: (parent.height - self.height) / 2;
-        background: Theme.title;
+        background: enabled ? Theme.title : Theme.muted;
     }
 
     touch := TouchArea {
+        enabled: root.enabled;
         // Finger position -> 0..100.
         function level-at(x: length) -> int {
             return max(0, min(100, round(x / self.width * 100)));
@@ -200,13 +204,19 @@ component DeviceRow inherits Rectangle {
             LevelBar {
                 horizontal-stretch: 1;
                 level: item.level;
+                // A device that can be switched off: the level only
+                // matters (and can only be changed here) while it's on.
+                // The backend still accepts a level change while off (an
+                // app or automation may preset it); this is a rule of the
+                // screen, to avoid "I moved it and nothing happened".
+                enabled: !item.has-switch || item.on;
                 set(level) => {
                     set-level(item.id, level);
                 }
             }
             Text {
                 text: item.level + "%";
-                color: Theme.muted;
+                color: (!item.has-switch || item.on) ? Theme.title : Theme.muted;
                 font-size: 16px;
                 vertical-alignment: center;
                 min-width: 48px;
