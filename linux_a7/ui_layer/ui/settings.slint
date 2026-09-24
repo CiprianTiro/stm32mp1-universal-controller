@@ -237,11 +237,10 @@ export component PairingPage inherits Rectangle {
             // light border around it; the image already has that border).
             HorizontalLayout {
                 alignment: center;
+                // Natural size: main.rs draws it with whole pixels per
+                // module; scaling would make it harder to scan.
                 Image {
                     source: qr;
-                    width: 240px;
-                    height: 240px;
-                    image-rendering: pixelated;
                 }
             }
             Text {

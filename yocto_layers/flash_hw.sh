@@ -99,5 +99,12 @@ read -rp "Press Enter to start flashing, or Ctrl+C to abort... "
 # key on first boot -- drop the stale cached entry so ssh doesn't refuse to
 # connect over the mismatch.
 ssh-keygen -f "${HOME}/.ssh/known_hosts" -R "stm32mp1.local" >/dev/null 2>&1 || true
+# ...and under the board's IP address, if it's known: an ssh to the IP
+# would otherwise stop with the same warning. The address is looked up now,
+# while it may still resolve; a board that's already off is simply skipped.
+BOARD_IP="$(getent hosts "${BOARD_HOST}" 2>/dev/null | awk '{print $1; exit}' || true)"
+if [ -n "${BOARD_IP}" ]; then
+    ssh-keygen -f "${HOME}/.ssh/known_hosts" -R "${BOARD_IP}" >/dev/null 2>&1 || true
+fi
 
 echo "  -> Done. Flip SW1 back to SD/eMMC boot mode (BOOT2=1, BOOT0=1) and power-cycle the board."

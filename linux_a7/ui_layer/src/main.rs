@@ -112,6 +112,9 @@ fn main() {
     // image was made for, and when the status was last asked for.
     let mut last_net = ws_client::NetworkStatus::default();
     let mut qr_code_for = String::new();
+    // The setup hotspot's join QR (issue #36): made again only when the
+    // hotspot's name or password change.
+    let mut hotspot_qr_for = String::new();
     let mut pairing_polled = std::time::Instant::now();
 
     // Toggle and level bar (devices.slint): turned into a command for
@@ -170,6 +173,16 @@ fn main() {
             country: country.to_string(),
         });
     });
+    // The setup hotspot (issue #36).
+    let tx = request_tx.clone();
+    ui.on_start_hotspot(move || {
+        let _ = tx.send(ws_client::Request::StartHotspot);
+    });
+    let tx = request_tx.clone();
+    ui.on_stop_hotspot(move || {
+        let _ = tx.send(ws_client::Request::StopHotspot);
+    });
+
     // Paired devices and pairing (issue #35).
     let tx = request_tx.clone();
     ui.on_open_clients(move || {
@@ -246,6 +259,18 @@ fn main() {
                 }
                 ws_client::Update::Network(status) => {
                     ui.set_net(to_net_status(&status));
+                    if let Some(password) = status.hotspot.password.as_ref().filter(|_| status.hotspot.active) {
+                        let key = format!("{}\n{password}", status.hotspot.ssid);
+                        if key != hotspot_qr_for {
+                            // The standard "join this WiFi" QR code phone
+                            // cameras understand. (Our names and passwords
+                            // have none of the characters the format would
+                            // need escaped: \ ; , : ")
+                            let join = format!("WIFI:T:WPA;S:{};P:{password};;", status.hotspot.ssid);
+                            ui.set_hotspot_qr(qr_image(&join, 150));
+                            hotspot_qr_for = key;
+                        }
+                    }
                     last_net = status;
                 }
                 ws_client::Update::Pairing(pairing) => {
@@ -364,6 +389,25 @@ fn to_net_status(status: &ws_client::NetworkStatus) -> NetStatus {
         wifi_ip: text(&status.wifi.ip),
         wifi_saved: text(&status.wifi.saved_ssid),
         wifi_country: text(&status.wifi.country),
+        hotspot_active: status.hotspot.active,
+        hotspot_ssid: status.hotspot.ssid.clone().into(),
+        // "xmfk7p2q9hta" -> "xmfk 7p2q 9hta": easier to read off the screen.
+        hotspot_password: status
+            .hotspot
+            .password
+            .as_deref()
+            .map(|p| {
+                p.as_bytes()
+                    .chunks(4)
+                    .map(|c| String::from_utf8_lossy(c).into_owned())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .unwrap_or_default()
+            .into(),
+        hotspot_url: status.hotspot.url.clone().into(),
+        hotspot_error: text(&status.hotspot.last_error),
+        hotspot_connecting: status.hotspot.connecting,
     }
 }
 
@@ -403,6 +447,8 @@ fn apply_action_result(ui: &AppWindow, action: ws_client::Action, result: Result
         // The list itself is refreshed by the caller (see the main loop).
         (Action::Revoke, Ok(())) => ui.set_clients_message("Removed. It can no longer control the hub.".into()),
         (Action::Revoke, Err(message)) => ui.set_clients_message(message.into()),
+        (Action::Hotspot, Ok(())) => {}
+        (Action::Hotspot, Err(message)) => show_net_message(ui, format!("Setup hotspot: {message}"), true),
     }
 }
 
@@ -552,15 +598,18 @@ fn show_pairing(ui: &AppWindow, p: &ws_client::Pairing, net: &ws_client::Network
             "uchub://pair?host={address}&port={}&code={code}&fp={}",
             p.port, p.fingerprint
         );
-        ui.set_pairing_qr(qr_image(&uri));
+        ui.set_pairing_qr(qr_image(&uri, 260));
         *qr_code_for = code.clone();
     }
 }
 
 /// Draws `text` as a QR code image: black modules on white, with the
 /// 4-module white border scanners need, each module a whole number of
-/// pixels (so the image stays sharp) and the whole about 240 px wide.
-fn qr_image(text: &str) -> slint::Image {
+/// pixels, and the whole at most `max_px` wide. The page shows it at
+/// exactly this size (no width/height set on the Image): scaling it on
+/// screen made some modules a pixel wider than others, and the hotspot's
+/// small QR code then didn't scan (found in a PC render, #36).
+fn qr_image(text: &str, max_px: i32) -> slint::Image {
     use qrcodegen::{QrCode, QrCodeEcc};
     // Medium error correction: still readable with ~15 % of it unreadable
     // (glare on the screen). A pairing URI always fits, so encoding can't
@@ -570,7 +619,7 @@ fn qr_image(text: &str) -> slint::Image {
     };
     const BORDER: i32 = 4;
     let modules = qr.size() + 2 * BORDER;
-    let scale = (240 / modules).max(1);
+    let scale = (max_px / modules).max(1);
     let side = (modules * scale) as u32;
     let mut pixels = slint::SharedPixelBuffer::<slint::Rgb8Pixel>::new(side, side);
     let width = side as usize;

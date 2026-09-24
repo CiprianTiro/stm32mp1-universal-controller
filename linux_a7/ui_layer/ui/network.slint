@@ -34,6 +34,14 @@ export struct NetStatus {
     wifi-ip: string,
     wifi-saved: string,
     wifi-country: string,
+    // The setup hotspot (issue #36).
+    hotspot-active: bool,
+    hotspot-ssid: string,
+    // Grouped for reading ("xmfk 7p2q 9hta"); empty on LAN clients.
+    hotspot-password: string,
+    hotspot-url: string,
+    hotspot-error: string,
+    hotspot-connecting: bool,
 }
 
 // Four bars of rising height, the first `bars` of them lit.
@@ -73,8 +81,9 @@ export component NetIndicator inherits Rectangle {
             y: (parent.height - self.height) / 2;
         }
         Text {
-            text: net.uplink == "ethernet" ? "Ethernet" : (net.uplink == "wifi" ? "WiFi" : "Offline");
-            color: net.uplink == "" ? Theme.error : Theme.title;
+            text: net.uplink == "ethernet" ? "Ethernet" : (net.uplink == "wifi" ? "WiFi"
+                : (net.hotspot-active ? "Hotspot" : "Offline"));
+            color: net.uplink == "" && !net.hotspot-active ? Theme.error : Theme.title;
             font-size: 18px;
             vertical-alignment: center;
         }
@@ -157,11 +166,15 @@ export component NetworkPage inherits Rectangle {
     // is an error.
     in property <string> message;
     in property <bool> message-is-error;
+    // The setup hotspot's join QR code (made by main.rs).
+    in property <image> hotspot-qr;
     callback back();
     callback scan();
     callback pick(WifiNetwork);
     callback forget();
     callback change-country();
+    callback start-hotspot();
+    callback stop-hotspot();
 
     background: Theme.background;
 
@@ -213,6 +226,53 @@ export component NetworkPage inherits Rectangle {
             wrap: word-wrap;
         }
 
+        // The setup hotspot while it's on (issue #36): what a phone needs
+        // to join it, and the page to open.
+        if net.hotspot-active: Rectangle {
+            background: Theme.surface;
+            border-radius: 8px;
+            HorizontalLayout {
+                padding: 10px;
+                spacing: 10px;
+                // Natural size (see main.rs's qr_image).
+                Image {
+                    source: hotspot-qr;
+                }
+                VerticalLayout {
+                    spacing: 4px;
+                    alignment: center;
+                    Text {
+                        text: net.hotspot-connecting ? "Setup hotspot: joining the chosen WiFi..." : "Setup hotspot is on";
+                        color: Theme.accent;
+                        font-size: 16px;
+                        wrap: word-wrap;
+                    }
+                    Text {
+                        text: "Join " + net.hotspot-ssid;
+                        color: Theme.title;
+                        font-size: 16px;
+                    }
+                    Text {
+                        text: "Password " + net.hotspot-password;
+                        color: Theme.title;
+                        font-size: 16px;
+                    }
+                    Text {
+                        text: "then open " + net.hotspot-url;
+                        color: Theme.muted;
+                        font-size: 14px;
+                    }
+                }
+            }
+        }
+
+        if net.hotspot-error != "": Text {
+            text: net.hotspot-error;
+            color: Theme.error;
+            font-size: 15px;
+            wrap: word-wrap;
+        }
+
         HorizontalLayout {
             spacing: 10px;
             Text {
@@ -258,6 +318,17 @@ export component NetworkPage inherits Rectangle {
                 enabled: net.wifi-available;
                 clicked => {
                     change-country();
+                }
+            }
+            Button {
+                text: net.hotspot-active ? "Stop hotspot" : "Setup hotspot";
+                enabled: net.wifi-available;
+                clicked => {
+                    if (net.hotspot-active) {
+                        stop-hotspot();
+                    } else {
+                        start-hotspot();
+                    }
                 }
             }
         }

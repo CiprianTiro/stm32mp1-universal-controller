@@ -147,6 +147,10 @@ export component AppWindow inherits Window {
     in property <image> pairing-qr;
     in property <string> pairing-fingerprint;
     in property <string> pairing-address;
+    // The setup hotspot (issue #36).
+    in property <image> hotspot-qr;
+    callback start-hotspot();
+    callback stop-hotspot();
     callback open-clients();
     callback start-pairing();
     callback cancel-pairing();
@@ -332,6 +336,13 @@ export component AppWindow inherits Window {
         scanning: root.scanning;
         message: root.net-message;
         message-is-error: root.net-message-is-error;
+        hotspot-qr: root.hotspot-qr;
+        start-hotspot => {
+            root.start-hotspot();
+        }
+        stop-hotspot => {
+            root.stop-hotspot();
+        }
         back => {
             page = network-back;
         }

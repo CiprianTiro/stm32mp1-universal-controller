@@ -42,6 +42,9 @@
  *   cancel_pairing                         -> ack
  *   list_clients                           -> clients {clients: [...]}
  *   revoke_client {id}                     -> ack
+ *   start_hotspot / stop_hotspot           -> hotspot {active, ssid, password, ...} (#36)
+ * get_network_status's reply also carries the setup hotspot's state; its
+ * password only on the hub's own door.
  *   anything refused                       -> error {message}
  *
  * A device is device.rs's JSON: {"id", "name", "room", "template", "source",
@@ -69,6 +72,7 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::auth::{self, Auth};
 use crate::control::Control;
+use crate::hotspot::{self, Hotspot};
 use crate::device::{self, Device};
 use crate::network;
 use crate::state::{DeviceId, Event};
@@ -138,6 +142,9 @@ enum ClientRequest {
     RevokeClient {
         id: String,
     },
+    /* Issue #36: the setup hotspot (hub's own door only). */
+    StartHotspot,
+    StopHotspot,
     /* Network (issue #61), answered by network.rs. Reading the status is
      * allowed for every client; everything else only for clients on the
      * hub itself -- see local_only below. */
@@ -172,6 +179,8 @@ impl ClientRequest {
                 | ClientRequest::CancelPairing
                 | ClientRequest::ListClients
                 | ClientRequest::RevokeClient { .. }
+                | ClientRequest::StartHotspot
+                | ClientRequest::StopHotspot
         )
     }
 
@@ -225,6 +234,12 @@ enum ServerMessage {
     Ack,
     NetworkStatus {
         status: network::Status,
+        /* The setup hotspot (#36). */
+        hotspot: hotspot::HotspotStatus,
+    },
+    Hotspot {
+        #[serde(flatten)]
+        status: hotspot::HotspotStatus,
     },
     WifiNetworks {
         networks: Vec<network::Network>,
@@ -249,6 +264,7 @@ enum ServerMessage {
 struct AppState {
     control: Control,
     auth: Arc<Auth>,
+    hotspot: Arc<Hotspot>,
     /* The hub certificate's fingerprint ("" if the LAN door is off). */
     fingerprint: Arc<String>,
     network_tx: mpsc::Sender<network::Cmd>,
@@ -288,9 +304,11 @@ enum Door {
 
 /* Entry point, spawned once from main(). `identity`: the hub's TLS
  * identity; None = the LAN door stays closed (the local one still works). */
+#[allow(clippy::too_many_arguments)] /* all distinct handles; a struct would just rename them */
 pub async fn run(
     control: Control,
     auth: Arc<Auth>,
+    hotspot: Arc<Hotspot>,
     identity: Option<tls::Identity>,
     network_tx: mpsc::Sender<network::Cmd>,
     events_tx: broadcast::Sender<Event>,
@@ -300,6 +318,7 @@ pub async fn run(
     let state = AppState {
         control,
         auth,
+        hotspot,
         fingerprint,
         network_tx,
         events_tx,
@@ -539,6 +558,28 @@ async fn handle_message(
         }
         ClientRequest::ListClients => Next::Send(ServerMessage::Clients { clients: auth.list() }),
         ClientRequest::RevokeClient { id } => Next::Send(ack_or_error(auth.revoke(&id))),
+        ClientRequest::StartHotspot => Next::Send(match app_state.hotspot.open().await {
+            Ok(status) => ServerMessage::Hotspot { status },
+            Err(message) => ServerMessage::Error { message },
+        }),
+        ClientRequest::StopHotspot => Next::Send(ServerMessage::Hotspot {
+            status: app_state.hotspot.close().await,
+        }),
+        ClientRequest::GetNetworkStatus => {
+            let reply = match ask_network(&app_state.network_tx, |reply| network::Cmd::GetStatus { reply }).await {
+                Ok(status) => {
+                    let mut hotspot = app_state.hotspot.status();
+                    /* The hotspot password is the proof of being AT the
+                     * hub: only its own screen ever gets it. */
+                    if session.door != Door::Local {
+                        hotspot.password = None;
+                    }
+                    ServerMessage::NetworkStatus { status, hotspot }
+                }
+                Err(message) => ServerMessage::Error { message },
+            };
+            Next::Send(reply)
+        }
         other => Next::Send(handle_request(other, app_state).await),
     }
 }
@@ -625,15 +666,12 @@ async fn handle_request(req: ClientRequest, app_state: &AppState) -> ServerMessa
         | ClientRequest::PairingStatus
         | ClientRequest::CancelPairing
         | ClientRequest::ListClients
-        | ClientRequest::RevokeClient { .. } => ServerMessage::Error {
+        | ClientRequest::RevokeClient { .. }
+        | ClientRequest::StartHotspot
+        | ClientRequest::StopHotspot
+        | ClientRequest::GetNetworkStatus => ServerMessage::Error {
             message: "internal: request not routed".into(),
         },
-        ClientRequest::GetNetworkStatus => {
-            match ask_network(&app_state.network_tx, |reply| network::Cmd::GetStatus { reply }).await {
-                Ok(status) => ServerMessage::NetworkStatus { status },
-                Err(message) => ServerMessage::Error { message },
-            }
-        }
         ClientRequest::WifiScan => {
             match ask_network(&app_state.network_tx, |reply| network::Cmd::Scan { reply }).await {
                 Ok(Ok(networks)) => ServerMessage::WifiNetworks { networks },

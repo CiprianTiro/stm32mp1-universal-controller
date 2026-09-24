@@ -46,3 +46,6 @@ hyper = { version = "1", features = ["http1", "server"] }
 hyper-util = { version = "0.1", features = ["tokio", "server", "service"] }
 # The `Service` trait axum's router implements (already in the build).
 tower-service = "0.3"
+bluer = { version = "0.17.4", features = ["bluetoothd"] }
+spake2 = "0.4.0"
+dbus = { version = "0.9", features = ["vendored"] }
