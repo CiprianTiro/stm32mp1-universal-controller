@@ -1,0 +1,268 @@
+// devices.slint -- the device list on the main screen (issue #34).
+//
+// Every device is drawn from its CAPABILITIES alone -- there is no code
+// here for "a lamp" or "the LED": a switch capability gets a toggle, a
+// dimmer a level bar, a color a swatch, a sensor its readings. A device
+// type the UI has never heard of works as long as it's built from these.
+// main.rs turns backend_daemon's devices into DeviceItem rows and sends the
+// commands; like everything in ui_layer, nothing here changes a device's
+// state by itself -- it only shows what the backend reports.
+
+import { ListView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+
+// One device, flattened for display. The has-* flags say which
+// capabilities it has; the other fields are only meaningful when their
+// flag is set.
+export struct DeviceItem {
+    id: string,
+    name: string,
+    room: string,
+    has-switch: bool,
+    on: bool,
+    has-dimmer: bool,
+    level: int,
+    has-color: bool,
+    color: color,
+    // e.g. "#FF8800" or "2700 K"
+    color-text: string,
+    // e.g. "temperature 21.5 °C   humidity 40 %"; empty = no sensor
+    sensor-text: string,
+}
+
+// On/off, big enough for a finger.
+component Toggle inherits Rectangle {
+    in property <bool> on;
+    callback toggled(bool);
+
+    width: 64px;
+    height: 34px;
+    border-radius: 17px;
+    background: on ? Theme.accent : Theme.dot-off;
+
+    Rectangle {
+        width: 28px;
+        height: 28px;
+        border-radius: 14px;
+        y: 3px;
+        x: on ? parent.width - self.width - 3px : 3px;
+        background: Theme.title;
+        animate x { duration: 120ms; }
+    }
+
+    TouchArea {
+        clicked => {
+            toggled(!on);
+        }
+    }
+}
+
+// A level from 0 to 100. Shows the device's real level, except while a
+// finger is on it (then the finger's position). The command goes out once,
+// when the finger lifts -- not for every pixel of a drag, which would flood
+// the backend (and the flash, which saves every change).
+//
+// Between lifting the finger and the backend's confirmation there are a
+// few milliseconds in which `level` is still the OLD value; showing it
+// made the knob visibly jump back and forth (seen on the DK2). So the
+// chosen value is kept on screen ("pending") until `level` changes -- or,
+// if the command was refused and nothing changes, for at most 2 s, after
+// which the real level shows again.
+component LevelBar inherits Rectangle {
+    in property <int> level;
+    // false: greyed out and not touchable (e.g. a lamp that's switched
+    // off); it still shows the level the device will have when turned on.
+    in property <bool> enabled: true;
+    callback set(int);
+
+    // -1 = not being dragged / nothing pending.
+    property <int> drag-level: -1;
+    property <int> pending: -1;
+    property <int> shown: drag-level >= 0 ? drag-level : (pending >= 0 ? pending : level);
+
+    // The confirmation arrived (or someone else changed it): show the truth.
+    changed level => {
+        pending = -1;
+    }
+
+    Timer {
+        interval: 2s;
+        running: pending >= 0;
+        triggered => {
+            pending = -1;
+        }
+    }
+
+    height: 40px;
+
+    // The track, and the filled part.
+    Rectangle {
+        y: (parent.height - self.height) / 2;
+        height: 8px;
+        border-radius: 4px;
+        background: Theme.dot-off;
+        Rectangle {
+            x: 0;
+            width: parent.width * shown / 100;
+            border-radius: 4px;
+            background: enabled ? Theme.accent : Theme.muted;
+        }
+    }
+
+    // The knob.
+    Rectangle {
+        width: 26px;
+        height: 26px;
+        border-radius: 13px;
+        x: (parent.width - self.width) * shown / 100;
+        y: (parent.height - self.height) / 2;
+        background: enabled ? Theme.title : Theme.muted;
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        // Finger position -> 0..100.
+        function level-at(x: length) -> int {
+            return max(0, min(100, round(x / self.width * 100)));
+        }
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.down) {
+                drag-level = level-at(self.mouse-x);
+            } else if (event.kind == PointerEventKind.up) {
+                if (drag-level >= 0) {
+                    // Released at the level it already has: nothing to
+                    // send, and nothing will arrive to clear `pending`.
+                    if (drag-level != level) {
+                        pending = drag-level;
+                        set(drag-level);
+                    }
+                }
+                drag-level = -1;
+            }
+        }
+        moved => {
+            if (self.pressed) {
+                drag-level = level-at(self.mouse-x);
+            }
+        }
+    }
+}
+
+component DeviceRow inherits Rectangle {
+    in property <DeviceItem> item;
+    callback set-switch(string, bool);
+    callback set-level(string, int);
+
+    border-radius: 8px;
+    background: Theme.surface;
+
+    VerticalLayout {
+        padding: 12px;
+        spacing: 6px;
+
+        HorizontalLayout {
+            spacing: 10px;
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 1;
+                Text {
+                    text: item.name;
+                    color: Theme.title;
+                    font-size: 18px;
+                    overflow: elide;
+                }
+                if item.room != "": Text {
+                    text: item.room;
+                    color: Theme.muted;
+                    font-size: 14px;
+                }
+            }
+            if item.has-color: VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 26px;
+                    height: 26px;
+                    border-radius: 13px;
+                    background: item.color;
+                    border-width: 1px;
+                    border-color: Theme.dot-off;
+                }
+            }
+            if item.has-switch: VerticalLayout {
+                alignment: center;
+                Toggle {
+                    on: item.on;
+                    toggled(on) => {
+                        set-switch(item.id, on);
+                    }
+                }
+            }
+        }
+
+        if item.has-dimmer: HorizontalLayout {
+            spacing: 12px;
+            LevelBar {
+                horizontal-stretch: 1;
+                level: item.level;
+                // A device that can be switched off: the level only
+                // matters (and can only be changed here) while it's on.
+                // The backend still accepts a level change while off (an
+                // app or automation may preset it); this is a rule of the
+                // screen, to avoid "I moved it and nothing happened".
+                enabled: !item.has-switch || item.on;
+                set(level) => {
+                    set-level(item.id, level);
+                }
+            }
+            Text {
+                text: item.level + "%";
+                color: (!item.has-switch || item.on) ? Theme.title : Theme.muted;
+                font-size: 16px;
+                vertical-alignment: center;
+                min-width: 48px;
+                horizontal-alignment: right;
+            }
+        }
+
+        if item.has-color: Text {
+            text: "Color " + item.color-text;
+            color: Theme.muted;
+            font-size: 14px;
+        }
+
+        if item.sensor-text != "": Text {
+            text: item.sensor-text;
+            color: Theme.title;
+            font-size: 16px;
+            wrap: word-wrap;
+        }
+    }
+}
+
+// The list itself; scrolls when there are more devices than fit.
+export component DeviceList inherits Rectangle {
+    in property <[DeviceItem]> devices;
+    callback set-switch(string, bool);
+    callback set-level(string, int);
+
+    if devices.length == 0: Text {
+        text: "No devices yet";
+        color: Theme.muted;
+        font-size: 18px;
+    }
+
+    ListView {
+        for d in devices: VerticalLayout {
+            padding-bottom: 8px;
+            DeviceRow {
+                item: d;
+                set-switch(id, on) => {
+                    root.set-switch(id, on);
+                }
+                set-level(id, level) => {
+                    root.set-level(id, level);
+                }
+            }
+        }
+    }
+}

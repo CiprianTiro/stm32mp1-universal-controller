@@ -33,6 +33,9 @@ const FRAME: Duration = Duration::from_millis(16);
 /// wrong framebuffer.
 const DISPLAY_WAIT: Duration = Duration::from_secs(60);
 
+/// How long a refused command's message stays under the device list.
+const DEVICE_MESSAGE_TIME: Duration = Duration::from_secs(4);
+
 /// How often to look for the touch panel again while it isn't there yet
 /// (its driver is loaded by udev at about the same time as the display's).
 const TOUCH_RETRY: Duration = Duration::from_secs(1);
@@ -95,35 +98,44 @@ fn main() {
     // Starts ws_client.rs's background thread (see its own doc comment for
     // why this needs to be a separate OS thread rather than something
     // awaited inline) and gets back the two channel ends this loop uses:
-    // `request_tx` to ask for a LED change, `update_rx` to receive
-    // connection-status/LED-state updates.
+    // `request_tx` to send requests (commands, WiFi actions), `update_rx`
+    // to receive what backend_daemon reports (devices, network, ...).
     let (request_tx, update_rx) = ws_client::start();
 
-    // Wires app.slint's `toggle-led` callback (fired when the button is
-    // tapped -- see app.slint's `clicked =>` handler) to actually do
-    // something: ask ws_client.rs's background thread to send a `SetLed`
-    // request for the *opposite* of whatever's currently displayed.
+    // The device list (issue #34): what backend_daemon last reported,
+    // turned into the rows app.slint shows. See DeviceRows.
+    let mut rows = DeviceRows::new(&ui);
+    // When the current error message under the list goes away again.
+    let mut device_message_until: Option<std::time::Instant> = None;
+
+    // Toggle and level bar (devices.slint): turned into a command for
+    // that capability. The row does NOT change by itself -- it changes
+    // when backend_daemon confirms, as a DeviceChanged update below.
     //
-    // `ui.as_weak()`: a `Weak` reference to the UI, not a strong `Rc` one --
-    // this callback closure gets stored *inside* `ui` itself (Slint wires
-    // callbacks by holding onto the handler), so capturing `ui` by a strong
-    // reference here would make the UI keep itself alive forever (a
-    // reference cycle: ui -> callback -> ui). `.unwrap()` inside the
-    // closure is safe because this program never actually drops `ui` while
-    // it's still running -- the `Weak` upgrade only becomes `None` after
-    // the window is torn down, which doesn't happen until the process
-    // exits anyway.
-    let ui_weak = ui.as_weak();
-    let toggle_request_tx = request_tx.clone();
-    ui.on_toggle_led(move || {
-        let ui = ui_weak.unwrap();
-        let currently_on = ui.get_led_on();
-        // `let _ =`: if this send fails, ws_client.rs's background thread
-        // has already exited (the receiving end was dropped) -- nothing
-        // this callback can usefully do about that beyond not crashing.
-        let _ = toggle_request_tx.send(ws_client::Request::SetLed { on: !currently_on });
+    // `move` closures: each callback gets its own clone of the channel end
+    // (a cheap handle). `let _ =`: a failed send only means ws_client's
+    // thread has already exited -- nothing useful to do about it here.
+    let tx = request_tx.clone();
+    ui.on_set_switch(move |id, on| {
+        let _ = tx.send(ws_client::Request::Command {
+            id: id.to_string(),
+            capability: "switch".into(),
+            value: serde_json::json!({ "on": on }),
+        });
+    });
+    let tx = request_tx.clone();
+    ui.on_set_level(move |id, level| {
+        let _ = tx.send(ws_client::Request::Command {
+            id: id.to_string(),
+            capability: "dimmer".into(),
+            value: serde_json::json!({ "level": level }),
+        });
     });
 
+    // `ui.as_weak()` below: a `Weak` reference to the UI, not a strong one
+    // -- the callback closure is stored *inside* `ui` itself, so a strong
+    // reference would make the UI keep itself alive forever (a reference
+    // cycle). `.unwrap()` is safe: the window lives as long as the process.
     // The network screens (issue #61): each callback just forwards the
     // request; the answer comes back as an `Update` in the loop below.
     // `scanning`/`busy` are set here so the screen reacts to the tap at
@@ -180,18 +192,14 @@ fn main() {
             touch_checked = std::time::Instant::now();
         }
 
-        // 3. Drain any updates from backend_daemon (connection status, or
-        //    the LED's actual state) and reflect them in the UI's
-        //    properties -- `try_recv()` never blocks, so this loop doesn't
-        //    stall waiting for a message that might not be coming this
-        //    iteration. Every update here is applied directly to app.slint's
-        //    `led-on`/`connected` properties -- this is the *only* place in
-        //    this whole crate that ever writes to them, matching ui_layer's
-        //    "just displays what the daemon says" design (see this file's
-        //    header comment): note in particular that tapping the button
-        //    does NOT set `led-on` itself (see `on_toggle_led` above) --
-        //    the display only ever changes once backend_daemon actually
-        //    confirms it, arriving back here as one of these updates.
+        // 3. Drain any updates from backend_daemon and reflect them in the
+        //    UI's properties -- `try_recv()` never blocks, so this loop
+        //    doesn't stall waiting for a message that might not be coming.
+        //    This is the *only* place that changes what the screen shows
+        //    about devices, matching ui_layer's "just displays what the
+        //    daemon says" design: tapping a toggle does NOT flip it by
+        //    itself (see `on_set_switch` above) -- it changes once
+        //    backend_daemon confirms, arriving here as DeviceChanged.
         while let Ok(update) = update_rx.try_recv() {
             match update {
                 // ever-connected (issue #59): from the first successful
@@ -203,7 +211,13 @@ fn main() {
                     ui.set_ever_connected(true);
                 }
                 ws_client::Update::Disconnected => ui.set_connected(false),
-                ws_client::Update::LedState(on) => ui.set_led_on(on),
+                ws_client::Update::Devices(list) => rows.replace_all(list),
+                ws_client::Update::DeviceChanged(device) => rows.changed(device),
+                ws_client::Update::DeviceRemoved(id) => rows.removed(&id),
+                ws_client::Update::CommandFailed(message) => {
+                    ui.set_device_message(message.into());
+                    device_message_until = Some(std::time::Instant::now() + DEVICE_MESSAGE_TIME);
+                }
                 ws_client::Update::Network(status) => ui.set_net(to_net_status(&status)),
                 ws_client::Update::Networks(networks) => {
                     ui.set_scanning(false);
@@ -226,6 +240,11 @@ fn main() {
                 }
                 ws_client::Update::ActionDone(action, result) => apply_action_result(&ui, action, result),
             }
+        }
+
+        if device_message_until.is_some_and(|until| std::time::Instant::now() >= until) {
+            ui.set_device_message("".into());
+            device_message_until = None;
         }
 
         // 4. Actually draw, if anything changed as a result of the above
@@ -330,4 +349,114 @@ fn apply_action_result(ui: &AppWindow, action: ws_client::Action, result: Result
         }
         (Action::Country, Err(message)) => ui.set_country_message(message.into()),
     }
+}
+
+/// The device list shown on the main screen (issue #34): the devices as
+/// backend_daemon last reported them, and the rows app.slint draws.
+///
+/// The rows live in one VecModel for the program's whole life. On a change
+/// only the rows that differ are updated (set_row_data); the whole list is
+/// only replaced when devices appear, disappear or change order -- so the
+/// list doesn't jump back to the top every time a lamp is switched.
+struct DeviceRows {
+    devices: std::collections::BTreeMap<String, ws_client::Device>,
+    model: std::rc::Rc<slint::VecModel<DeviceItem>>,
+    /// The id of each row, in the model's order.
+    ids: Vec<String>,
+}
+
+impl DeviceRows {
+    fn new(ui: &AppWindow) -> Self {
+        let model = std::rc::Rc::new(slint::VecModel::default());
+        ui.set_devices(model.clone().into());
+        DeviceRows {
+            devices: Default::default(),
+            model,
+            ids: Vec::new(),
+        }
+    }
+
+    fn replace_all(&mut self, list: Vec<ws_client::Device>) {
+        self.devices = list.into_iter().map(|d| (d.id.clone(), d)).collect();
+        self.refresh();
+    }
+
+    fn changed(&mut self, device: ws_client::Device) {
+        self.devices.insert(device.id.clone(), device);
+        self.refresh();
+    }
+
+    fn removed(&mut self, id: &str) {
+        self.devices.remove(id);
+        self.refresh();
+    }
+
+    /// Brings the model in line with `devices`: sorted by room, then name
+    /// (so a room's devices stay together), then id.
+    fn refresh(&mut self) {
+        use slint::Model;
+        let mut sorted: Vec<&ws_client::Device> = self.devices.values().collect();
+        sorted.sort_by(|a, b| (&a.room, &a.name, &a.id).cmp(&(&b.room, &b.name, &b.id)));
+        let ids: Vec<String> = sorted.iter().map(|d| d.id.clone()).collect();
+        let items: Vec<DeviceItem> = sorted.into_iter().map(device_item).collect();
+        if ids == self.ids {
+            for (row, item) in items.into_iter().enumerate() {
+                if self.model.row_data(row).as_ref() != Some(&item) {
+                    self.model.set_row_data(row, item);
+                }
+            }
+        } else {
+            self.model.set_vec(items);
+            self.ids = ids;
+        }
+    }
+}
+
+/// One device -> one row of the list: which capabilities it has, and
+/// their values in the form app.slint shows them.
+fn device_item(device: &ws_client::Device) -> DeviceItem {
+    let caps = &device.capabilities;
+    let (color, color_text) = match &caps.color {
+        Some(c) => color_of(c),
+        None => (slint::Color::default(), String::new()),
+    };
+    let sensor_text = caps.sensor.as_ref().map_or(String::new(), |s| {
+        s.readings
+            .iter()
+            .map(|(name, r)| format!("{name} {} {}", r.value, r.unit).trim_end().to_string())
+            .collect::<Vec<_>>()
+            .join("   ")
+    });
+    DeviceItem {
+        id: device.id.clone().into(),
+        name: device.name.clone().into(),
+        room: device.room.clone().into(),
+        has_switch: caps.switch.is_some(),
+        on: caps.switch.as_ref().is_some_and(|s| s.on),
+        has_dimmer: caps.dimmer.is_some(),
+        level: caps.dimmer.as_ref().map_or(0, |d| d.level.into()),
+        has_color: caps.color.is_some(),
+        color,
+        color_text: color_text.into(),
+        sensor_text: sensor_text.into(),
+    }
+}
+
+/// The swatch color and its label: "#FF8800" as is; a white temperature
+/// as an approximate tint between warm (2000 K, orange-ish) and cold
+/// (6500 K, bluish white) -- only to hint at it, not a colorimetric
+/// conversion.
+fn color_of(color: &ws_client::Color) -> (slint::Color, String) {
+    if let Some(hex) = &color.hex {
+        let value = u32::from_str_radix(hex.trim_start_matches('#'), 16).unwrap_or(0);
+        let rgb = slint::Color::from_rgb_u8((value >> 16) as u8, (value >> 8) as u8, value as u8);
+        return (rgb, hex.to_uppercase());
+    }
+    let kelvin = color.kelvin.unwrap_or(4000);
+    let t = ((f32::from(kelvin) - 2000.0) / 4500.0).clamp(0.0, 1.0);
+    let mix = |warm: f32, cold: f32| (warm + (cold - warm) * t).round() as u8;
+    (
+        slint::Color::from_rgb_u8(mix(255.0, 201.0), mix(167.0, 218.0), mix(87.0, 255.0)),
+        format!("{kelvin} K"),
+    )
 }
