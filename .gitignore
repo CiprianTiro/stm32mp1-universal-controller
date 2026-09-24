@@ -110,5 +110,9 @@ Thumbs.db
 # over a non-native filesystem (e.g. the sshfs mount used for remote editing)
 ._*
 
+# userfs backups taken by flash_hw.sh (#56): they contain the board's
+# private key and its device registry -- never commit them.
+yocto_layers/userfs-backups/
+
 # Docker container volume state leftovers
 yocto_layers/.docker/

@@ -3,7 +3,7 @@
 # Target Architecture: STMicroelectronics STM32MP1 (Cortex-A7 + Cortex-M4)
 # =============================================================================
 
-.PHONY: help build-hw build-qemu shell-yocto clean-yocto build-m4 build-a7 test-qemu verify-qemu flash-hw flash-m4 netboot
+.PHONY: help build-hw build-qemu shell-yocto clean-yocto build-m4 build-a7 test-qemu verify-qemu flash-hw flash-m4 netboot restore-userfs
 
 # Zephyr workspace used to build the M4 firmware: a normal `west init` +
 # `west update` checkout at the Zephyr version pinned in firmware_m4/west.yml
@@ -23,7 +23,8 @@ help:
 	@echo "============================================================================="
 	@echo "Available Execution Commands:"
 	@echo "  make build-hw      - Build EVERYTHING for the DK2: M4 firmware + Yocto image (A7 apps included)"
-	@echo "  make flash-hw      - Flash the full built image to the DK2 over USB (needs recovery boot mode)"
+	@echo "  make flash-hw      - Flash the built image to the DK2 over USB (keeps /usr/local; FULL_FLASH=1 wipes it)"
+	@echo "  make restore-userfs - Put the newest /usr/local backup (taken by flash-hw) back on the board"
 	@echo "  make flash-m4      - Update ONLY the M4 firmware on a running board over SSH (no reflash)"
 	@echo "  make netboot       - One-shot TFTP/NFS netboot with the latest build, no eMMC changes (see wiki: Network-Boot)"
 	@echo "  make build-qemu    - Build Yocto Linux simulation image for QEMU ARM64"
@@ -63,7 +64,11 @@ clean-yocto:
 
 flash-hw:
 	@echo "📲 Flashing production image to DK2 over USB DFU..."
-	@cd yocto_layers && ./flash_hw.sh
+	@cd yocto_layers && BOARD_HOST=$(BOARD_HOST) ./flash_hw.sh
+
+# Restores the board identity + device registry saved by flash-hw (#56).
+restore-userfs:
+	@cd yocto_layers && BOARD_HOST=$(BOARD_HOST) ./restore_userfs.sh
 
 # Fast path for M4-only changes: copies the freshly built ELF over the one
 # the image installed (/lib/firmware/rproc-m4-fw) and restarts the
