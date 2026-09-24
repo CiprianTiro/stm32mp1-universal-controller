@@ -58,6 +58,11 @@ IMAGE_INSTALL:append:stm32mp1common = " m4-firmware"
 # so there's nothing to fix there.
 IMAGE_INSTALL:append:stm32mp1common = " resolved-public-dns"
 
+# Hardware-only: WiFi client (issue #61) -- wpa_supplicant on wlan0 with its
+# configuration on userfs, WiFi as fallback behind Ethernet. QEMU has no
+# WiFi chip.
+IMAGE_INSTALL:append:stm32mp1common = " hub-wifi"
+
 # ST's partition splitter (meta-st-stm32mp, image_types-stsplitpartitions
 # .bbclass) copies the finished rootfs into ${WORKDIR}/splitted_rootfs with
 # `cp -ar` -- into a folder that is never emptied between builds. New and

@@ -121,8 +121,44 @@ fn main() {
         // `let _ =`: if this send fails, ws_client.rs's background thread
         // has already exited (the receiving end was dropped) -- nothing
         // this callback can usefully do about that beyond not crashing.
-        let _ = toggle_request_tx.send(!currently_on);
+        let _ = toggle_request_tx.send(ws_client::Request::SetLed { on: !currently_on });
     });
+
+    // The network screens (issue #61): each callback just forwards the
+    // request; the answer comes back as an `Update` in the loop below.
+    // `scanning`/`busy` are set here so the screen reacts to the tap at
+    // once, and cleared when the answer arrives.
+    let tx = request_tx.clone();
+    let ui_weak = ui.as_weak();
+    ui.on_wifi_scan(move || {
+        ui_weak.unwrap().set_scanning(true);
+        let _ = tx.send(ws_client::Request::WifiScan);
+    });
+    let tx = request_tx.clone();
+    ui.on_wifi_connect(move |ssid, password| {
+        // The password is only handed on, never printed or stored here.
+        let _ = tx.send(ws_client::Request::WifiConnect {
+            ssid: ssid.to_string(),
+            password: password.to_string(),
+        });
+    });
+    let tx = request_tx.clone();
+    ui.on_wifi_forget(move || {
+        let _ = tx.send(ws_client::Request::WifiForget);
+    });
+    let tx = request_tx.clone();
+    ui.on_set_country(move |country| {
+        let _ = tx.send(ws_client::Request::SetWifiCountry {
+            country: country.to_string(),
+        });
+    });
+    // The two string helpers app.slint can't do itself.
+    ui.on_drop_last(|text| {
+        let mut text = text.to_string();
+        text.pop();
+        text.into()
+    });
+    ui.on_mask(|text| "\u{2022}".repeat(text.chars().count()).into());
 
     // The main loop. Runs forever (this is a long-lived UI process, not a
     // one-shot tool), doing four things every iteration:
@@ -168,6 +204,27 @@ fn main() {
                 }
                 ws_client::Update::Disconnected => ui.set_connected(false),
                 ws_client::Update::LedState(on) => ui.set_led_on(on),
+                ws_client::Update::Network(status) => ui.set_net(to_net_status(&status)),
+                ws_client::Update::Networks(networks) => {
+                    ui.set_scanning(false);
+                    let rows: Vec<WifiNetwork> = networks
+                        .into_iter()
+                        .map(|n| WifiNetwork {
+                            ssid: n.ssid.into(),
+                            bars: n.bars.into(),
+                            secure: n.secure,
+                            saved: n.saved,
+                        })
+                        .collect();
+                    // A Slint list property takes a "model"; VecModel is
+                    // the ready-made one backed by a Vec.
+                    ui.set_networks(std::rc::Rc::new(slint::VecModel::from(rows)).into());
+                }
+                ws_client::Update::ScanFailed(message) => {
+                    ui.set_scanning(false);
+                    show_net_message(&ui, format!("Scan failed: {message}"), true);
+                }
+                ws_client::Update::ActionDone(action, result) => apply_action_result(&ui, action, result),
             }
         }
 
@@ -218,5 +275,59 @@ fn open_touch(log: bool) -> Option<touch_input::TouchInput> {
             }
             None
         }
+    }
+}
+
+/// ws_client's network status -> the struct app.slint shows (absent
+/// values become empty strings, Slint's "nothing").
+fn to_net_status(status: &ws_client::NetworkStatus) -> NetStatus {
+    let text = |value: &Option<String>| value.clone().unwrap_or_default().into();
+    NetStatus {
+        uplink: text(&status.uplink),
+        eth_connected: status.ethernet.connected,
+        eth_ip: text(&status.ethernet.ip),
+        wifi_available: status.wifi.available,
+        wifi_connected: status.wifi.connected,
+        wifi_ssid: text(&status.wifi.ssid),
+        wifi_bars: status.wifi.bars.into(),
+        wifi_ip: text(&status.wifi.ip),
+        wifi_saved: text(&status.wifi.saved_ssid),
+        wifi_country: text(&status.wifi.country),
+    }
+}
+
+fn show_net_message(ui: &AppWindow, message: String, is_error: bool) {
+    ui.set_net_message(message.into());
+    ui.set_net_message_is_error(is_error);
+}
+
+/// What the screen does once backend_daemon has answered a WiFi action.
+fn apply_action_result(ui: &AppWindow, action: ws_client::Action, result: Result<(), String>) {
+    use ws_client::Action;
+    match (action, result) {
+        (Action::Connect, Ok(())) => {
+            ui.set_busy(false);
+            // Don't keep the password around in the UI longer than needed.
+            ui.set_password("".into());
+            show_net_message(ui, format!("Connected to {}", ui.get_join_ssid()), false);
+            ui.set_page(1);
+        }
+        (Action::Connect, Err(message)) => {
+            ui.set_busy(false);
+            if ui.get_page() == 2 {
+                // Stay on the password page to try again.
+                ui.set_join_message(message.into());
+            } else {
+                // An open network (no password page).
+                show_net_message(ui, format!("Could not join {}: {message}", ui.get_join_ssid()), true);
+            }
+        }
+        (Action::Forget, Ok(())) => show_net_message(ui, "WiFi network forgotten".into(), false),
+        (Action::Forget, Err(message)) => show_net_message(ui, message, true),
+        (Action::Country, Ok(())) => {
+            show_net_message(ui, format!("WiFi country set to {}", ui.get_country_code()), false);
+            ui.set_page(1);
+        }
+        (Action::Country, Err(message)) => ui.set_country_message(message.into()),
     }
 }

@@ -1,0 +1,436 @@
+// network.slint -- the network screens (issue #61): status of Ethernet and
+// WiFi, nearby WiFi networks, entering a password, and the WiFi country.
+//
+// These components only DISPLAY what they're given and REPORT what was
+// tapped (callbacks); main.rs fills in the properties from backend_daemon's
+// answers and sends the requests. Same "dumb UI" rule as the rest of
+// ui_layer: nothing here decides whether a connection worked, it shows
+// what the backend says.
+
+import { Button, ListView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { Keyboard } from "keyboard.slint";
+
+// One network from a scan -- filled in by main.rs from ws_client's
+// WifiNetwork. (An `export struct` becomes a Rust struct of the same name.)
+export struct WifiNetwork {
+    ssid: string,
+    bars: int,
+    secure: bool,
+    saved: bool,
+}
+
+// Everything the status part shows, in one struct so main.rs sets it in
+// one go.
+export struct NetStatus {
+    // "ethernet", "wifi" or "" (offline).
+    uplink: string,
+    eth-connected: bool,
+    eth-ip: string,
+    wifi-available: bool,
+    wifi-connected: bool,
+    wifi-ssid: string,
+    wifi-bars: int,
+    wifi-ip: string,
+    wifi-saved: string,
+    wifi-country: string,
+}
+
+// Four bars of rising height, the first `bars` of them lit.
+export component SignalBars inherits Rectangle {
+    in property <int> bars;
+    in property <color> lit: Theme.accent;
+    width: 26px;
+    height: 20px;
+    for i in 4: Rectangle {
+        x: i * 7px;
+        y: parent.height - (i + 1) * 5px;
+        width: 5px;
+        height: (i + 1) * 5px;
+        border-radius: 1px;
+        background: i < bars ? lit : Theme.dot-off;
+    }
+}
+
+// The small indicator for the main screen's top bar: which link carries
+// traffic. Tapping it opens the network screen.
+export component NetIndicator inherits Rectangle {
+    in property <NetStatus> net;
+    callback clicked();
+
+    height: Theme.touch-height;
+    width: 190px;
+    border-radius: 8px;
+    background: touch.pressed ? Theme.surface-pressed : Theme.surface;
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 8px;
+        alignment: center;
+        if net.uplink == "wifi": SignalBars {
+            bars: net.wifi-bars;
+            y: (parent.height - self.height) / 2;
+        }
+        Text {
+            text: net.uplink == "ethernet" ? "Ethernet" : (net.uplink == "wifi" ? "WiFi" : "Offline");
+            color: net.uplink == "" ? Theme.error : Theme.title;
+            font-size: 18px;
+            vertical-alignment: center;
+        }
+    }
+
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// A title row with a back button, shared by the pages below.
+component Header inherits HorizontalLayout {
+    in property <string> title;
+    callback back();
+    spacing: 12px;
+    height: Theme.touch-height;
+    Button {
+        text: "< Back";
+        clicked => {
+            back();
+        }
+    }
+    Text {
+        text: title;
+        color: Theme.title;
+        font-size: 24px;
+        vertical-alignment: center;
+    }
+}
+
+// One row of the network list.
+component NetworkRow inherits Rectangle {
+    in property <WifiNetwork> network;
+    in property <bool> current;
+    callback clicked();
+
+    height: 56px;
+    border-radius: 8px;
+    background: touch.pressed ? Theme.surface-pressed : Theme.surface;
+
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        spacing: 10px;
+        SignalBars {
+            bars: network.bars;
+            y: (parent.height - self.height) / 2;
+        }
+        VerticalLayout {
+            alignment: center;
+            Text {
+                text: network.ssid;
+                color: Theme.title;
+                font-size: 18px;
+                overflow: elide;
+            }
+            Text {
+                text: current ? "Connected" : (network.saved ? "Saved" : (network.secure ? "Secured" : "Open network"));
+                color: current ? Theme.ok : Theme.muted;
+                font-size: 14px;
+            }
+        }
+    }
+
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// The network overview: status, nearby networks, forget, country.
+export component NetworkPage inherits Rectangle {
+    in property <NetStatus> net;
+    in property <[WifiNetwork]> networks;
+    in property <bool> scanning;
+    // A message to show (an error, or "Connected to ..."), and whether it
+    // is an error.
+    in property <string> message;
+    in property <bool> message-is-error;
+    callback back();
+    callback scan();
+    callback pick(WifiNetwork);
+    callback forget();
+    callback change-country();
+
+    background: Theme.background;
+
+    VerticalLayout {
+        padding: 12px;
+        spacing: 10px;
+
+        Header {
+            title: "Network";
+            back => {
+                root.back();
+            }
+        }
+
+        // Status card.
+        Rectangle {
+            background: Theme.surface;
+            border-radius: 8px;
+            VerticalLayout {
+                padding: 12px;
+                spacing: 6px;
+                Text {
+                    text: "Ethernet: " + (net.eth-connected ? ("connected  " + net.eth-ip) : "no cable");
+                    color: net.uplink == "ethernet" ? Theme.title : Theme.muted;
+                    font-size: 16px;
+                }
+                Text {
+                    text: !net.wifi-available ? "WiFi: not available"
+                        : net.wifi-connected ? ("WiFi: " + net.wifi-ssid + "  " + net.wifi-ip)
+                        : net.wifi-saved != "" ? ("WiFi: trying to join " + net.wifi-saved + "...")
+                        : "WiFi: not set up";
+                    color: net.uplink == "wifi" ? Theme.title : Theme.muted;
+                    font-size: 16px;
+                    overflow: elide;
+                }
+                Text {
+                    text: net.uplink == "ethernet" ? "Internet via the cable" + (net.wifi-connected ? " (WiFi on standby)" : "")
+                        : net.uplink == "wifi" ? "Internet via WiFi" : "Offline";
+                    color: net.uplink == "" ? Theme.error : Theme.accent;
+                    font-size: 16px;
+                }
+            }
+        }
+
+        if message != "": Text {
+            text: message;
+            color: message-is-error ? Theme.error : Theme.ok;
+            font-size: 16px;
+            wrap: word-wrap;
+        }
+
+        HorizontalLayout {
+            spacing: 10px;
+            Text {
+                text: "Nearby WiFi networks";
+                color: Theme.title;
+                font-size: 18px;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+            Button {
+                text: scanning ? "Scanning..." : "Scan";
+                enabled: !scanning && net.wifi-available;
+                clicked => {
+                    scan();
+                }
+            }
+        }
+
+        ListView {
+            vertical-stretch: 1;
+            for n in networks: VerticalLayout {
+                padding-bottom: 6px;
+                NetworkRow {
+                    network: n;
+                    current: net.wifi-connected && n.ssid == net.wifi-ssid;
+                    clicked => {
+                        pick(n);
+                    }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 10px;
+            if net.wifi-saved != "": Button {
+                text: "Forget " + net.wifi-saved;
+                clicked => {
+                    forget();
+                }
+            }
+            Button {
+                text: "Country: " + (net.wifi-country != "" ? net.wifi-country : "world");
+                enabled: net.wifi-available;
+                clicked => {
+                    change-country();
+                }
+            }
+        }
+    }
+}
+
+// Entering a password for `ssid`, with the on-screen keyboard.
+export component PasswordPage inherits Rectangle {
+    in property <string> ssid;
+    in-out property <string> password;
+    // The password with each character replaced by a dot (made by main.rs:
+    // Slint's language can't repeat a string).
+    in property <string> masked;
+    in property <bool> busy;
+    in property <string> message;
+    callback back();
+    callback backspace();
+    callback connect();
+
+    property <bool> show: false;
+
+    background: Theme.background;
+
+    VerticalLayout {
+        padding: 12px;
+        spacing: 10px;
+
+        Header {
+            title: "Join " + ssid;
+            back => {
+                root.back();
+            }
+        }
+
+        Text {
+            text: "Password";
+            color: Theme.muted;
+            font-size: 16px;
+        }
+
+        Rectangle {
+            height: Theme.touch-height;
+            background: Theme.surface;
+            border-radius: 8px;
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 6px;
+                spacing: 8px;
+                Text {
+                    // The "|" is a simple cursor at the end. While nothing is
+                    // typed, a dimmed row of dots shows what the field is for.
+                    //
+                    // That placeholder also has a second job: the software
+                    // renderer only carries the glyphs of characters written
+                    // literally in the .slint files (build.rs embeds the font
+                    // that way). `masked` comes from Rust at runtime, so
+                    // without this literal "\u{2022}" somewhere, its dots
+                    // would be drawn as nothing at all -- found in a PC
+                    // render of this page.
+                    text: password == "" ? "\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}" : (show ? password : masked) + "|";
+                    color: password == "" ? Theme.dot-off : Theme.title;
+                    font-size: 20px;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
+                Button {
+                    text: show ? "Hide" : "Show";
+                    clicked => {
+                        show = !show;
+                    }
+                }
+            }
+        }
+
+        if message != "": Text {
+            text: message;
+            color: Theme.error;
+            font-size: 16px;
+            wrap: word-wrap;
+        }
+
+        Rectangle {
+            vertical-stretch: 1;
+        }
+
+        if busy: Text {
+            text: "Connecting to " + ssid + "...";
+            color: Theme.accent;
+            font-size: 18px;
+            horizontal-alignment: center;
+        }
+
+        if !busy: Keyboard {
+            text <=> password;
+            backspace => {
+                root.backspace();
+            }
+            done => {
+                connect();
+            }
+        }
+    }
+}
+
+// Choosing the WiFi country: two letters, with the keyboard in capitals.
+export component CountryPage inherits Rectangle {
+    in property <string> current;
+    in-out property <string> code;
+    in property <string> message;
+    callback back();
+    callback backspace();
+    callback save();
+
+    background: Theme.background;
+
+    VerticalLayout {
+        padding: 12px;
+        spacing: 10px;
+
+        Header {
+            title: "WiFi country";
+            back => {
+                root.back();
+            }
+        }
+
+        Text {
+            text: "WiFi channels differ by country. The hub picks the country its nearby routers announce; change it if that's wrong. Two letters, e.g. RO, DE, US.";
+            color: Theme.muted;
+            font-size: 16px;
+            wrap: word-wrap;
+        }
+
+        Text {
+            text: "Now: " + (current != "" ? current : "world (legal everywhere)");
+            color: Theme.title;
+            font-size: 18px;
+        }
+
+        Rectangle {
+            height: Theme.touch-height;
+            width: 120px;
+            background: Theme.surface;
+            border-radius: 8px;
+            Text {
+                text: code + "|";
+                color: Theme.title;
+                font-size: 24px;
+            }
+        }
+
+        if message != "": Text {
+            text: message;
+            color: Theme.error;
+            font-size: 16px;
+            wrap: word-wrap;
+        }
+
+        Rectangle {
+            vertical-stretch: 1;
+        }
+
+        Keyboard {
+            text <=> code;
+            max-length: 2;
+            caps-lock: true;
+            backspace => {
+                root.backspace();
+            }
+            done => {
+                save();
+            }
+        }
+    }
+}
