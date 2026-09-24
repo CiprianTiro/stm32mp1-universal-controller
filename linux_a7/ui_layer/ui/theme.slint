@@ -20,3 +20,20 @@ export global Theme {
     // Big enough to hit with a finger on the DK2's 4" screen.
     out property <length> touch-height: 48px;
 }
+
+// Characters the UI can show beyond plain ASCII (issue #34).
+//
+// The software renderer draws text from glyphs pre-rendered at build time
+// (build.rs: EmbedForSoftwareRenderer), and Slint only embeds a-z, A-Z,
+// 0-9, basic punctuation, and whatever characters appear in string
+// literals in the .slint files. Text that only arrives at runtime -- a
+// device called "Café", a sensor unit "°C", a WiFi network name -- would
+// show any other character as a gap. So this literal lists the extra
+// characters a hub realistically needs: accented Latin letters (Romanian,
+// German, French, ...: Latin-1 and Latin Extended-A), and a few symbols.
+// It's shown (invisibly) in app.slint so it can't be optimized away. Each
+// character costs a few KB in the binary per font size used; characters
+// outside this set (Cyrillic, CJK, emoji) still show as gaps.
+export global Glyphs {
+    out property <string> extra: "ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõöøùúûüýþÿĀāĂăĄąĆćĈĉĊċČčĎďĐđĒēĔĕĖėĘęĚěĜĝĞğĠġĢģĤĥĦħĨĩĪīĬĭĮįİıĲĳĴĵĶķĸĹĺĻļĽľĿŀŁłŃńŅņŇňŉŊŋŌōŎŏŐőŒœŔŕŖŗŘřŚśŜŝŞşŠšŢţŤťŦŧŨũŪūŬŭŮůŰűŲųŴŵŶŷŸŹźŻżŽžſȘșȚț°•€£µ§±×÷«»“”‘’–—";
+}

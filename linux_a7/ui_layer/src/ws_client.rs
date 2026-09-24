@@ -5,41 +5,95 @@
 // protocol. (Being on 127.0.0.1 does matter for one thing: backend_daemon
 // only accepts WiFi changes from the hub itself, see its ws.rs.)
 //
+// Protocol v2 (issue #34, see backend_daemon's ws.rs): after connecting,
+// this client subscribes to device events and lists the devices once;
+// from then on the backend PUSHES every change. Nothing is polled except
+// the network status (cable in/out isn't a device event).
+//
 // This crate has no async runtime (see Cargo.toml's comment on why
 // `tungstenite`, not `tokio-tungstenite`) -- the GUI's own event loop in
-// main.rs is a plain blocking loop that, once per iteration, checks the
-// framebuffer, checks touch input, and checks for WebSocket updates, none
-// of which are allowed to block each other for long. So this module runs
-// the actual blocking WebSocket connection on its own background
-// `std::thread`, and hands data back and forth across two plain
-// `std::sync::mpsc` channels instead -- the same "actor talks only through
-// a channel" idea used throughout backend_daemon (see its state.rs), just
-// with `std::thread`/`std::sync::mpsc` here instead of `tokio::spawn`/
-// `tokio::sync::mpsc`, since there's no Tokio runtime in this process to
-// give it an async task to run on.
+// main.rs is a plain blocking loop. So this module runs the WebSocket
+// connection on its own background `std::thread`, and hands data back and
+// forth across two plain `std::sync::mpsc` channels -- the same "actor
+// talks only through a channel" idea used throughout backend_daemon.
 
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use tungstenite::Message;
 
-/// What this UI ever asks backend_daemon for. Mirrors (a part of) ws.rs's
-/// `ClientRequest` enum on the backend_daemon side -- MUST stay in sync
-/// with it by hand, since these are two separate Cargo crates/processes
-/// with no shared type definition between them (see ARCHITECTURE.md: they
-/// talk over the network, not a shared library). main.rs sends these into
-/// the channel `start()` returns.
+/// What this UI asks backend_daemon for. Mirrors (a part of) ws.rs's
+/// `ClientRequest` -- MUST stay in sync with it by hand: two separate
+/// crates/processes, no shared type definition (they talk over the
+/// network). main.rs sends these into the channel `start()` returns.
 #[derive(Serialize, Clone, Debug)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum Request {
-    SetLed { on: bool },
-    GetLedState,
+    Subscribe,
+    ListDevices,
+    /// Change one capability of one device, e.g. capability "switch",
+    /// value {"on": true}.
+    Command {
+        id: String,
+        capability: String,
+        value: serde_json::Value,
+    },
     // Network (issue #61).
     GetNetworkStatus,
     WifiScan,
     WifiConnect { ssid: String, password: String },
     WifiForget,
     SetWifiCountry { country: String },
+}
+
+/// A device as backend_daemon describes it (its device.rs). Only what this
+/// UI shows; serde ignores the rest. Capabilities this UI doesn't know yet
+/// (added to the backend later) are ignored too, so an older UI never
+/// breaks on a newer backend.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct Device {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub room: String,
+    pub capabilities: Capabilities,
+}
+
+#[derive(Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct Capabilities {
+    pub switch: Option<Switch>,
+    pub dimmer: Option<Dimmer>,
+    pub color: Option<Color>,
+    pub sensor: Option<Sensor>,
+}
+
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct Switch {
+    pub on: bool,
+}
+
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct Dimmer {
+    pub level: u8,
+}
+
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct Color {
+    pub hex: Option<String>,
+    pub kelvin: Option<u16>,
+}
+
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct Sensor {
+    pub readings: BTreeMap<String, Reading>,
+}
+
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct Reading {
+    pub value: f64,
+    #[serde(default)]
+    pub unit: String,
 }
 
 /// The network status as backend_daemon's network.rs reports it (its
@@ -78,19 +132,22 @@ pub struct WifiNetwork {
     pub saved: bool,
 }
 
-/// What backend_daemon can send back, restricted to the shapes this UI
-/// actually understands (again mirroring ws.rs's real `ServerResponse`).
-/// `#[serde(other)]` on `Unknown` means "any response shape this enum
-/// doesn't otherwise recognize gets parsed as `Unknown` instead of failing
-/// to parse at all".
+/// Everything backend_daemon can send that this UI understands: replies
+/// and events. `#[serde(other)]` on `Unknown`: any other shape parses as
+/// `Unknown` instead of failing.
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-enum Response {
-    LedState { on: bool },
+enum ServerMessage {
+    Devices { devices: Vec<Device> },
+    Device {},
     NetworkStatus { status: NetworkStatus },
     WifiNetworks { networks: Vec<WifiNetwork> },
     Ack,
     Error { message: String },
+    // Events (pushed after Subscribe).
+    DeviceChanged { device: Device },
+    DeviceRemoved { id: String },
+    EventsLost,
     #[serde(other)]
     Unknown,
 }
@@ -103,15 +160,18 @@ pub enum Action {
     Country,
 }
 
-/// What this module reports back to the GUI thread via the `mpsc::Receiver`
-/// that `start()` returns. main.rs's event loop drains these each frame and
-/// updates the `AppWindow`'s properties accordingly -- this is the *only*
-/// way the GUI's displayed state ever changes, matching ui_layer's "just
-/// displays whatever the daemon says" design.
+/// What this module reports back to the GUI thread. main.rs drains these
+/// each frame -- the *only* way the GUI's displayed state ever changes,
+/// matching ui_layer's "just displays whatever the daemon says" design.
 pub enum Update {
     Connected,
     Disconnected,
-    LedState(bool),
+    /// The complete device list (after connecting, or after missed events).
+    Devices(Vec<Device>),
+    DeviceChanged(Device),
+    DeviceRemoved(String),
+    /// A command the user gave was refused (e.g. the M4 isn't answering).
+    CommandFailed(String),
     Network(NetworkStatus),
     Networks(Vec<WifiNetwork>),
     ScanFailed(String),
@@ -120,19 +180,17 @@ pub enum Update {
 
 const BACKEND_URL: &str = "ws://127.0.0.1:8080/ws";
 const RETRY_DELAY: Duration = Duration::from_secs(2);
-/// How often to re-read the LED's state, to pick up changes made from
-/// elsewhere (the cloud). Each read is one tiny local WebSocket message
-/// plus one RPMsg round trip to the M4 -- negligible at once per second.
-const LED_REFRESH: Duration = Duration::from_secs(1);
 /// How often to re-read the network status (cable in/out, WiFi signal).
-/// Reading it is a few small file reads and a couple of wpa_supplicant
-/// queries on the backend side.
 const NETWORK_REFRESH: Duration = Duration::from_secs(2);
+/// How long one read waits for a message before the loop checks for
+/// requests from the GUI again. Short enough that a tap goes out at once.
+const READ_TIMEOUT: Duration = Duration::from_millis(100);
+
+type Socket = tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>>;
 
 /// Starts the background connection thread and returns the two channel ends
-/// main.rs needs: `request_tx` to send a `Request` (a LED tap, a WiFi scan,
-/// ...), and `update_rx` to receive `Update`s back (poll it, non-blockingly,
-/// once per GUI frame).
+/// main.rs needs: `request_tx` to send a `Request`, and `update_rx` to
+/// receive `Update`s back (poll it, non-blockingly, once per GUI frame).
 pub fn start() -> (mpsc::Sender<Request>, mpsc::Receiver<Update>) {
     let (request_tx, request_rx) = mpsc::channel::<Request>();
     let (update_tx, update_rx) = mpsc::channel::<Update>();
@@ -142,18 +200,10 @@ pub fn start() -> (mpsc::Sender<Request>, mpsc::Receiver<Update>) {
     (request_tx, update_rx)
 }
 
-/// Runs forever on the background thread started by `start()`. Structure:
-/// connect (retrying with a fixed delay on failure), announce `Connected`,
-/// then serve requests from the GUI thread -- and on its own, re-read the
-/// LED and network status every LED_REFRESH / NETWORK_REFRESH -- until the
-/// connection breaks, at which point announce `Disconnected` and go back to
-/// the top to reconnect. This keeps reconnection logic in one place instead
-/// of scattered through every place a send/receive could fail.
-///
-/// Requests are answered strictly one after another (the connection is a
-/// simple request/reply conversation). A WiFi connect can take up to ~25 s
-/// on the backend; the refreshes simply wait until it's done -- the UI
-/// shows "Connecting..." meanwhile anyway.
+/// Runs forever on the background thread: connect (retrying every
+/// RETRY_DELAY), subscribe and list the devices, then serve until the
+/// connection breaks -- announce `Disconnected` and start over. Keeps all
+/// reconnection logic in one place.
 fn connection_loop(request_rx: mpsc::Receiver<Request>, update_tx: mpsc::Sender<Update>) {
     loop {
         let mut socket = match tungstenite::connect(BACKEND_URL) {
@@ -164,135 +214,144 @@ fn connection_loop(request_rx: mpsc::Receiver<Request>, update_tx: mpsc::Sender<
                 continue;
             }
         };
+        // Reads give up after READ_TIMEOUT (see serve). `tungstenite`'s
+        // stream type can wrap TLS too; ours is always the plain TCP one.
+        if let tungstenite::stream::MaybeTlsStream::Plain(tcp) = socket.get_mut() {
+            let _ = tcp.set_read_timeout(Some(READ_TIMEOUT));
+        }
 
-        // `.send() == Err` here just means "the GUI thread already exited"
-        // (its `Receiver` was dropped) -- nothing left to update, so this
-        // whole background thread should just end too.
+        // `.send() == Err`: the GUI thread has exited; so should we.
         if update_tx.send(Update::Connected).is_err() {
             return;
         }
+        if !serve(&mut socket, &request_rx, &update_tx) {
+            return;
+        }
+        let _ = update_tx.send(Update::Disconnected);
+        std::thread::sleep(RETRY_DELAY);
+    }
+}
 
-        // Both start at "now", so the very first passes ask right after
-        // connecting (the UI doesn't have to guess a default).
-        let mut next_led = Instant::now();
-        let mut next_network = Instant::now();
+/// One connection's life. Returns false when the GUI thread is gone (stop
+/// for good), true when the connection broke (reconnect).
+///
+/// Requests go out as soon as they're there -- several can be on their
+/// way at once -- and the backend answers them strictly in order, so
+/// `in_flight` (oldest first) says which request each reply belongs to.
+/// Events can arrive at any moment in between; they're told apart by type.
+fn serve(socket: &mut Socket, request_rx: &mpsc::Receiver<Request>, update_tx: &mpsc::Sender<Update>) -> bool {
+    let mut in_flight: VecDeque<Request> = VecDeque::new();
+    // Subscribe first, THEN list: nothing that changes in between is lost.
+    let mut outbox: VecDeque<Request> = VecDeque::from([Request::Subscribe, Request::ListDevices]);
+    let mut next_network = Instant::now();
+
+    loop {
+        // 1. Everything the GUI asked for since the last pass.
         loop {
-            // The next thing to ask: a due refresh first, otherwise wait
-            // for a request from the GUI (at most 200 ms, so refreshes
-            // never run late).
-            let now = Instant::now();
-            let request = if now >= next_led {
-                next_led = now + LED_REFRESH;
-                Request::GetLedState
-            } else if now >= next_network {
-                next_network = now + NETWORK_REFRESH;
-                Request::GetNetworkStatus
-            } else {
-                match request_rx.recv_timeout(Duration::from_millis(200)) {
-                    Ok(request) => request,
-                    // Nothing within the timeout -- completely normal, just
-                    // loop again (and maybe refresh).
-                    Err(mpsc::RecvTimeoutError::Timeout) => continue,
-                    Err(mpsc::RecvTimeoutError::Disconnected) => return, // GUI thread exited
-                }
-            };
+            match request_rx.try_recv() {
+                Ok(request) => outbox.push_back(request),
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => return false,
+            }
+        }
+        if Instant::now() >= next_network {
+            next_network = Instant::now() + NETWORK_REFRESH;
+            outbox.push_back(Request::GetNetworkStatus);
+        }
 
-            let Some(response) = request_reply(&mut socket, &request) else {
-                break; // connection lost: fall through to reconnect
-            };
-            let Some(update) = to_update(&request, response) else {
-                continue;
-            };
-            // After a WiFi change, show its effect right away instead of
-            // at the next scheduled refresh.
+        // 2. Send it all.
+        while let Some(request) = outbox.pop_front() {
+            let payload = serde_json::to_string(&request).expect("Request is always valid JSON");
+            if let Err(e) = socket.send(Message::Text(payload)) {
+                println!("ui_layer: send failed: {e}");
+                return true;
+            }
+            in_flight.push_back(request);
+        }
+
+        // 3. Whatever arrives within READ_TIMEOUT.
+        let text = match socket.read() {
+            Ok(Message::Text(text)) => text,
+            // Ping/Pong frames keep the connection alive (tungstenite
+            // answers them itself); nothing for us.
+            Ok(_) => continue,
+            // The read timeout: nothing arrived, which is normal.
+            Err(tungstenite::Error::Io(e))
+                if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) =>
+            {
+                continue
+            }
+            Err(e) => {
+                println!("ui_layer: read failed: {e}");
+                return true;
+            }
+        };
+        let message = match serde_json::from_str::<ServerMessage>(&text) {
+            Ok(message) => message,
+            Err(e) => {
+                println!("ui_layer: malformed message from backend_daemon: {e}");
+                return true;
+            }
+        };
+        let update = match message {
+            // Events aren't replies: nothing in flight is answered by them.
+            ServerMessage::DeviceChanged { device } => Some(Update::DeviceChanged(device)),
+            ServerMessage::DeviceRemoved { id } => Some(Update::DeviceRemoved(id)),
+            ServerMessage::EventsLost => {
+                // Missed some changes: start over from the full list.
+                outbox.push_back(Request::ListDevices);
+                None
+            }
+            reply => {
+                let Some(request) = in_flight.pop_front() else {
+                    println!("ui_layer: reply without a request, ignored");
+                    continue;
+                };
+                to_update(&request, reply)
+            }
+        };
+        if let Some(update) = update {
+            // After a WiFi change, show its effect right away.
             if matches!(update, Update::ActionDone(_, Ok(()))) {
                 next_network = Instant::now();
             }
             if update_tx.send(update).is_err() {
-                return;
+                return false;
             }
         }
-
-        let _ = update_tx.send(Update::Disconnected);
-        std::thread::sleep(RETRY_DELAY);
     }
 }
 
 /// Turns the reply to `request` into what the GUI should hear about, if
 /// anything. What a reply means depends on what was asked: an `Ack` or an
 /// `Error` says nothing by itself.
-fn to_update(request: &Request, response: Response) -> Option<Update> {
+fn to_update(request: &Request, reply: ServerMessage) -> Option<Update> {
     let action = match request {
         Request::WifiConnect { .. } => Some(Action::Connect),
         Request::WifiForget => Some(Action::Forget),
         Request::SetWifiCountry { .. } => Some(Action::Country),
         _ => None,
     };
-    match (request, response) {
-        (_, Response::LedState { on }) => Some(Update::LedState(on)),
-        (_, Response::NetworkStatus { status }) => Some(Update::Network(status)),
-        (_, Response::WifiNetworks { networks }) => Some(Update::Networks(networks)),
-        (Request::WifiScan, Response::Error { message }) => Some(Update::ScanFailed(message)),
-        (_, Response::Ack) => action.map(|a| Update::ActionDone(a, Ok(()))),
-        (_, Response::Error { message }) => match action {
+    match (request, reply) {
+        (_, ServerMessage::Devices { devices }) => Some(Update::Devices(devices)),
+        (_, ServerMessage::NetworkStatus { status }) => Some(Update::Network(status)),
+        (_, ServerMessage::WifiNetworks { networks }) => Some(Update::Networks(networks)),
+        (Request::WifiScan, ServerMessage::Error { message }) => Some(Update::ScanFailed(message)),
+        (Request::Command { id, .. }, ServerMessage::Error { message }) => {
+            println!("ui_layer: command for {id} refused: {message}");
+            Some(Update::CommandFailed(message))
+        }
+        // A command's result arrives as a DeviceChanged event (if anything
+        // changed); the reply itself adds nothing.
+        (Request::Command { .. }, _) => None,
+        (_, ServerMessage::Ack) => action.map(|a| Update::ActionDone(a, Ok(()))),
+        (_, ServerMessage::Error { message }) => match action {
             Some(a) => Some(Update::ActionDone(a, Err(message))),
             None => {
-                // Only log errors for things the user did. The once-a-
-                // second LED refresh would otherwise log the same "M4 not
-                // loaded" line 86,400 times a day whenever the M4 firmware
-                // isn't running.
-                if matches!(request, Request::SetLed { .. }) {
-                    println!("ui_layer: backend_daemon returned an error: {message}");
-                }
+                println!("ui_layer: backend_daemon returned an error: {message}");
                 None
             }
         },
-        (_, Response::Unknown) => None,
-    }
-}
-
-/// Sends one request and waits for its reply. `None` means the connection
-/// broke (or the reply was garbled) -- the caller reconnects.
-fn request_reply(
-    // `tungstenite::connect()` always returns this type, even for a plain
-    // ws:// (non-TLS) connection like ours -- `MaybeTlsStream` is an enum
-    // that's *capable* of wrapping either a plain or a TLS-wrapped
-    // `TcpStream`, chosen based on the URL scheme at connect time; there's
-    // no separate "definitely-plain" socket type to ask for instead.
-    socket: &mut tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>>,
-    request: &Request,
-) -> Option<Response> {
-    let payload = serde_json::to_string(request).expect("Request is always valid JSON");
-    if let Err(e) = socket.send(Message::Text(payload)) {
-        println!("ui_layer: send failed: {e}");
-        return None;
-    }
-
-    loop {
-        let message = match socket.read() {
-            Ok(m) => m,
-            Err(e) => {
-                println!("ui_layer: read failed: {e}");
-                return None;
-            }
-        };
-
-        // WebSocket connections carry more than just our own text messages
-        // -- Ping/Pong frames are the protocol keeping the connection
-        // alive, handled transparently by `tungstenite` itself, but they
-        // still show up here as a `Message` variant. Skip anything that
-        // isn't the `Text` reply we're actually waiting for instead of
-        // treating it as an error.
-        let Message::Text(text) = message else {
-            continue;
-        };
-
-        return match serde_json::from_str::<Response>(&text) {
-            Ok(response) => Some(response),
-            Err(e) => {
-                println!("ui_layer: malformed response: {e}");
-                None
-            }
-        };
+        _ => None,
     }
 }

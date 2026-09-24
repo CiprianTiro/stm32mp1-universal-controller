@@ -6,6 +6,8 @@ use tokio::time::interval;
  * part of this crate" -- this is what actually makes their code exist in
  * the final binary at all. It does NOT run anything in them; nothing in
  * either file executes until something below explicitly spawns it. */
+mod control;
+mod device;
 mod health;
 mod mqtt;
 mod network;
@@ -24,99 +26,76 @@ async fn main() {
 
     tokio::spawn(heartbeat());
 
-    /*
-     * SETTING UP state.rs'S ACTOR -- THIS IS WHERE THE ANSWER TO "does data
-     * get copied when a socket opens" ACTUALLY LIVES. Read this block
-     * carefully; it corrects a real mix-up.
+    /* THE DEVICES (state.rs). `mpsc::channel(32)` creates the actor's
+     * mailbox and hands back both ends: state_tx, the SENDING half -- a
+     * cheap handle anyone can clone to drop messages in -- and state_rx,
+     * the RECEIVING half, of which there is only ever one: it goes to the
+     * one task that owns the devices. Cloning state_tx never copies the
+     * devices; it copies a permission slip to write to the same mailbox.
      *
-     * `tokio::sync::mpsc::channel(32)` creates ONE mailbox -- one shared
-     * queue -- and hands back BOTH ends of it as a pair:
-     *   - state_tx: the SENDING half. This is just a small handle/ticket
-     *     that lets whoever holds it drop messages into the mailbox. It is
-     *     NOT the data itself, and cloning it (which ws.rs will do, below
-     *     and inside itself) is cheap -- like photocopying a permission
-     *     slip, not duplicating a filing cabinet.
-     *   - state_rx: the RECEIVING half -- the mailbox's inbox tray itself.
-     *     There is only ever ONE of these, and it's about to be handed to
-     *     exactly one task (state::run) below. That task becomes the sole
-     *     owner of the actual device data -- nobody else ever gets a copy
-     *     of state_rx, so nobody else can ever pull messages out of this
-     *     mailbox except that one task.
-     */
+     * Three more channels carry news of changes out of the actor (see
+     * state.rs's header): a `watch` bell for mqtt.rs, a `broadcast` channel
+     * of events for ws.rs's subscribed clients (64 = how many events a slow
+     * client may fall behind before it's told it missed some), and
+     * store.rs's writer for the registry file. */
     let (state_tx, state_rx) = tokio::sync::mpsc::channel(32);
-    /* state.rs rings this whenever a device changes, so mqtt.rs can report
-     * straight away (see state::run's comment). */
     let (state_changed_tx, state_changed_rx) = tokio::sync::watch::channel(());
+    let (events_tx, _) = tokio::sync::broadcast::channel(64);
 
-    /* This is the ONLY place state::run (the actor from state.rs) is ever
-     * spawned in the real, running daemon -- tokio::spawn hands state_rx
-     * over, and from this point on, the HashMap of device data inside
-     * state::run's function body is the one and only copy of it that
-     * exists anywhere in the process. */
-    /* The device registry (issue #33): loaded from the userfs partition
-     * BEFORE the actor starts, so the first client to connect already sees
-     * every device from before the restart. Loading is a quick read of one
-     * small file, fine to do right here once at start. Every outcome --
-     * first start, a damaged file, a fallback to the previous copy -- is
-     * logged by load_or_default (see store.rs). */
+    /* The device registry (issues #33, #34): loaded from the userfs
+     * partition BEFORE the actor starts, so the first client to connect
+     * already sees every device from before the restart. A registry from
+     * before #34 is converted to the capability model here (logged per
+     * device). Every other outcome -- first start, a damaged file, a
+     * fallback to the previous copy -- is logged by load_or_default (see
+     * store.rs). */
     let registry = store::Store::new(&store::data_dir(), "devices.json");
     let devices = registry.load_or_default("device registry", state::decode_registry);
     /* No file name here: when the previous copy had to be used, the line
      * store.rs logged just before says so (and names the file). */
     println!("state: {} device(s) loaded", devices.len());
     let save_tx = store::writer(registry, state::REGISTRY_SCHEMA);
-    tokio::spawn(state::run(state_rx, state_changed_tx, devices, save_tx));
+    tokio::spawn(state::run(
+        state_rx,
+        devices,
+        state::Outputs {
+            changed_tx: state_changed_tx,
+            events_tx: events_tx.clone(),
+            save_tx,
+        },
+    ));
 
-    /* A second, completely separate mailbox for rpmsg.rs's actor -- this is
-     * NOT state_tx again. rpmsg.rs doesn't manage the generic "device
-     * property bag" state.rs owns; it manages one specific piece of real
-     * hardware (the M4's LED) that only makes sense to talk to via a direct
-     * command/reply round trip, not a stored property. See rpmsg.rs's own
-     * header comment for why this stays a separate actor instead of being
-     * folded into state.rs's Msg enum.
-     *
-     * led_tx/led_rx is a `watch` channel: rpmsg.rs writes the LED's latest
-     * known state into it, mqtt.rs reads it (see rpmsg::run's comment). */
+    /* The link to the M4 (rpmsg.rs), a separate actor: it owns the RPMsg
+     * device file. led_tx/led_rx is a `watch` channel holding the LED's
+     * state as the M4 last reported it (see rpmsg::run). */
     let (rpmsg_tx, rpmsg_rx) = tokio::sync::mpsc::channel(8);
     let (led_tx, led_rx) = tokio::sync::watch::channel(None);
     tokio::spawn(rpmsg::run(rpmsg_rx, led_tx));
 
-    /* Same pattern again: mqtt.rs gets its own clone of state_tx, so it can
-     * both publish periodic state snapshots (asking state.rs via
-     * GetAllDevices) and apply incoming commands (via UpdateDevice) --
-     * talking to the exact same single actor as everyone else here, never a
-     * copy of it. It also gets the LED's channels, so the real LED shows up
-     * in the cloud as device "ld7" and can be switched from there.
-     *
-     * local_clients: how many WebSocket clients are connected right now.
-     * ws.rs counts, health.rs (inside mqtt.rs) reports it -- one shared
-     * number, hence Arc (shared ownership) + AtomicUsize (lock-free). */
+    /* The one door for device commands (control.rs, issue #34): the
+     * WebSocket clients and the cloud both go through it. The LED's driver
+     * keeps the "ld7" device in step with what the M4 reports. */
+    let control = control::Control::new(state_tx, rpmsg_tx);
+    tokio::spawn(control::run_led_driver(control.clone(), led_rx));
+
+    /* Cloud sync (mqtt.rs). local_clients: how many WebSocket clients are
+     * connected right now -- ws.rs counts, health.rs (inside mqtt.rs)
+     * reports it; one shared number, hence Arc (shared ownership) +
+     * AtomicUsize (lock-free). The uplink watch (issue #61): network.rs
+     * keeps it up to date with the link carrying traffic, and mqtt.rs
+     * reconnects when it changes. */
     let local_clients = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    /* Which link carries traffic (issue #61): network.rs keeps it up to
-     * date, mqtt.rs reconnects when it changes. */
     let (uplink_tx, uplink_rx) = tokio::sync::watch::channel(None);
     tokio::spawn(network::watch_uplink(uplink_tx));
-    tokio::spawn(mqtt::run(
-        state_tx.clone(),
-        rpmsg_tx.clone(),
-        led_rx,
-        state_changed_rx,
-        uplink_rx,
-        local_clients.clone(),
-    ));
+    tokio::spawn(mqtt::run(control.clone(), state_changed_rx, uplink_rx, local_clients.clone()));
 
-    /* ws.rs is the last user of state_tx, so it gets the original handle
-     * moved in (no .clone() needed) -- same reasoning as before, ws.rs's
-     * server will go on to clone THIS handle again once per connected
-     * client (see ws.rs's ws_handler/handle_socket), and it now also gets
-     * rpmsg_tx to forward LED commands from those same clients on to the
-     * M4. */
     /* The network actor (issue #61): Ethernet/WiFi status, WiFi scan,
      * connect, forget, country. Only ws.rs talks to it. */
     let (network_tx, network_rx) = tokio::sync::mpsc::channel(8);
     tokio::spawn(network::run(network_rx));
 
-    tokio::spawn(ws::run(state_tx, rpmsg_tx, network_tx, local_clients));
+    /* The local WebSocket API (ws.rs), protocol v2. */
+    tokio::spawn(ws::run(control, network_tx, events_tx, local_clients));
 
     /* SIGTERM is what systemd sends on stop/restart; SIGINT covers Ctrl-C
      when running this interactively during development. */

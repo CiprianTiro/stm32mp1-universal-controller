@@ -4,13 +4,9 @@
 // directly, it just describes *what the UI looks like and does*, while
 // main.rs decides *when* things like button clicks actually get acted on.
 
-// Slint's own built-in widget library -- "Button" below is a component
-// defined there, not a language keyword, and has to be imported like any
-// other component this project might have written itself. ("VerticalLayout"
-// further down doesn't need an import -- unlike Button, it's a core layout
-// primitive built into the language itself.) `Palette` holds the colors
-// those widgets use; it's switched to dark below.
-import { Button, Palette } from "std-widgets.slint";
+// Slint's own built-in widget library. `Palette` holds the colors its
+// widgets (buttons, lists) use; it's switched to dark below.
+import { Palette } from "std-widgets.slint";
 
 // Embeds this specific font file into the compiled binary (combined with
 // build.rs's `EmbedForSoftwareRenderer` config) rather than relying on
@@ -23,12 +19,13 @@ import "../fonts/DejaVuSans.ttf";
 
 // The colors (shared with the boot image, see theme.slint) and the network
 // screens (issue #61).
-import { Theme } from "theme.slint";
+import { Theme, Glyphs } from "theme.slint";
+import { DeviceItem, DeviceList } from "devices.slint";
 import { NetStatus, WifiNetwork, NetIndicator, NetworkPage, PasswordPage, CountryPage } from "network.slint";
 
 // Re-exported so main.rs can use these types (the Rust side only sees what
 // the main file exports).
-export { NetStatus, WifiNetwork }
+export { NetStatus, WifiNetwork, DeviceItem }
 
 // Shown from the UI's start until backend_daemon answers for the first time
 // (issue #59). The background picture (icon + name) is the very same file
@@ -91,12 +88,13 @@ component WelcomeScreen inherits Rectangle {
 // React/Flutter/etc. "widget". `AppWindow` is the name main.rs's generated
 // code (via `slint::include_modules!()`) will know this as.
 export component AppWindow inherits Window {
-    // "in-out property" means both Rust and this UI file can read AND write
-    // this value -- Rust sets it (via the generated `set_led_on()` method)
-    // whenever the M4 reports a state change; the UI file reads it below to
-    // decide what to display. It's always just showing whatever
-    // backend_daemon last told it, never guessing.
-    in-out property <bool> led-on: false;
+    // The devices (issue #34), one DeviceItem per device, kept up to date
+    // by main.rs from backend_daemon's events. "in property": Rust writes
+    // it, this file only reads it.
+    in property <[DeviceItem]> devices;
+    // A refused command's reason (e.g. "no answer from the M4"), shown
+    // briefly under the list; main.rs clears it again.
+    in property <string> device-message;
 
     // Whether we're connected to backend_daemon right now -- lets the UI
     // honestly say so instead of silently showing a stale LED state as if
@@ -148,14 +146,12 @@ export component AppWindow inherits Window {
     // only computes, so Slint may call it whenever `password` changes.
     pure callback mask(string) -> string;
 
-    // "callback" declares an event this component can fire that Rust code
-    // outside this file can react to -- see main.rs's
-    // `ui.on_toggle_led(...)` for where this actually gets handled. This
-    // file only ever *fires* the callback (in the Button's `clicked =>`
-    // below); it never decides what toggling the LED actually does, since
-    // that requires talking to backend_daemon over the network, which is
-    // Rust's job, not this markup's.
-    callback toggle-led();
+    // "callback" declares an event this component can fire that Rust
+    // code reacts to -- see main.rs's `ui.on_set_switch(...)`. This file
+    // only reports what was tapped; turning it into a command for
+    // backend_daemon is Rust's job.
+    callback set-switch(string, bool);
+    callback set-level(string, int);
 
     // The whole UI uses the dark look of the welcome screen, so switching
     // from it to the normal screen isn't a jump from dark to bright.
@@ -174,47 +170,68 @@ export component AppWindow inherits Window {
         }
     }
 
-    // The normal screen: a top bar with the network indicator, then one
-    // status line and one button (issue #14's DoD only asks for at least
-    // one interactive element, not a polished dashboard).
-    if page == 0: HorizontalLayout {
-        y: 8px;
-        height: Theme.touch-height;
-        padding-right: 8px;
-        alignment: end;
-        NetIndicator {
-            net: root.net;
-            clicked => {
-                net-message = "";
-                page = 1;
-                wifi-scan();
+    // The normal screen: a top bar (title, network indicator), then every
+    // device, drawn from its capabilities (devices.slint).
+    if page == 0: VerticalLayout {
+        padding: 8px;
+        spacing: 8px;
+
+        HorizontalLayout {
+            height: Theme.touch-height;
+            spacing: 8px;
+            Text {
+                text: "Devices";
+                color: Theme.title;
+                font-size: 24px;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+            NetIndicator {
+                net: root.net;
+                clicked => {
+                    net-message = "";
+                    page = 1;
+                    wifi-scan();
+                }
+            }
+        }
+
+        // Lost the backend after having had it (issue #59): say so, and
+        // keep showing the last known devices underneath.
+        if !connected: Text {
+            text: "Connection to the hub lost, reconnecting\u{2026}";
+            color: Theme.error;
+            font-size: 16px;
+            wrap: word-wrap;
+        }
+
+        if device-message != "": Text {
+            text: device-message;
+            color: Theme.error;
+            font-size: 16px;
+            wrap: word-wrap;
+        }
+
+        DeviceList {
+            vertical-stretch: 1;
+            devices: root.devices;
+            set-switch(id, on) => {
+                root.set-switch(id, on);
+            }
+            set-level(id, level) => {
+                root.set-level(id, level);
             }
         }
     }
 
-    if page == 0: VerticalLayout {
-        alignment: center;
-        spacing: 24px;
-
-        Text {
-            // Slint string concatenation with `+`, and the ternary-like
-            // `condition ? a : b` operator -- both work directly inside a
-            // property binding like this, recomputed automatically any
-            // time `connected` or `led-on` changes.
-            text: connected ? ("LED is " + (led-on ? "ON" : "OFF")) : "Connection to the hub lost, reconnecting\u{2026}";
-            color: connected ? Theme.title : Theme.muted;
-            font-size: connected ? 32px : 20px;
-            horizontal-alignment: center;
-            wrap: word-wrap;
-        }
-
-        Button {
-            text: led-on ? "Turn OFF" : "Turn ON";
-            enabled: connected;
-            clicked => {
-                toggle-led();
-            }
-        }
+    // Never visible (zero size, transparent): only here so the extra
+    // characters in theme.slint's Glyphs are embedded in the build (see
+    // there). Being part of the window keeps it from being optimized away.
+    Text {
+        width: 0;
+        height: 0;
+        opacity: 0;
+        text: Glyphs.extra;
     }
 
     if page == 1: NetworkPage {

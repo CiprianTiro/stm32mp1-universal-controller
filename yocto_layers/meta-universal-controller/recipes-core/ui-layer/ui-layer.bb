@@ -35,6 +35,7 @@ SRC_URI = " \
     file://Cargo.lock \
     file://build.rs \
     file://ui/app.slint \
+    file://ui/devices.slint \
     file://ui/theme.slint \
     file://ui/keyboard.slint \
     file://ui/network.slint \

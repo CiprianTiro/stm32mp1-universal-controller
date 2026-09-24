@@ -1,3 +1,36 @@
+/*
+ * ws.rs -- the local WebSocket API, ws://<hub>:8080/ws: what the touchscreen
+ * UI, the phone app and tools/hub_ws.py talk to.
+ *
+ * PROTOCOL v2 (issue #34). JSON text messages. The client sends requests,
+ * {"action": "...", ...}; the server answers each one, in order, with
+ * {"type": "...", ...}. After "subscribe", the server additionally PUSHES
+ * events whenever a device changes, so a client never has to poll. Replies
+ * and events are told apart by their "type".
+ *
+ *   hello                                  -> hello {protocol, capabilities}
+ *   list_devices                           -> devices {devices: [...]}
+ *   get_device {id}                        -> device {device} (null: unknown)
+ *   add_device {device}                    -> device {device}
+ *   update_device_info {id, name?, room?}  -> device {device}
+ *   remove_device {id}                     -> ack
+ *   command {id, capability, value}        -> device {device}
+ *        e.g. {"action":"command","id":"lamp-1","capability":"dimmer",
+ *              "value":{"level":30}}
+ *   subscribe                              -> ack, then events:
+ *        device_changed {device} / device_removed {id} /
+ *        events_lost (too slow to keep up: list_devices again)
+ *   get_network_status, wifi_scan, wifi_connect, wifi_forget,
+ *   set_wifi_country                       -> see network.rs (#61)
+ *   anything refused                       -> error {message}
+ *
+ * A device is device.rs's JSON: {"id", "name", "room", "template", "source",
+ * "capabilities": {"switch": {"on": true}, ...}}. Every command goes
+ * through control.rs, the same door the cloud uses.
+ *
+ * The full reference with examples is on the wiki (Device-Model page) --
+ * it's the contract the Flutter app (#48) is built against.
+ */
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -8,45 +41,54 @@ use axum::{
     Router,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{broadcast, mpsc, oneshot};
 
+use crate::control::Control;
+use crate::device::{self, Device};
 use crate::network;
-use crate::rpmsg;
-use crate::shadow;
-use crate::state::{DeviceId, DeviceState, Msg};
+use crate::state::{DeviceId, Event};
 
-/* What a connected client is allowed to ask for. This deliberately mirrors
- * state.rs's own Msg enum -- ws.rs doesn't invent its own device logic, it
- * just translates network JSON into the exact same messages state.rs
- * already understands. `#[serde(tag = "action", rename_all = "snake_case")]`
- * means the JSON looks like {"action": "get_all_devices"} or
- * {"action": "get_device", "id": "lamp-1"} -- the "action" field picks
- * which variant this is.
- *
- * `SetLed`/`GetLedState` are new for issue #14 -- unlike the four variants
- * above, these don't go to state.rs at all (there's no "m4-led" entry in its
- * HashMap); they go straight to rpmsg.rs's actor instead, since this is a
- * real hardware command/reply round trip, not a stored property. See
- * rpmsg.rs's own doc comment for why that split exists. */
+/* The protocol version "hello" reports. v1 (before #34) had property bags
+ * and LED-specific actions; clients check this to know what they talk to. */
+const PROTOCOL_VERSION: u32 = 2;
+
+/* What a client may ask. `#[serde(tag = "action", rename_all =
+ * "snake_case")]`: the JSON's "action" field picks the variant, e.g.
+ * {"action": "get_device", "id": "lamp-1"}. An unknown action or a missing
+ * field is refused with serde's own (quite clear) message. */
 #[derive(Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum ClientRequest {
-    GetDevice { id: DeviceId },
-    GetAllDevices,
-    UpdateDevice {
+    Hello,
+    ListDevices,
+    GetDevice {
         id: DeviceId,
-        properties: DeviceState,
     },
-    RemoveDevice { id: DeviceId },
-    SetLed { on: bool },
-    GetLedState,
+    AddDevice {
+        device: Device,
+    },
+    UpdateDeviceInfo {
+        id: DeviceId,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        room: Option<String>,
+    },
+    RemoveDevice {
+        id: DeviceId,
+    },
+    Command {
+        id: DeviceId,
+        capability: String,
+        value: serde_json::Value,
+    },
+    Subscribe,
     /* Network (issue #61), answered by network.rs. Reading the status is
      * allowed for every client; everything else only for clients on the
-     * hub itself -- see LOCAL_ONLY below. */
+     * hub itself -- see local_only below. */
     GetNetworkStatus,
     WifiScan,
     WifiConnect {
@@ -56,7 +98,9 @@ enum ClientRequest {
         password: Option<String>,
     },
     WifiForget,
-    SetWifiCountry { country: String },
+    SetWifiCountry {
+        country: String,
+    },
 }
 
 impl ClientRequest {
@@ -77,47 +121,50 @@ impl ClientRequest {
     }
 }
 
+/* What the server sends: replies and (after subscribe) events. */
 #[derive(Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-enum ServerResponse {
-    Device {
-        id: DeviceId,
-        state: Option<DeviceState>,
+enum ServerMessage {
+    Hello {
+        protocol: u32,
+        /* The capability names this hub knows (device.rs). */
+        capabilities: Vec<&'static str>,
     },
-    AllDevices {
-        devices: HashMap<DeviceId, DeviceState>,
+    Devices {
+        devices: Vec<Device>,
+    },
+    Device {
+        device: Option<Device>,
     },
     Ack,
-    /// Sent in reply to both `SetLed` and `GetLedState` -- `on` is the LED's
-    /// actual resulting state as reported by the M4, not just an echo of
-    /// whatever the client asked for (see rpmsg.rs's `round_trip` for why
-    /// that distinction matters: the M4 might refuse or be unreachable).
-    LedState {
-        on: bool,
-    },
     NetworkStatus {
         status: network::Status,
     },
     WifiNetworks {
         networks: Vec<network::Network>,
     },
+    /* Events. */
+    DeviceChanged {
+        device: Device,
+    },
+    DeviceRemoved {
+        id: DeviceId,
+    },
+    EventsLost,
     Error {
         message: String,
     },
 }
 
-/* Axum's `State` extractor (used in `ws_handler` below) only accepts ONE
- * state type per router -- this struct just bundles the two mailbox
- * `Sender`s this module needs to hand to every connection into that one
- * type. `#[derive(Clone)]` matters here: Axum clones the state for every
- * incoming connection, and cloning a struct of two `Sender`s is exactly as
- * cheap as cloning either one alone (see main.rs's comment on what cloning a
- * `Sender` actually costs -- a permission slip, not the mailbox itself). */
+/* Axum's `State` extractor accepts ONE state type per router -- this struct
+ * bundles what every connection needs. Cloning is cheap (channel handles
+ * and Arcs); Axum clones it for every connection. */
 #[derive(Clone)]
 struct AppState {
-    state_tx: mpsc::Sender<Msg>,
-    rpmsg_tx: mpsc::Sender<rpmsg::Cmd>,
+    control: Control,
     network_tx: mpsc::Sender<network::Cmd>,
+    /* To subscribe a client to state.rs's device events. */
+    events_tx: broadcast::Sender<Event>,
     /* How many clients are connected right now (issue #29) -- shared with
      * health.rs, which reports it to the cloud as "local_clients". */
     local_clients: Arc<AtomicUsize>,
@@ -143,19 +190,17 @@ impl Drop for ClientCount {
     }
 }
 
-/* Entry point, spawned once from main(). Both `Sender`s are moved in once
- * here; every connected client's task gets its own clone of each, same
- * pattern as everywhere else in this project. */
+/* Entry point, spawned once from main(). */
 pub async fn run(
-    state_tx: mpsc::Sender<Msg>,
-    rpmsg_tx: mpsc::Sender<rpmsg::Cmd>,
+    control: Control,
     network_tx: mpsc::Sender<network::Cmd>,
+    events_tx: broadcast::Sender<Event>,
     local_clients: Arc<AtomicUsize>,
 ) {
     let app = Router::new().route("/ws", get(ws_handler)).with_state(AppState {
-        state_tx,
-        rpmsg_tx,
+        control,
         network_tx,
+        events_tx,
         local_clients,
     });
 
@@ -174,12 +219,8 @@ pub async fn run(
         .expect("WebSocket server crashed");
 }
 
-/* This runs once per incoming HTTP request to /ws. `WebSocketUpgrade` is
- * Axum's way of handling the special HTTP handshake a WebSocket connection
- * starts as; `.on_upgrade(...)` is what actually completes that handshake
- * and hands us a real, bidirectional `WebSocket` to talk over -- from that
- * point on it behaves like the socket types discussed earlier in this
- * project, not like a normal one-shot HTTP request/response. */
+/* Runs once per incoming HTTP request to /ws: completes the WebSocket
+ * handshake and hands the connection to handle_socket. */
 async fn ws_handler(
     ws: WebSocketUpgrade,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -191,128 +232,106 @@ async fn ws_handler(
     ws.on_upgrade(move |socket| handle_socket(socket, app_state, local))
 }
 
-/* One of these runs per connected client, for as long as that client stays
- * connected -- this is the per-device-task pattern from earlier, just
- * per-connection instead of per-device. */
+/* One of these runs per connected client, for as long as it's connected.
+ * It waits for whichever comes first: a request from the client, or (once
+ * subscribed) a device event to pass on. */
 async fn handle_socket(mut socket: WebSocket, app_state: AppState, local: bool) {
-    /* `_count` is never used by name -- it only has to live until this
-     * function returns, and then its Drop lowers the count again. (A plain
-     * `_` would drop it immediately, so the name matters.) */
+    /* `_count` only has to live until this function returns; its Drop
+     * lowers the count again. (A plain `_` would drop it immediately.) */
     let _count = ClientCount::new(&app_state.local_clients);
-    while let Some(Ok(msg)) = socket.recv().await {
-        let Message::Text(text) = msg else {
-            continue;
+    /* None until the client subscribes. */
+    let mut events: Option<broadcast::Receiver<Event>> = None;
+
+    loop {
+        let outgoing = tokio::select! {
+            incoming = socket.recv() => {
+                /* None / Err: the client is gone. */
+                let Some(Ok(msg)) = incoming else { break };
+                let Message::Text(text) = msg else { continue };
+                match serde_json::from_str::<ClientRequest>(&text) {
+                    Ok(ClientRequest::Subscribe) => {
+                        /* Events from now on; the client lists the devices
+                         * once to know where to start. */
+                        events = Some(app_state.events_tx.subscribe());
+                        ServerMessage::Ack
+                    }
+                    Ok(req) if req.local_only() && !local => ServerMessage::Error {
+                        message: "only allowed from the hub's own screen".into(),
+                    },
+                    Ok(req) => handle_request(req, &app_state).await,
+                    Err(e) => ServerMessage::Error { message: e.to_string() },
+                }
+            }
+            /* This branch only exists while subscribed (the `if`). */
+            event = next_event(&mut events), if events.is_some() => event,
         };
 
-        let response = match serde_json::from_str::<ClientRequest>(&text) {
-            Ok(req) if req.local_only() && !local => ServerResponse::Error {
-                message: "only allowed from the hub's own screen".into(),
-            },
-            Ok(req) => handle_request(req, &app_state).await,
-            Err(e) => ServerResponse::Error {
-                message: e.to_string(),
-            },
-        };
-
-        let payload = serde_json::to_string(&response).expect("ServerResponse is always valid JSON");
+        let payload = serde_json::to_string(&outgoing).expect("ServerMessage is always valid JSON");
         if socket.send(Message::Text(payload)).await.is_err() {
-            // Client disconnected mid-send -- not an error worth logging,
-            // just stop serving this connection. The loop condition above
-            // handles the more common "client closed cleanly" case too;
-            // either way this task ends here and is dropped, no explicit
-            // cleanup needed.
+            /* The client disconnected mid-send: just stop serving it. */
             break;
         }
     }
 }
 
-/* The actual translation from "what the client asked for" to "a message
- * state.rs's (or, for the two LED variants, rpmsg.rs's) actor understands",
- * using the exact request/reply pattern covered when state.rs was built. */
-async fn handle_request(req: ClientRequest, app_state: &AppState) -> ServerResponse {
-    let state_tx = &app_state.state_tx;
-    let rpmsg_tx = &app_state.rpmsg_tx;
+/* The next device event for a subscribed client, as a message. The
+ * broadcast channel keeps a limited backlog per subscriber (see main.rs);
+ * a client too slow to keep up misses events ("Lagged") and is told so, so
+ * it can list the devices again instead of showing stale ones. */
+async fn next_event(events: &mut Option<broadcast::Receiver<Event>>) -> ServerMessage {
+    let Some(rx) = events.as_mut() else {
+        /* Not reachable: select! only polls this while subscribed. */
+        return std::future::pending().await;
+    };
+    match rx.recv().await {
+        Ok(Event::Changed(device)) => ServerMessage::DeviceChanged { device },
+        Ok(Event::Removed(id)) => ServerMessage::DeviceRemoved { id },
+        Err(broadcast::error::RecvError::Lagged(_)) => ServerMessage::EventsLost,
+        Err(broadcast::error::RecvError::Closed) => {
+            /* state.rs is gone (shutting down): no more events. */
+            *events = None;
+            ServerMessage::EventsLost
+        }
+    }
+}
 
+/* Carries out one request. Device requests go through control.rs;
+ * network ones to network.rs. */
+async fn handle_request(req: ClientRequest, app_state: &AppState) -> ServerMessage {
+    let control = &app_state.control;
+    let device = |result: Result<Device, String>| match result {
+        Ok(device) => ServerMessage::Device { device: Some(device) },
+        Err(message) => ServerMessage::Error { message },
+    };
     match req {
-        ClientRequest::GetDevice { id } => {
-            let (reply_tx, reply_rx) = oneshot::channel();
-            if state_tx
-                .send(Msg::GetDevice {
-                    id: id.clone(),
-                    reply: reply_tx,
-                })
-                .await
-                .is_err()
-            {
-                return ServerResponse::Error {
-                    message: "state actor unavailable".into(),
-                };
-            }
-            let state = reply_rx.await.unwrap_or(None);
-            ServerResponse::Device { id, state }
-        }
-        ClientRequest::GetAllDevices => {
-            let (reply_tx, reply_rx) = oneshot::channel();
-            if state_tx
-                .send(Msg::GetAllDevices { reply: reply_tx })
-                .await
-                .is_err()
-            {
-                return ServerResponse::Error {
-                    message: "state actor unavailable".into(),
-                };
-            }
-            let devices = reply_rx.await.unwrap_or_default();
-            ServerResponse::AllDevices { devices }
-        }
-        ClientRequest::UpdateDevice { id, properties } => {
-            /* Every device becomes an AWS shadow named after its id
-             * (shadow.rs), so only ids AWS accepts as names get in --
-             * refused here with a clear reason, rather than failing later,
-             * silently, somewhere in the cloud sync. */
-            if !shadow::valid_name(&id) {
-                return ServerResponse::Error {
-                    message: format!(
-                        "invalid device id {id:?}: use 1-64 letters, digits, '-', '_' or ':'"
-                    ),
-                };
-            }
-            if state_tx
-                .send(Msg::UpdateDevice { id, properties })
-                .await
-                .is_err()
-            {
-                return ServerResponse::Error {
-                    message: "state actor unavailable".into(),
-                };
-            }
-            ServerResponse::Ack
-        }
-        ClientRequest::RemoveDevice { id } => {
-            if state_tx.send(Msg::RemoveDevice { id }).await.is_err() {
-                return ServerResponse::Error {
-                    message: "state actor unavailable".into(),
-                };
-            }
-            ServerResponse::Ack
-        }
-        /* Both LED variants go through this one helper -- `LedRequest` is
-         * just "which of the two rpmsg::Cmd variants to build," since the
-         * real oneshot reply channel has to be created fresh inside
-         * `send_led_cmd` right before sending (a `oneshot` channel is
-         * single-use, so there's no reusable one to pass in from here). */
-        ClientRequest::SetLed { on } => send_led_cmd(rpmsg_tx, LedRequest::Set(on)).await,
-        ClientRequest::GetLedState => send_led_cmd(rpmsg_tx, LedRequest::Get).await,
+        ClientRequest::Hello => ServerMessage::Hello {
+            protocol: PROTOCOL_VERSION,
+            capabilities: device::CAPABILITY_NAMES.to_vec(),
+        },
+        ClientRequest::ListDevices => match control.list().await {
+            Ok(devices) => ServerMessage::Devices { devices },
+            Err(message) => ServerMessage::Error { message },
+        },
+        ClientRequest::GetDevice { id } => match control.get(&id).await {
+            Ok(device) => ServerMessage::Device { device },
+            Err(message) => ServerMessage::Error { message },
+        },
+        ClientRequest::AddDevice { device: new } => device(control.add(new).await),
+        ClientRequest::UpdateDeviceInfo { id, name, room } => device(control.update_info(&id, name, room).await),
+        ClientRequest::RemoveDevice { id } => ack_or_error(control.remove(&id).await),
+        ClientRequest::Command { id, capability, value } => device(control.command(&id, &capability, value).await),
+        /* Handled in handle_socket (it changes the connection itself). */
+        ClientRequest::Subscribe => ServerMessage::Ack,
         ClientRequest::GetNetworkStatus => {
             match ask_network(&app_state.network_tx, |reply| network::Cmd::GetStatus { reply }).await {
-                Ok(status) => ServerResponse::NetworkStatus { status },
-                Err(message) => ServerResponse::Error { message },
+                Ok(status) => ServerMessage::NetworkStatus { status },
+                Err(message) => ServerMessage::Error { message },
             }
         }
         ClientRequest::WifiScan => {
             match ask_network(&app_state.network_tx, |reply| network::Cmd::Scan { reply }).await {
-                Ok(Ok(networks)) => ServerResponse::WifiNetworks { networks },
-                Ok(Err(message)) | Err(message) => ServerResponse::Error { message },
+                Ok(Ok(networks)) => ServerMessage::WifiNetworks { networks },
+                Ok(Err(message)) | Err(message) => ServerMessage::Error { message },
             }
         }
         ClientRequest::WifiConnect { ssid, password } => {
@@ -322,18 +341,15 @@ async fn handle_request(req: ClientRequest, app_state: &AppState) -> ServerRespo
                 reply,
             })
             .await;
-            ack_or_error(answer)
+            ack_or_error(answer.and_then(|r| r))
         }
         ClientRequest::WifiForget => {
-            ack_or_error(ask_network(&app_state.network_tx, |reply| network::Cmd::Forget { reply }).await)
+            let answer = ask_network(&app_state.network_tx, |reply| network::Cmd::Forget { reply }).await;
+            ack_or_error(answer.and_then(|r| r))
         }
         ClientRequest::SetWifiCountry { country } => {
-            let answer = ask_network(&app_state.network_tx, |reply| network::Cmd::SetCountry {
-                country,
-                reply,
-            })
-            .await;
-            ack_or_error(answer)
+            let answer = ask_network(&app_state.network_tx, |reply| network::Cmd::SetCountry { country, reply }).await;
+            ack_or_error(answer.and_then(|r| r))
         }
     }
 }
@@ -353,46 +369,10 @@ async fn ask_network<T>(
     reply_rx.await.map_err(|_| "network actor dropped the reply".to_string())
 }
 
-/* For the network commands that only succeed or fail. */
-fn ack_or_error(answer: Result<Result<(), String>, String>) -> ServerResponse {
+/* For requests that only succeed or fail. */
+fn ack_or_error(answer: Result<(), String>) -> ServerMessage {
     match answer {
-        Ok(Ok(())) => ServerResponse::Ack,
-        Ok(Err(message)) | Err(message) => ServerResponse::Error { message },
-    }
-}
-
-/// Which `rpmsg::Cmd` to build inside `send_led_cmd` -- exists only because
-/// `rpmsg::Cmd`'s real variants each carry a `oneshot::Sender`, which can't
-/// be constructed until `send_led_cmd` is already holding the receiving
-/// half, so this can't just be `rpmsg::Cmd` itself with the reply field left
-/// out.
-enum LedRequest {
-    Set(bool),
-    Get,
-}
-
-/* Sends the requested LED command and turns its `Result<bool, String>`
- * reply into a `ServerResponse` -- factored out since `SetLed` and
- * `GetLedState` both need this exact same "create a reply channel, send,
- * await, translate" sequence, just for a different `rpmsg::Cmd` variant. */
-async fn send_led_cmd(rpmsg_tx: &mpsc::Sender<rpmsg::Cmd>, req: LedRequest) -> ServerResponse {
-    let (reply_tx, reply_rx) = oneshot::channel();
-    let cmd = match req {
-        LedRequest::Set(on) => rpmsg::Cmd::SetLed { on, reply: reply_tx },
-        LedRequest::Get => rpmsg::Cmd::GetLedState { reply: reply_tx },
-    };
-
-    if rpmsg_tx.send(cmd).await.is_err() {
-        return ServerResponse::Error {
-            message: "rpmsg actor unavailable".into(),
-        };
-    }
-
-    match reply_rx.await {
-        Ok(Ok(on)) => ServerResponse::LedState { on },
-        Ok(Err(message)) => ServerResponse::Error { message },
-        Err(_) => ServerResponse::Error {
-            message: "rpmsg actor dropped the reply channel".into(),
-        },
+        Ok(()) => ServerMessage::Ack,
+        Err(message) => ServerMessage::Error { message },
     }
 }

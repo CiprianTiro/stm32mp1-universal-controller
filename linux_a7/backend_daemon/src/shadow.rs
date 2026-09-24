@@ -12,8 +12,16 @@
  *   ├── classic shadow        $aws/things/dk2-01/shadow/...
  *   │     the hub itself:     {"state":{"reported":{"system":{...}}}}
  *   ├── named shadow "ld7"    $aws/things/dk2-01/shadow/name/ld7/...
- *   │     one device:         {"state":{"reported":{"on":true}}}
+ *   │     one device:         {"state":{"reported":{"name":"Board LED (LD7)",
+ *   │                           "room":"Hub", "template":"builtin-led",
+ *   │                           "capabilities":{"switch":{"on":true}}}}}
  *   └── named shadow "lamp-1" ...
+ *
+ * Since #34 a device's shadow carries its capabilities (device.rs), and a
+ * cloud command is a change to them: desired
+ * {"capabilities":{"dimmer":{"level":30}}}. Before #34 the device's bare
+ * properties sat at the top of "reported" ({"on":true}); see
+ * OLD_REPORTED_KEYS for how those are cleaned out.
  *
  * Why one named shadow per device (instead of all devices in one map, as
  * in #26): AWS then knows each device as a separate item -- the console
@@ -25,7 +33,8 @@
 use serde_json::{json, Value};
 use std::collections::{BTreeSet, HashMap};
 
-use crate::state::{DeviceId, DeviceState};
+use crate::device::Device;
+use crate::state::DeviceId;
 
 /* All topic names for one Thing. Built once from the thing name. */
 pub struct Topics {
@@ -116,12 +125,14 @@ pub fn valid_name(id: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | ':'))
 }
 
-/* The payload of a delta message: {"state": {"on": false}, "version": ...}.
- * Returns just the properties to change. */
-pub fn parse_delta(payload: &[u8]) -> Result<DeviceState, String> {
+/* The payload of a delta message:
+ * {"state": {"capabilities": {"switch": {"on": false}}}, "version": ...}.
+ * Returns just the "state" part: what the cloud wants changed (mqtt.rs
+ * turns it into commands). */
+pub fn parse_delta(payload: &[u8]) -> Result<Value, String> {
     #[derive(serde::Deserialize)]
     struct Delta {
-        state: DeviceState,
+        state: Value,
     }
     serde_json::from_slice::<Delta>(payload)
         .map(|d| d.state)
@@ -131,7 +142,7 @@ pub fn parse_delta(payload: &[u8]) -> Result<DeviceState, String> {
 /* The payload of get/accepted: the whole document. Only its "delta" part
  * (desired-but-not-yet-reported, i.e. a command that arrived while the
  * board was offline) matters. Ok(None) = nothing pending. */
-pub fn parse_get_accepted(payload: &[u8]) -> Result<Option<DeviceState>, String> {
+pub fn parse_get_accepted(payload: &[u8]) -> Result<Option<Value>, String> {
     #[derive(serde::Deserialize)]
     struct Doc {
         state: DocState,
@@ -139,10 +150,10 @@ pub fn parse_get_accepted(payload: &[u8]) -> Result<Option<DeviceState>, String>
     #[derive(serde::Deserialize)]
     struct DocState {
         #[serde(default)]
-        delta: Option<DeviceState>,
+        delta: Option<Value>,
     }
     serde_json::from_slice::<Doc>(payload)
-        .map(|d| d.state.delta.filter(|delta| !delta.is_empty()))
+        .map(|d| d.state.delta.filter(|delta| delta.as_object().is_some_and(|o| !o.is_empty())))
         .map_err(|e| e.to_string())
 }
 
@@ -152,13 +163,36 @@ pub fn parse_get_accepted(payload: &[u8]) -> Result<Option<DeviceState>, String>
  * "desired" until someone removes it and re-sends a delta whenever reported
  * differs from it, so an old cloud command would override every later
  * local change. The board clears it right after carrying a command out. */
-pub fn device_report(properties: &DeviceState, clear_desired: bool) -> Vec<u8> {
-    let mut doc = json!({ "state": { "reported": properties } });
+pub fn device_report(reported: &Value, clear_desired: bool, drop_old_keys: bool) -> Vec<u8> {
+    let mut doc = json!({ "state": { "reported": reported } });
     if clear_desired {
         doc["state"]["desired"] = Value::Null;
     }
+    if drop_old_keys {
+        for key in OLD_REPORTED_KEYS {
+            doc["state"]["reported"][key] = Value::Null;
+        }
+    }
     doc.to_string().into_bytes()
 }
+
+/* What a device's shadow reports: everything about it except the id (the
+ * shadow's name already is the id) and its source (internal). */
+pub fn reported(device: &Device) -> Value {
+    json!({
+        "name": device.name,
+        "room": device.room,
+        "template": device.template,
+        "capabilities": device.capabilities,
+    })
+}
+
+/* The top-level keys devices reported before #34 ({"on": true,
+ * "brightness": 80}). AWS MERGES every report into the shadow, so they
+ * would otherwise stay there forever, next to the new "capabilities". The
+ * first report per device after connecting sets them to null, which in a
+ * shadow update means "delete"; deleting what isn't there is a no-op. */
+const OLD_REPORTED_KEYS: [&str; 3] = ["on", "brightness", "level"];
 
 /* The hub's own report for the classic shadow. `migrate` additionally
  * deletes the `devices` map that #26/#29 kept there (in both reported and
@@ -183,13 +217,12 @@ pub struct Changes {
     pub removed: Vec<DeviceId>,
 }
 
-pub fn changes(
-    published: &HashMap<DeviceId, DeviceState>,
-    current: &HashMap<DeviceId, DeviceState>,
-) -> Changes {
+/* Generic over what's compared (T): mqtt.rs compares each device's
+ * reported JSON (see reported()). */
+pub fn changes<T: PartialEq>(published: &HashMap<DeviceId, T>, current: &HashMap<DeviceId, T>) -> Changes {
     let mut c = Changes::default();
-    for (id, properties) in current {
-        if published.get(id) != Some(properties) {
+    for (id, value) in current {
+        if published.get(id) != Some(value) {
             c.updated.push(id.clone());
         }
     }
@@ -239,8 +272,8 @@ pub fn decode_names(schema: u32, payload: &[u8]) -> Result<BTreeSet<DeviceId>, S
 mod tests {
     use super::*;
 
-    fn props(on: bool) -> DeviceState {
-        HashMap::from([("on".to_string(), json!(on))])
+    fn props(on: bool) -> Value {
+        json!({"capabilities": {"switch": {"on": on}}})
     }
 
     #[test]
@@ -291,10 +324,10 @@ mod tests {
 
     #[test]
     fn delta_and_get_accepted_payloads() {
-        let delta = parse_delta(br#"{"version":3,"state":{"on":false}}"#).unwrap();
+        let delta = parse_delta(br#"{"version":3,"state":{"capabilities":{"switch":{"on":false}}}}"#).unwrap();
         assert_eq!(delta, props(false));
 
-        let pending = br#"{"state":{"desired":{"on":true},"reported":{"on":false},"delta":{"on":true}}}"#;
+        let pending = br#"{"state":{"desired":{"capabilities":{"switch":{"on":true}}},"delta":{"capabilities":{"switch":{"on":true}}}}}"#;
         assert_eq!(parse_get_accepted(pending).unwrap(), Some(props(true)));
 
         let in_sync = br#"{"state":{"desired":{"on":true},"reported":{"on":true}}}"#;
@@ -305,10 +338,16 @@ mod tests {
 
     #[test]
     fn device_report_optionally_clears_desired() {
-        let plain: Value = serde_json::from_slice(&device_report(&props(true), false)).unwrap();
-        assert_eq!(plain, json!({"state":{"reported":{"on":true}}}));
-        let cleared: Value = serde_json::from_slice(&device_report(&props(true), true)).unwrap();
-        assert_eq!(cleared, json!({"state":{"reported":{"on":true},"desired":null}}));
+        let plain: Value = serde_json::from_slice(&device_report(&props(true), false, false)).unwrap();
+        assert_eq!(plain, json!({"state":{"reported":props(true)}}));
+        let cleared: Value = serde_json::from_slice(&device_report(&props(true), true, false)).unwrap();
+        assert_eq!(cleared, json!({"state":{"reported":props(true),"desired":null}}));
+        /* The first report after connecting deletes the pre-#34 keys. */
+        let migrated: Value = serde_json::from_slice(&device_report(&props(true), false, true)).unwrap();
+        assert_eq!(
+            migrated,
+            json!({"state":{"reported":{"capabilities":{"switch":{"on":true}},"on":null,"brightness":null,"level":null}}})
+        );
     }
 
     #[test]
@@ -354,5 +393,18 @@ mod tests {
         let decoded = decode_names(SHADOWS_SCHEMA, br#"["ok-1","bad/name"]"#).unwrap();
         assert_eq!(decoded, BTreeSet::from(["ok-1".to_string()]));
         assert!(decode_names(2, b"[]").is_err());
+    }
+
+    #[test]
+    fn reported_leaves_out_id_and_source() {
+        let device: Device = serde_json::from_value(json!({
+            "id": "lamp-1", "name": "Lamp", "room": "Office", "template": "t", "source": "virtual",
+            "capabilities": {"switch": {"on": true}}
+        }))
+        .unwrap();
+        assert_eq!(
+            reported(&device),
+            json!({"name": "Lamp", "room": "Office", "template": "t", "capabilities": {"switch": {"on": true}}})
+        );
     }
 }
