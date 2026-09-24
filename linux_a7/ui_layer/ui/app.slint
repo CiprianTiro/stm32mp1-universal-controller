@@ -8,8 +8,9 @@
 // defined there, not a language keyword, and has to be imported like any
 // other component this project might have written itself. ("VerticalLayout"
 // further down doesn't need an import -- unlike Button, it's a core layout
-// primitive built into the language itself.)
-import { Button } from "std-widgets.slint";
+// primitive built into the language itself.) `Palette` holds the colors
+// those widgets use; it's switched to dark below.
+import { Button, Palette } from "std-widgets.slint";
 
 // Embeds this specific font file into the compiled binary (combined with
 // build.rs's `EmbedForSoftwareRenderer` config) rather than relying on
@@ -20,6 +21,76 @@ import { Button } from "std-widgets.slint";
 // anyway. See fonts/DejaVuSans-LICENSE for its (permissive) license.
 import "../fonts/DejaVuSans.ttf";
 
+// The colors of the welcome screen (issue #59). They MUST stay identical to
+// tools/welcome/make_welcome.py, which draws the same design into the boot
+// image U-Boot shows: the UI's welcome screen takes over from that image
+// without a visible jump. A `global` is a set of values shared by every
+// component in this file.
+global Theme {
+    out property <color> background: #0F172A;
+    out property <color> accent: #38BDF8;
+    out property <color> title: #E2E8F0;
+    out property <color> muted: #94A3B8;
+    out property <color> dot-off: #334155;
+}
+
+// Shown from the UI's start until backend_daemon answers for the first time
+// (issue #59). The background picture (icon + name) is the very same file
+// the boot image is made from; this component only adds what moves: the
+// three loading dots and the status text below them. Their positions are
+// the constants from make_welcome.py (dots centred at y=560, 28 px apart,
+// radius 7; text centred at y=600) -- if the design changes there, change
+// them here too.
+component WelcomeScreen inherits Rectangle {
+    // Set after 30 s without the backend: the text changes, so a hub whose
+    // backend never comes up doesn't look like it's simply still booting.
+    in property <bool> slow;
+
+    // Which dot is lit: 0, 1, 2, 0, ...
+    property <int> phase: 0;
+
+    background: Theme.background;
+
+    Image {
+        source: @image-url("images/welcome.png");
+        width: parent.width;
+        height: parent.height;
+    }
+
+    // A Timer only changes `phase` 2.5 times a second, and only the dots'
+    // few pixels are then redrawn -- unlike an endlessly running animation,
+    // which would redraw at 60 fps and eat CPU while the rest of the system
+    // is still booting.
+    Timer {
+        interval: 400ms;
+        triggered => {
+            phase = Math.mod(phase + 1, 3);
+        }
+    }
+
+    // `for i in 3`: three copies of this rectangle, i = 0, 1, 2. A
+    // rectangle with a border radius of half its size is a circle.
+    for i in 3: Rectangle {
+        x: parent.width / 2 + (i - 1) * 28px - 7px;
+        y: 560px - 7px;
+        width: 14px;
+        height: 14px;
+        border-radius: 7px;
+        background: i == phase ? Theme.accent : Theme.dot-off;
+    }
+
+    Text {
+        // `\u{2026}` is the single "..." character, as in the boot image.
+        text: slow ? "Still starting\u{2026} (hub service not answering)" : "Starting\u{2026}";
+        color: Theme.muted;
+        font-size: 20px;
+        width: parent.width;
+        horizontal-alignment: center;
+        // Centred on y=600, whatever the text's height.
+        y: 600px - self.height / 2;
+    }
+}
+
 // "component" is Slint's word for a reusable UI definition, similar to a
 // React/Flutter/etc. "widget". `AppWindow` is the name main.rs's generated
 // code (via `slint::include_modules!()`) will know this as.
@@ -27,16 +98,24 @@ export component AppWindow inherits Window {
     // "in-out property" means both Rust and this UI file can read AND write
     // this value -- Rust sets it (via the generated `set_led_on()` method)
     // whenever the M4 reports a state change; the UI file reads it below to
-    // decide what to display. This is deliberately the *only* piece of
-    // state this whole UI has, matching ui_layer's "dumb, holds no state of
-    // its own" design (see ARCHITECTURE.md) -- it's always just showing
-    // whatever backend_daemon last told it, never guessing.
+    // decide what to display. It's always just showing whatever
+    // backend_daemon last told it, never guessing.
     in-out property <bool> led-on: false;
 
-    // Same idea, but for whether we're even connected to backend_daemon at
-    // all right now -- lets the UI honestly say "not connected" instead of
-    // silently showing a stale LED state as if it were current.
+    // Whether we're connected to backend_daemon right now -- lets the UI
+    // honestly say so instead of silently showing a stale LED state as if
+    // it were current.
     in-out property <bool> connected: false;
+
+    // Whether we've EVER been connected since the UI started (issue #59).
+    // Until then the hub is still starting, and the welcome screen is shown;
+    // losing the connection later is a different situation (see the status
+    // text below). Set by main.rs on the first connection, never unset.
+    in-out property <bool> ever-connected: false;
+
+    // After 30 s of welcome screen without a connection (see the Timer
+    // below).
+    property <bool> starting-slow: false;
 
     // "callback" declares an event this component can fire that Rust code
     // outside this file can react to -- see main.rs's
@@ -47,9 +126,25 @@ export component AppWindow inherits Window {
     // Rust's job, not this markup's.
     callback toggle-led();
 
-    // A simple vertical stack, centered on screen -- more than enough for
-    // "one status line, one button" (issue #14's DoD only asks for at least
-    // one interactive element, not a polished dashboard).
+    // The whole UI uses the dark look of the welcome screen, so switching
+    // from it to the normal screen isn't a jump from dark to bright.
+    // `init` runs once, when the window is created.
+    background: Theme.background;
+    init => {
+        Palette.color-scheme = ColorScheme.dark;
+    }
+
+    // Runs once, 30 s after start, if the backend still hasn't answered.
+    Timer {
+        interval: 30s;
+        running: !ever-connected && !starting-slow;
+        triggered => {
+            starting-slow = true;
+        }
+    }
+
+    // The normal screen: one status line, one button (issue #14's DoD only
+    // asks for at least one interactive element, not a polished dashboard).
     VerticalLayout {
         alignment: center;
         spacing: 24px;
@@ -58,24 +153,30 @@ export component AppWindow inherits Window {
             // Slint string concatenation with `+`, and the ternary-like
             // `condition ? a : b` operator -- both work directly inside a
             // property binding like this, recomputed automatically any
-            // time `connected`/`led-on` changes (Slint's properties are
-            // "reactive": nothing here is ever manually told to redraw).
-            text: connected ? ("LED is " + (led-on ? "ON" : "OFF")) : "Not connected to backend_daemon";
-            font-size: 32px;
+            // time `connected` or `led-on` changes.
+            text: connected ? ("LED is " + (led-on ? "ON" : "OFF")) : "Connection to the hub lost, reconnecting\u{2026}";
+            color: connected ? Theme.title : Theme.muted;
+            font-size: connected ? 32px : 20px;
             horizontal-alignment: center;
+            wrap: word-wrap;
         }
 
         Button {
             text: led-on ? "Turn OFF" : "Turn ON";
             enabled: connected;
-            // Fires the `toggle-led` callback declared above -- see
-            // main.rs's `ui.on_toggle_led(...)` for what actually happens
-            // next. Note this does NOT set `led-on` itself: the displayed
-            // state only ever changes once backend_daemon (and, behind it,
-            // the M4) actually confirms it, not optimistically on tap.
             clicked => {
                 toggle-led();
             }
         }
+    }
+
+    // Drawn last = on top of everything above, covering the whole window.
+    // `if`: the welcome screen only exists while the condition holds; once
+    // the backend has answered, it's removed for good (along with its
+    // timer).
+    if !ever-connected: WelcomeScreen {
+        width: parent.width;
+        height: parent.height;
+        slow: starting-slow;
     }
 }

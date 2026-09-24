@@ -44,6 +44,57 @@ const FB_PATH: &str = "/dev/fb0";
 /// read from here instead -- same number, no extra ioctl code needed.
 const FB_STRIDE_SYSFS: &str = "/sys/class/graphics/fb0/stride";
 
+/// sysfs file with the name of the driver that currently owns fb0.
+const FB_NAME_SYSFS: &str = "/sys/class/graphics/fb0/name";
+
+/// The name fb0 has while it still belongs to "simpledrm" (issue #59).
+///
+/// What happens to the display during boot: U-Boot sets up the panel and
+/// draws the welcome image. The kernel then keeps that very picture on
+/// screen through a stand-in driver, simpledrm, which just takes over
+/// U-Boot's framebuffer memory as /dev/fb0. ~13 s later (on the DK2) udev
+/// loads the real display driver (stm, "stmdrmfb"); it resets the panel and
+/// REPLACES /dev/fb0 with its own. A UI that opened the stand-in fb0 would
+/// be left drawing into memory that is no longer on screen -- so the UI
+/// must wait for the real one.
+const STANDIN_FB_NAME: &str = "simpledrmdrmfb";
+
+/// Waits until /dev/fb0 belongs to the real display driver (see
+/// STANDIN_FB_NAME). Since issue #59 the UI starts early in boot, long
+/// before that driver is loaded, and simply waits here -- then draws its
+/// first frame within a fraction of a second of the display becoming
+/// usable, instead of whenever systemd would otherwise have got round to
+/// starting it.
+///
+/// Checks every 50 ms (reading one small sysfs file: negligible CPU).
+/// Gives up waiting after `timeout` and carries on with whatever fb0 there
+/// is -- e.g. a kernel with the display driver built in never has the
+/// stand-in, and an image without it still gets a (maybe blank) UI rather
+/// than none.
+pub fn wait_for_display_driver(timeout: std::time::Duration) {
+    let start = std::time::Instant::now();
+    let mut announced = false;
+    loop {
+        let name = std::fs::read_to_string(FB_NAME_SYSFS).unwrap_or_default();
+        let name = name.trim();
+        if !name.is_empty() && name != STANDIN_FB_NAME {
+            if announced {
+                println!("ui_layer: display driver \"{name}\" ready after {:.1} s", start.elapsed().as_secs_f32());
+            }
+            return;
+        }
+        if start.elapsed() >= timeout {
+            println!("ui_layer: display driver not ready after {} s (fb0: \"{name}\"), starting anyway", timeout.as_secs());
+            return;
+        }
+        if !announced {
+            println!("ui_layer: waiting for the display driver (fb0: \"{name}\")");
+            announced = true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
 /// Owns the mapped `/dev/fb0` memory and actually draws into it. See this
 /// file's header comment for why this is kept separate from the `Platform`
 /// registration below.

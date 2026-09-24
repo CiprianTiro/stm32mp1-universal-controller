@@ -27,6 +27,16 @@ use std::time::Duration;
 /// and also how long it sleeps between animation frames.
 const FRAME: Duration = Duration::from_millis(16);
 
+/// How long to wait for the real display driver at most (see
+/// fb_platform::wait_for_display_driver). It normally takes ~8 s from the
+/// UI's start; generous, since a slow boot is better than a UI on the
+/// wrong framebuffer.
+const DISPLAY_WAIT: Duration = Duration::from_secs(60);
+
+/// How often to look for the touch panel again while it isn't there yet
+/// (its driver is loaded by udev at about the same time as the display's).
+const TOUCH_RETRY: Duration = Duration::from_secs(1);
+
 // This macro reads the compiled output of build.rs (which itself compiled
 // ui/app.slint) and makes its `AppWindow` type -- along with the
 // `set_led_on`/`get_led_on`/`set_connected`/`on_toggle_led` methods
@@ -61,6 +71,10 @@ fn main() {
     // registration above) because it also needs to open the real
     // framebuffer device -- see fb_platform.rs's header comment for why
     // these responsibilities are split into two structs instead of one.
+    //
+    // Since issue #59 this process starts very early in boot (see
+    // ui-layer.service), so first wait for the real display driver.
+    fb_platform::wait_for_display_driver(DISPLAY_WAIT);
     let renderer = fb_platform::FbRenderer::new(window.clone())
         .expect("failed to open the framebuffer -- is CONFIG_DRM_FBDEV_EMULATION on and is a display actually connected?");
 
@@ -68,14 +82,15 @@ fn main() {
 
     // A touchscreen not being present shouldn't be fatal (see
     // touch_input.rs's own doc comment) -- `None` here just means the loop
-    // below skips polling it every iteration, and the UI is then only
-    // usable if some other input mechanism exists (there currently isn't
-    // one, but a missing/disconnected touch panel is still a better
-    // failure mode than refusing to display anything at all).
-    let mut touch = touch_input::TouchInput::open().unwrap_or_else(|e| {
-        println!("ui_layer: touch input unavailable: {e}");
-        None
-    });
+    // below skips polling it, and a missing/disconnected touch panel is
+    // still a better failure mode than refusing to display anything.
+    //
+    // Since issue #59 the UI starts before udev has necessarily loaded the
+    // touch panel's driver, so "not there yet" is normal right after boot:
+    // the loop below keeps looking for it every TOUCH_RETRY until it shows
+    // up. Only the first failure is logged.
+    let mut touch = open_touch(true);
+    let mut touch_checked = std::time::Instant::now();
 
     // Starts ws_client.rs's background thread (see its own doc comment for
     // why this needs to be a separate OS thread rather than something
@@ -123,6 +138,10 @@ fn main() {
         //    button actually register as a tap.
         if let Some(touch) = touch.as_mut() {
             touch.poll(&window);
+        } else if touch_checked.elapsed() >= TOUCH_RETRY {
+            // (TouchInput::open logs the panel's range once it's found.)
+            touch = open_touch(false);
+            touch_checked = std::time::Instant::now();
         }
 
         // 3. Drain any updates from backend_daemon (connection status, or
@@ -139,7 +158,14 @@ fn main() {
         //    confirms it, arriving back here as one of these updates.
         while let Ok(update) = update_rx.try_recv() {
             match update {
-                ws_client::Update::Connected => ui.set_connected(true),
+                // ever-connected (issue #59): from the first successful
+                // connection on, app.slint shows the normal screen instead
+                // of the welcome screen -- and a LATER lost connection is
+                // shown as "reconnecting", not as the welcome screen again.
+                ws_client::Update::Connected => {
+                    ui.set_connected(true);
+                    ui.set_ever_connected(true);
+                }
                 ws_client::Update::Disconnected => ui.set_connected(false),
                 ws_client::Update::LedState(on) => ui.set_led_on(on),
             }
@@ -171,5 +197,26 @@ fn main() {
                 .map_or(FRAME, |until_timer| until_timer.min(FRAME))
         };
         std::thread::sleep(wait);
+    }
+}
+
+/// Opens the touch panel, if it exists yet (see its use in main). `log`:
+/// whether "not found"/errors are printed -- only on the first attempt, so
+/// retrying every second doesn't flood the journal.
+fn open_touch(log: bool) -> Option<touch_input::TouchInput> {
+    match touch_input::TouchInput::open() {
+        Ok(Some(touch)) => Some(touch),
+        Ok(None) => {
+            if log {
+                println!("ui_layer: no touch panel yet, will keep looking");
+            }
+            None
+        }
+        Err(e) => {
+            if log {
+                println!("ui_layer: touch input unavailable: {e}");
+            }
+            None
+        }
     }
 }

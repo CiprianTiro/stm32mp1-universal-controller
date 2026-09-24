@@ -35,6 +35,7 @@ SRC_URI = " \
     file://Cargo.lock \
     file://build.rs \
     file://ui/app.slint \
+    file://ui/images/welcome.png \
     file://fonts/DejaVuSans.ttf \
     file://src/main.rs \
     file://src/fb_platform.rs \

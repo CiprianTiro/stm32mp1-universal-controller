@@ -57,3 +57,19 @@ IMAGE_INSTALL:append:stm32mp1common = " m4-firmware"
 # 50-public-dns.conf). QEMU's user-mode network brings its own DNS proxy,
 # so there's nothing to fix there.
 IMAGE_INSTALL:append:stm32mp1common = " resolved-public-dns"
+
+# ST's partition splitter (meta-st-stm32mp, image_types-stsplitpartitions
+# .bbclass) copies the finished rootfs into ${WORKDIR}/splitted_rootfs with
+# `cp -ar` -- into a folder that is never emptied between builds. New and
+# changed files arrive, but a file REMOVED from the image stays in that
+# folder and keeps being flashed. Found in issue #59: ofono/rpcbind were
+# disabled (their "enable" links gone from the rootfs), yet the flashed
+# image still started them, because the links from an older build were
+# still in splitted_rootfs. [cleandirs] makes bitbake empty these folders
+# before the task runs, so every image matches its rootfs exactly.
+do_image_stsplitpartitions[cleandirs] += " \
+    ${WORKDIR}/splitted_rootfs \
+    ${WORKDIR}/splitted_bootfs \
+    ${WORKDIR}/splitted_vendorfs \
+    ${WORKDIR}/splitted_userfs \
+"

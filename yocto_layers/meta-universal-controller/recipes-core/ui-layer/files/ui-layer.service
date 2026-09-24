@@ -1,19 +1,31 @@
 [Unit]
 Description=Universal Controller touchscreen UI
-# Not a hard dependency (ws_client.rs retries its own connection every 2s
-# regardless of start order -- see that file's doc comment), but starting
-# after backend-daemon means the UI is more likely to show real state on
-# its very first frame instead of briefly showing "Not connected".
-After=backend-daemon.service
+# Starts as early in boot as possible (issue #59). An ordinary service is
+# held back until the whole base system is up (basic.target: every
+# filesystem including /usr/local and its check, the network, ...) --
+# measured on the DK2, that put the UI at ~22 s after kernel start, with a
+# black screen for the last ~6 s. The UI needs none of it:
+#   - the display: it waits for the real display driver itself (see
+#     fb_platform::wait_for_display_driver), and until then the boot image
+#     from U-Boot stays on screen;
+#   - the touch panel: it keeps looking for it until it appears;
+#   - backend_daemon: it shows a welcome screen and keeps retrying the
+#     connection (ws_client.rs) until the backend answers.
+# DefaultDependencies=no removes that implicit "after basic.target". The
+# UI's output still reaches the journal: systemd orders any service that
+# logs to it after the journal's socket automatically.
+DefaultDependencies=no
+# DefaultDependencies=no also removes the usual shutdown handling, so it's
+# added back by hand: stop the UI when the system shuts down or reboots,
+# and before it goes on to unmount filesystems.
+Conflicts=shutdown.target
+Before=shutdown.target
 
 [Service]
 ExecStart=/usr/bin/ui-layer
-# A couple of seconds' backoff, not systemd's default (near-instant) restart
-# -- this process depends on /dev/fb0 and the touch panel's evdev device
-# both existing already, which come from kernel/DRM driver + udev
-# probing that can still be settling very early in boot; retrying
-# instantly into the same "not ready yet" failure just burns CPU without
-# giving the device nodes those extra couple of seconds to actually appear.
+# If it crashes, wait a couple of seconds before restarting instead of
+# systemd's default (near-instant) restart, so a failure that repeats
+# doesn't restart in a tight loop and burn CPU.
 Restart=on-failure
 RestartSec=2
 
