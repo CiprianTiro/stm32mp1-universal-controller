@@ -25,3 +25,24 @@ axum = { version = "0.7", features = ["ws"] }
 # for ARM during the Yocto build (the cargo class provides the cross C
 # compiler for that).
 rumqttc = { version = "0.24", default-features = false, features = ["use-rustls"] }
+# Issue #35 -- the LAN connection over TLS (wss://) with pairing.
+# rcgen creates the hub's own TLS certificate on first start (there is no
+# `openssl` command on the board); with the "ring" backend it uses the same
+# crypto library as everything else below. It's the only one of these that
+# added crates to the build (rcgen, time, yasna, pem + small helpers).
+rcgen = { version = "0.13", default-features = false, features = ["ring", "pem"] }
+# Already in the build through rumqttc (same versions and features), now
+# used directly: tokio-rustls = TLS for the WebSocket server, rustls-pemfile
+# reads the certificate files, ring = random numbers + SHA-256, base64 =
+# the client tokens as text.
+tokio-rustls = "0.25"
+rustls-pemfile = "2"
+ring = "0.17"
+base64 = "0.22"
+# Already in the build through axum: serving axum's router over our own TLS
+# connections (axum::serve only does plain TCP). The exact features axum
+# already enables, so nothing new is compiled.
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio", "server", "service"] }
+# The `Service` trait axum's router implements (already in the build).
+tower-service = "0.3"

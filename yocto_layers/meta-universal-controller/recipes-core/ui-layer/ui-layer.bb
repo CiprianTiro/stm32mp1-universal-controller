@@ -39,6 +39,7 @@ SRC_URI = " \
     file://ui/theme.slint \
     file://ui/keyboard.slint \
     file://ui/network.slint \
+    file://ui/settings.slint \
     file://ui/images/welcome.png \
     file://fonts/DejaVuSans.ttf \
     file://src/main.rs \

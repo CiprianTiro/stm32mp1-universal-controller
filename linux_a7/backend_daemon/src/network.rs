@@ -776,7 +776,7 @@ fn read_trimmed(path: &str) -> Option<String> {
 
 /* Every interface's IPv4 address, via getifaddrs() -- the C library call
  * `ip addr` itself uses. */
-fn ipv4_addresses() -> HashMap<String, Ipv4Addr> {
+pub fn ipv4_addresses() -> HashMap<String, Ipv4Addr> {
     let mut result = HashMap::new();
     let mut list: *mut libc::ifaddrs = std::ptr::null_mut();
     /* SAFETY: getifaddrs allocates a linked list and stores its head in

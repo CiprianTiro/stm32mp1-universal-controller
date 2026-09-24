@@ -77,6 +77,9 @@ linuxfb = "0.3"
 # on this board (rows are padded from 960 to 1024 bytes). Already in the
 # dependency tree via Slint's font code, so this adds no new crate.
 memmap2 = "0.9"
+# Issue #35: draws the pairing QR code on the hub's screen. Pure Rust, no
+# dependencies of its own.
+qrcodegen = "1.8"
 
 [build-dependencies]
 # Used by build.rs to compile ui/app.slint -- see that file's own comment.

@@ -45,6 +45,12 @@ pub enum Request {
     WifiConnect { ssid: String, password: String },
     WifiForget,
     SetWifiCountry { country: String },
+    // Pairing (issue #35; only accepted from the hub itself).
+    StartPairing,
+    PairingStatus,
+    CancelPairing,
+    ListClients,
+    RevokeClient { id: String },
 }
 
 /// A device as backend_daemon describes it (its device.rs). Only what this
@@ -123,6 +129,29 @@ pub struct WifiStatus {
     pub country: Option<String>,
 }
 
+/// The pairing screen's data (backend_daemon's auth.rs + ws.rs).
+#[derive(Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct Pairing {
+    /// "none", "waiting", "paired", "locked" or "expired".
+    pub state: String,
+    pub code: Option<String>,
+    pub seconds_left: u64,
+    pub client_name: Option<String>,
+    pub addresses: Vec<String>,
+    pub port: u16,
+    pub fingerprint: String,
+    pub fingerprint_short: String,
+}
+
+/// A paired client (auth.rs's `ClientInfo`).
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct Client {
+    pub id: String,
+    pub name: String,
+    pub created: u64,
+    pub last_seen: u64,
+}
+
 /// One network from a scan (network.rs's `Network`).
 #[derive(Deserialize, Clone, Debug, PartialEq)]
 pub struct WifiNetwork {
@@ -142,6 +171,8 @@ enum ServerMessage {
     Device {},
     NetworkStatus { status: NetworkStatus },
     WifiNetworks { networks: Vec<WifiNetwork> },
+    Pairing(Pairing),
+    Clients { clients: Vec<Client> },
     Ack,
     Error { message: String },
     // Events (pushed after Subscribe).
@@ -158,6 +189,7 @@ pub enum Action {
     Connect,
     Forget,
     Country,
+    Revoke,
 }
 
 /// What this module reports back to the GUI thread. main.rs drains these
@@ -176,6 +208,8 @@ pub enum Update {
     Networks(Vec<WifiNetwork>),
     ScanFailed(String),
     ActionDone(Action, Result<(), String>),
+    Pairing(Pairing),
+    Clients(Vec<Client>),
 }
 
 const BACKEND_URL: &str = "ws://127.0.0.1:8080/ws";
@@ -330,12 +364,15 @@ fn to_update(request: &Request, reply: ServerMessage) -> Option<Update> {
         Request::WifiConnect { .. } => Some(Action::Connect),
         Request::WifiForget => Some(Action::Forget),
         Request::SetWifiCountry { .. } => Some(Action::Country),
+        Request::RevokeClient { .. } => Some(Action::Revoke),
         _ => None,
     };
     match (request, reply) {
         (_, ServerMessage::Devices { devices }) => Some(Update::Devices(devices)),
         (_, ServerMessage::NetworkStatus { status }) => Some(Update::Network(status)),
         (_, ServerMessage::WifiNetworks { networks }) => Some(Update::Networks(networks)),
+        (_, ServerMessage::Pairing(pairing)) => Some(Update::Pairing(pairing)),
+        (_, ServerMessage::Clients { clients }) => Some(Update::Clients(clients)),
         (Request::WifiScan, ServerMessage::Error { message }) => Some(Update::ScanFailed(message)),
         (Request::Command { id, .. }, ServerMessage::Error { message }) => {
             println!("ui_layer: command for {id} refused: {message}");

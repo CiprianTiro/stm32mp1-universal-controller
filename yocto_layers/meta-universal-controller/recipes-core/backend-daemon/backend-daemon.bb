@@ -34,6 +34,7 @@ FILESEXTRAPATHS:prepend := "/home/builder/linux_a7/backend_daemon:"
 SRC_URI = " \
     file://Cargo.toml \
     file://Cargo.lock \
+    file://src/auth.rs \
     file://src/control.rs \
     file://src/device.rs \
     file://src/health.rs \
@@ -44,6 +45,7 @@ SRC_URI = " \
     file://src/shadow.rs \
     file://src/state.rs \
     file://src/store.rs \
+    file://src/tls.rs \
     file://src/ws.rs \
 "
 
@@ -68,8 +70,8 @@ SRC_URI = " \
 SRC_URI += " \
     crate://crates.io/async-trait/0.1.92 \
     crate://crates.io/atomic-waker/1.1.2 \
-    crate://crates.io/axum-core/0.4.5 \
     crate://crates.io/axum/0.7.9 \
+    crate://crates.io/axum-core/0.4.5 \
     crate://crates.io/base64/0.22.1 \
     crate://crates.io/bitflags/2.13.2 \
     crate://crates.io/block-buffer/0.10.4 \
@@ -77,11 +79,12 @@ SRC_URI += " \
     crate://crates.io/bytes/1.12.1 \
     crate://crates.io/cc/1.4.7 \
     crate://crates.io/cfg-if/1.0.5 \
-    crate://crates.io/core-foundation-sys/0.8.7 \
     crate://crates.io/core-foundation/0.9.4 \
+    crate://crates.io/core-foundation-sys/0.8.7 \
     crate://crates.io/cpufeatures/0.2.17 \
     crate://crates.io/crypto-common/0.1.7 \
     crate://crates.io/data-encoding/2.11.1 \
+    crate://crates.io/deranged/0.4.0 \
     crate://crates.io/digest/0.10.7 \
     crate://crates.io/errno/0.3.14 \
     crate://crates.io/find-msvc-tools/0.1.13 \
@@ -94,13 +97,13 @@ SRC_URI += " \
     crate://crates.io/futures-util/0.3.34 \
     crate://crates.io/generic-array/0.14.7 \
     crate://crates.io/getrandom/0.2.17 \
-    crate://crates.io/http-body-util/0.1.5 \
-    crate://crates.io/http-body/1.1.0 \
     crate://crates.io/http/1.5.0 \
+    crate://crates.io/http-body/1.1.0 \
+    crate://crates.io/http-body-util/0.1.5 \
     crate://crates.io/httparse/1.10.1 \
     crate://crates.io/httpdate/1.0.3 \
-    crate://crates.io/hyper-util/0.1.20 \
     crate://crates.io/hyper/1.11.1 \
+    crate://crates.io/hyper-util/0.1.20 \
     crate://crates.io/itoa/1.0.18 \
     crate://crates.io/libc/0.2.189 \
     crate://crates.io/lock_api/0.4.14 \
@@ -109,29 +112,33 @@ SRC_URI += " \
     crate://crates.io/memchr/2.8.3 \
     crate://crates.io/mime/0.3.17 \
     crate://crates.io/mio/1.2.3 \
+    crate://crates.io/num-conv/0.1.0 \
     crate://crates.io/once_cell/1.21.4 \
     crate://crates.io/openssl-probe/0.1.6 \
+    crate://crates.io/pem/3.0.6 \
     crate://crates.io/percent-encoding/2.3.2 \
     crate://crates.io/pin-project-lite/0.2.17 \
+    crate://crates.io/powerfmt/0.2.0 \
     crate://crates.io/ppv-lite86/0.2.21 \
     crate://crates.io/proc-macro2/1.0.107 \
     crate://crates.io/quote/1.0.47 \
     crate://crates.io/rand/0.8.8 \
     crate://crates.io/rand_chacha/0.3.1 \
     crate://crates.io/rand_core/0.6.4 \
+    crate://crates.io/rcgen/0.13.2 \
     crate://crates.io/ring/0.17.14 \
     crate://crates.io/rumqttc/0.24.0 \
+    crate://crates.io/rustls/0.22.4 \
     crate://crates.io/rustls-native-certs/0.7.3 \
     crate://crates.io/rustls-pemfile/2.2.0 \
     crate://crates.io/rustls-pki-types/1.15.1 \
     crate://crates.io/rustls-webpki/0.102.8 \
-    crate://crates.io/rustls/0.22.4 \
     crate://crates.io/rustversion/1.0.23 \
     crate://crates.io/ryu/1.0.23 \
     crate://crates.io/schannel/0.1.29 \
     crate://crates.io/scopeguard/1.2.0 \
-    crate://crates.io/security-framework-sys/2.17.0 \
     crate://crates.io/security-framework/2.11.1 \
+    crate://crates.io/security-framework-sys/2.17.0 \
     crate://crates.io/serde/1.0.229 \
     crate://crates.io/serde_core/1.0.229 \
     crate://crates.io/serde_derive/1.0.229 \
@@ -149,17 +156,19 @@ SRC_URI += " \
     crate://crates.io/syn/2.0.119 \
     crate://crates.io/syn/3.0.6 \
     crate://crates.io/sync_wrapper/1.0.2 \
-    crate://crates.io/thiserror-impl/1.0.69 \
     crate://crates.io/thiserror/1.0.69 \
+    crate://crates.io/thiserror-impl/1.0.69 \
+    crate://crates.io/time/0.3.41 \
+    crate://crates.io/time-core/0.1.4 \
+    crate://crates.io/tokio/1.53.1 \
     crate://crates.io/tokio-macros/2.7.2 \
     crate://crates.io/tokio-rustls/0.25.0 \
     crate://crates.io/tokio-tungstenite/0.24.0 \
-    crate://crates.io/tokio/1.53.1 \
+    crate://crates.io/tower/0.5.3 \
     crate://crates.io/tower-layer/0.3.3 \
     crate://crates.io/tower-service/0.3.3 \
-    crate://crates.io/tower/0.5.3 \
-    crate://crates.io/tracing-core/0.1.36 \
     crate://crates.io/tracing/0.1.44 \
+    crate://crates.io/tracing-core/0.1.36 \
     crate://crates.io/tungstenite/0.24.0 \
     crate://crates.io/typenum/1.20.1 \
     crate://crates.io/unicode-ident/1.0.26 \
@@ -179,8 +188,9 @@ SRC_URI += " \
     crate://crates.io/windows_x86_64_gnu/0.52.6 \
     crate://crates.io/windows_x86_64_gnullvm/0.52.6 \
     crate://crates.io/windows_x86_64_msvc/0.52.6 \
-    crate://crates.io/zerocopy-derive/0.8.57 \
+    crate://crates.io/yasna/0.5.2 \
     crate://crates.io/zerocopy/0.8.57 \
+    crate://crates.io/zerocopy-derive/0.8.57 \
     crate://crates.io/zeroize/1.8.2 \
     crate://crates.io/zmij/1.0.23 \
 "
@@ -302,6 +312,14 @@ SRC_URI[zerocopy-derive-0.8.57.sha256sum] = "146c01f5ab44258da43cf276c74a2763db2
 SRC_URI[zerocopy-0.8.57.sha256sum] = "d35102a9f36d089ccae9e4c6802bc118be4487b80aaffc0ab4e0cf5ce92d2873"
 SRC_URI[zeroize-1.8.2.sha256sum] = "b97154e67e32c85465826e8bcc1c59429aaaf107c1e4a9e53c8d8ccd5eff88d0"
 SRC_URI[zmij-1.0.23.sha256sum] = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
+SRC_URI[deranged-0.4.0.sha256sum] = "9c9e6a11ca8224451684bc0d7d5a7adbf8f2fd6887261a1cfc3c0432f9d4068e"
+SRC_URI[num-conv-0.1.0.sha256sum] = "51d515d32fb182ee37cda2ccdcb92950d6a3c2893aa280e540671c2cd0f3b1d9"
+SRC_URI[pem-3.0.6.sha256sum] = "1d30c53c26bc5b31a98cd02d20f25a7c8567146caf63ed593a9d87b2775291be"
+SRC_URI[powerfmt-0.2.0.sha256sum] = "439ee305def115ba05938db6eb1644ff94165c5ab5e9420d1c1bcedbba909391"
+SRC_URI[rcgen-0.13.2.sha256sum] = "75e669e5202259b5314d1ea5397316ad400819437857b90861765f24c4cf80a2"
+SRC_URI[time-0.3.41.sha256sum] = "8a7619e19bc266e0f9c5e6686659d394bc57973859340060a69221e57dbc0c40"
+SRC_URI[time-core-0.1.4.sha256sum] = "c9e9a38711f559d9e3ce1cdb06dd7c5b8ea546bc90052da6d06bb76da74bb07c"
+SRC_URI[yasna-0.5.2.sha256sum] = "e17bb3549cc1321ae1296b9cdc2698e2b6cb1992adfa19a8c72e5b7a738f44cd"
 
 SRC_URI += "file://backend-daemon.service"
 
