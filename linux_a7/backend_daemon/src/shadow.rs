@@ -23,7 +23,7 @@
  */
 
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use crate::state::{DeviceId, DeviceState};
 
@@ -205,6 +205,36 @@ pub fn changes(
     c
 }
 
+/* THE LIST OF SHADOWS IN THE CLOUD (issue #33), saved by store.rs as
+ * "shadows.json" -- the device ids mqtt.rs has published a shadow for.
+ *
+ * Why it's saved: AWS can only LIST a Thing's named shadows through its
+ * HTTPS API, not over MQTT, so the board can't simply ask "which shadows
+ * exist?". Without this list, a device removed while the cloud was
+ * unreachable, followed by a restart, would leave its shadow behind
+ * forever (the #31 "stale shadow" limitation). With it, the next connect
+ * finds the id in the list but not among the devices, and deletes it.
+ *
+ * Payload layout, schema 1: a sorted JSON array of ids, ["lamp-1","ld7"]. */
+pub const SHADOWS_SCHEMA: u32 = 1;
+
+pub fn encode_names(names: &BTreeSet<DeviceId>) -> Vec<u8> {
+    serde_json::to_vec(names).expect("list of strings serializes")
+}
+
+/* Ids that aren't valid shadow names are dropped: they can't have come
+ * from us, and publishing to them would fail anyway. */
+pub fn decode_names(schema: u32, payload: &[u8]) -> Result<BTreeSet<DeviceId>, String> {
+    match schema {
+        1 => {
+            let names: BTreeSet<DeviceId> =
+                serde_json::from_slice(payload).map_err(|e| format!("invalid shadow list: {e}"))?;
+            Ok(names.into_iter().filter(|name| valid_name(name)).collect())
+        }
+        other => Err(format!("shadow list schema {other} is newer than this daemon understands ({SHADOWS_SCHEMA})")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -312,5 +342,17 @@ mod tests {
                 removed: vec!["old".to_string()],
             }
         );
+    }
+
+    #[test]
+    fn shadow_names_round_trip_and_invalid_names_are_dropped() {
+        let names = BTreeSet::from(["lamp-1".to_string(), "ld7".to_string()]);
+        let bytes = encode_names(&names);
+        assert_eq!(bytes, br#"["lamp-1","ld7"]"#);
+        assert_eq!(decode_names(SHADOWS_SCHEMA, &bytes), Ok(names));
+
+        let decoded = decode_names(SHADOWS_SCHEMA, br#"["ok-1","bad/name"]"#).unwrap();
+        assert_eq!(decoded, BTreeSet::from(["ok-1".to_string()]));
+        assert!(decode_names(2, b"[]").is_err());
     }
 }

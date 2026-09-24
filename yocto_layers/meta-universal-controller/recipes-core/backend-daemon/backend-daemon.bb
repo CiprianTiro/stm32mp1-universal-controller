@@ -40,6 +40,7 @@ SRC_URI = " \
     file://src/rpmsg.rs \
     file://src/shadow.rs \
     file://src/state.rs \
+    file://src/store.rs \
     file://src/ws.rs \
 "
 
