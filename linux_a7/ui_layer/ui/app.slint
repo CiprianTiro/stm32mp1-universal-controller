@@ -6,7 +6,7 @@
 
 // Slint's own built-in widget library. `Palette` holds the colors its
 // widgets (buttons, lists) use; it's switched to dark below.
-import { Button, Palette } from "std-widgets.slint";
+import { Palette } from "std-widgets.slint";
 
 // Embeds this specific font file into the compiled binary (combined with
 // build.rs's `EmbedForSoftwareRenderer` config) rather than relying on
@@ -20,6 +20,7 @@ import "../fonts/DejaVuSans.ttf";
 // The colors (shared with the boot image, see theme.slint) and the network
 // screens (issue #61).
 import { Theme, Glyphs } from "theme.slint";
+import { HeaderButton } from "common.slint";
 import { DeviceItem, DeviceList } from "devices.slint";
 import { ClientItem, SettingsPage, ClientsPage, PairingPage } from "settings.slint";
 import { NetStatus, WifiNetwork, NetIndicator, NetworkPage, PasswordPage, CountryPage } from "network.slint";
@@ -90,9 +91,24 @@ component WelcomeScreen inherits Rectangle {
 // code (via `slint::include_modules!()`) will know this as.
 export component AppWindow inherits Window {
     // The devices (issue #34), one DeviceItem per device, kept up to date
-    // by main.rs from backend_daemon's events. "in property": Rust writes
-    // it, this file only reads it.
-    in property <[DeviceItem]> devices;
+    // by main.rs from backend_daemon's events -- split into rows of
+    // `columns` cards (issue #38; see DeviceList). "in property": Rust
+    // writes it, this file only reads it.
+    in property <[[DeviceItem]]> device-rows;
+
+    // How many device cards side by side (issue #38), by the window's
+    // width: the touchscreen (480 px) 1, like a phone; a monitor at
+    // 800x600 2; at 1280x720 3. `out`: main.rs reads it to split the
+    // devices into rows.
+    out property <int> columns: root.width < 600px ? 1 : root.width < 1000px ? 2 : 3;
+
+    // The mouse pointer (issue #38), drawn by this file at the bottom:
+    // Slint's software renderer doesn't draw one by itself. main.rs follows
+    // the mouse and sets these; hidden until a mouse moves, and again as
+    // soon as the touchscreen is touched.
+    in property <length> pointer-x;
+    in property <length> pointer-y;
+    in property <bool> pointer-visible: false;
     // A refused command's reason (e.g. "no answer from the M4"), shown
     // briefly under the list; main.rs clears it again.
     in property <string> device-message;
@@ -209,7 +225,7 @@ export component AppWindow inherits Window {
                 vertical-alignment: center;
                 horizontal-stretch: 1;
             }
-            Button {
+            HeaderButton {
                 text: "Settings";
                 clicked => {
                     page = 4;
@@ -244,7 +260,8 @@ export component AppWindow inherits Window {
 
         DeviceList {
             vertical-stretch: 1;
-            devices: root.devices;
+            rows: root.device-rows;
+            columns: root.columns;
             set-switch(id, on) => {
                 root.set-switch(id, on);
             }
@@ -255,7 +272,9 @@ export component AppWindow inherits Window {
     }
 
     if page == 4: SettingsPage {
-        width: parent.width;
+        // Issue #38: centred, at most Theme.content-max-width wide.
+        width: min(parent.width, Theme.content-max-width);
+        x: (parent.width - self.width) / 2;
         height: parent.height;
         network-detail: root.net.uplink == "ethernet" ? "Connected by cable"
             : root.net.uplink == "wifi" ? ("WiFi " + root.net.wifi-ssid) : "Offline";
@@ -277,7 +296,9 @@ export component AppWindow inherits Window {
     }
 
     if page == 5: ClientsPage {
-        width: parent.width;
+        // Issue #38: centred, at most Theme.content-max-width wide.
+        width: min(parent.width, Theme.content-max-width);
+        x: (parent.width - self.width) / 2;
         height: parent.height;
         clients: root.clients;
         message: root.clients-message;
@@ -294,7 +315,9 @@ export component AppWindow inherits Window {
     }
 
     if page == 6: PairingPage {
-        width: parent.width;
+        // Issue #38: centred, at most Theme.content-max-width wide.
+        width: min(parent.width, Theme.content-max-width);
+        x: (parent.width - self.width) / 2;
         height: parent.height;
         state: root.pairing-state;
         code: root.pairing-code;
@@ -327,7 +350,9 @@ export component AppWindow inherits Window {
     }
 
     if page == 1: NetworkPage {
-        width: parent.width;
+        // Issue #38: centred, at most Theme.content-max-width wide.
+        width: min(parent.width, Theme.content-max-width);
+        x: (parent.width - self.width) / 2;
         height: parent.height;
         // `root.` everywhere: inside an element, a bare `net` would mean
         // the element's OWN property of that name (binding it to itself).
@@ -378,7 +403,9 @@ export component AppWindow inherits Window {
     }
 
     if page == 2: PasswordPage {
-        width: parent.width;
+        // Issue #38: centred, at most Theme.content-max-width wide.
+        width: min(parent.width, Theme.content-max-width);
+        x: (parent.width - self.width) / 2;
         height: parent.height;
         ssid: root.join-ssid;
         // Two-way: the keyboard types into the window's `password`.
@@ -401,7 +428,9 @@ export component AppWindow inherits Window {
     }
 
     if page == 3: CountryPage {
-        width: parent.width;
+        // Issue #38: centred, at most Theme.content-max-width wide.
+        width: min(parent.width, Theme.content-max-width);
+        x: (parent.width - self.width) / 2;
         height: parent.height;
         current: root.net.wifi-country;
         code <=> root.country-code;
@@ -425,5 +454,16 @@ export component AppWindow inherits Window {
         width: parent.width;
         height: parent.height;
         slow: starting-slow;
+    }
+
+    // The mouse pointer: drawn after everything else, so it's on top of
+    // it all -- even the welcome screen. An Image takes no clicks, so every
+    // click still reaches whatever is underneath. The arrow's tip is its
+    // top-left pixel, placed exactly at the pointer's position (the point
+    // Slint clicks). pointer.png: tools/pointer/make_pointer.py.
+    if pointer-visible: Image {
+        x: pointer-x;
+        y: pointer-y;
+        source: @image-url("images/pointer.png");
     }
 }

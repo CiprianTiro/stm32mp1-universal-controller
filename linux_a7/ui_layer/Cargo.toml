@@ -2,26 +2,38 @@
 name = "ui-layer"
 version = "0.1.0"
 edition = "2021"
-description = "Universal Controller touchscreen UI (Slint, direct-to-framebuffer)"
+description = "Universal Controller hub UI (Slint on DRM/KMS: touchscreen or HDMI monitor)"
 repository = "https://github.com/CiprianTiro/stm32mp1-universal-controller"
 license = "GPL-3.0-only"
 build = "build.rs"
 
 [dependencies]
-# default-features off, only "std" + "renderer-software" on: the other
-# Slint backend, "backend-linuxkms", wants a working DRM/KMS driver
-# (/dev/dri/cardN) to talk to -- this board has no confirmed-working GPU
-# driver, only the plain /dev/fb0 framebuffer device, so that backend isn't
-# an option here. "renderer-software" is Slint's CPU-only rasterizer; it
-# doesn't come with any window-system integration of its own, which is why
-# this crate also owns fb_platform.rs (writes the rendered pixels to
-# /dev/fb0 by hand) and touch_input.rs (reads touch events from evdev by
-# hand) -- neither of those exists for free with this renderer.
+# default-features off, then exactly what's needed:
+#   - "backend-linuxkms" (issue #38): Slint drives the display itself
+#     through DRM/KMS (/dev/dri/card0), the kernel's modern display
+#     interface -- no X11/Wayland. Until #38 the UI drew into the legacy
+#     framebuffer /dev/fb0 by hand (fb_platform.rs), but the kernel ties
+#     /dev/fb0 to ONE output at boot (the touchscreen), so the UI could
+#     never reach the HDMI monitor. With KMS it picks the output itself
+#     (see src/display.rs).
+#   - "backend-linuxkms-noseat": the same backend reading ALL input itself
+#     through libinput -- the touch panel, and a USB mouse and keyboard
+#     for when the UI is on a monitor (#38). Replaces the hand-written
+#     touch_input.rs (evdev) of #14. "noseat": the input devices are
+#     opened directly (user hubui is in group "input"), without the
+#     libseat/logind session machinery a desktop would use.
+#   - "unstable-libinput-09": lets main.rs see each libinput event before
+#     Slint does, to draw the mouse pointer the software renderer leaves
+#     out (src/pointer.rs). "Unstable": Slint may change it in a later
+#     minor version -- we're pinned to 1.18 anyway (compat-1-18).
+#   - "renderer-software": Slint's CPU-only rasterizer, as before. The
+#     KMS backend puts its pixels on screen through plain DRM "dumb"
+#     buffers, so no GPU driver or library is needed.
 # "compat-1-18": Slint's own required opt-in acknowledging this project
 # is pinned against its 1.18 API and accepts the small behavior changes a
 # future minor version might otherwise silently introduce -- required by
 # the crate itself, not something optional.
-slint = { version = "1", default-features = false, features = ["std", "renderer-software", "compat-1-18"] }
+slint = { version = "1", default-features = false, features = ["std", "backend-linuxkms", "backend-linuxkms-noseat", "unstable-libinput-09", "renderer-software", "compat-1-18"] }
 
 # Not used directly by this crate's code -- listed ONLY to switch on
 # fontique's "fontconfig-dlopen" feature. fontique is Slint's system-font
@@ -50,8 +62,9 @@ fontique = { version = "0.11", default-features = false, features = ["fontconfig
 # ARCHITECTURE.md's "Local IPC" section for why this isn't a separate,
 # custom protocol. tungstenite (not tokio-tungstenite): this crate doesn't
 # run a Tokio runtime at all -- the GUI's own event loop (in main.rs) is a
-# plain blocking loop reading the framebuffer/evdev/websocket in turn, so a
-# synchronous WebSocket client fits it better than an async one would.
+# Slint event loop with a timer that polls the websocket's updates (see
+# main.rs), so a synchronous WebSocket client on its own thread fits it
+# better than an async one would.
 tungstenite = "0.24"
 
 # JSON (de)serialization for the WebSocket messages -- same crates
@@ -60,23 +73,16 @@ tungstenite = "0.24"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-# Reads raw touch events from the kernel's evdev input device (see
-# src/touch_input.rs) -- the DK2's capacitive touch panel shows up as an
-# ordinary Linux input device, and this is the standard Rust crate for
-# reading those directly, the same way `libinput` would if a full desktop
-# input stack were in use here (it isn't -- see backend-linuxkms note above).
-evdev = "0.13"
+# The libinput event type the pointer hook receives (src/pointer.rs). The
+# same crate and version Slint's libinput support uses, so nothing new.
+input = "0.10"
 
-# Opens /dev/fb0, sets its pixel format, and reads its visible size via the
-# same ioctls `fbset` uses -- see src/fb_platform.rs. (The pixel memory
-# itself is mapped with memmap2 below, not by this crate.)
-linuxfb = "0.3"
+# Lists the display outputs (touchscreen, HDMI) and asks the monitor which
+# modes it supports, before Slint starts -- see src/display.rs. The same
+# crate (and version) Slint's KMS backend uses, so it adds nothing new to
+# the build. Pure Rust: talks to the kernel's ioctls directly, no libdrm.
+drm = "0.14"
 
-# Maps /dev/fb0's pixel memory (see src/fb_platform.rs). linuxfb can map it
-# too, but sizes the mapping assuming rows have no padding, which is wrong
-# on this board (rows are padded from 960 to 1024 bytes). Already in the
-# dependency tree via Slint's font code, so this adds no new crate.
-memmap2 = "0.9"
 # Issue #35: draws the pairing QR code on the hub's screen. Pure Rust, no
 # dependencies of its own.
 qrcodegen = "1.8"

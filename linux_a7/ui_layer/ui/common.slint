@@ -1,0 +1,54 @@
+// common.slint -- pieces every page shares (issue #38).
+//
+// Until #38 network.slint and settings.slint each had their own copy of
+// the page header, both using the standard Button. That Button stretched
+// to fill half the header on a wide screen (half of a 1280 px monitor),
+// and its text was smaller than the rest of the UI. One header, sized on
+// purpose, fixes both everywhere.
+
+import { Theme } from "theme.slint";
+
+// A button for the top row of a page ("< Back", "Settings"):
+// finger-sized on the touchscreen, a fixed width on every screen, the UI's
+// own colors and text size.
+export component HeaderButton inherits Rectangle {
+    in property <string> text;
+    callback clicked();
+
+    width: 104px;
+    height: Theme.touch-height;
+    border-radius: 8px;
+    background: touch.pressed ? Theme.surface-pressed : Theme.surface;
+    Text {
+        text: root.text;
+        color: Theme.title;
+        font-size: 16px;
+    }
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// A page's title row: the back button, then the title.
+export component PageHeader inherits HorizontalLayout {
+    in property <string> title;
+    callback back();
+    spacing: 12px;
+    height: Theme.touch-height;
+    HeaderButton {
+        text: "< Back";
+        clicked => {
+            root.back();
+        }
+    }
+    Text {
+        text: title;
+        color: Theme.title;
+        font-size: 24px;
+        vertical-alignment: center;
+        overflow: elide;
+        horizontal-stretch: 1;
+    }
+}

@@ -9,6 +9,7 @@
 
 import { Button, ListView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
+import { PageHeader } from "common.slint";
 import { Keyboard } from "keyboard.slint";
 
 // One network from a scan -- filled in by main.rs from ws_client's
@@ -96,25 +97,6 @@ export component NetIndicator inherits Rectangle {
     }
 }
 
-// A title row with a back button, shared by the pages below.
-component Header inherits HorizontalLayout {
-    in property <string> title;
-    callback back();
-    spacing: 12px;
-    height: Theme.touch-height;
-    Button {
-        text: "< Back";
-        clicked => {
-            back();
-        }
-    }
-    Text {
-        text: title;
-        color: Theme.title;
-        font-size: 24px;
-        vertical-alignment: center;
-    }
-}
 
 // One row of the network list.
 component NetworkRow inherits Rectangle {
@@ -182,7 +164,7 @@ export component NetworkPage inherits Rectangle {
         padding: 12px;
         spacing: 10px;
 
-        Header {
+        PageHeader {
             title: "Network";
             back => {
                 root.back();
@@ -356,7 +338,7 @@ export component PasswordPage inherits Rectangle {
         padding: 12px;
         spacing: 10px;
 
-        Header {
+        PageHeader {
             title: "Join " + ssid;
             back => {
                 root.back();
@@ -449,7 +431,7 @@ export component CountryPage inherits Rectangle {
         padding: 12px;
         spacing: 10px;
 
-        Header {
+        PageHeader {
             title: "WiFi country";
             back => {
                 root.back();

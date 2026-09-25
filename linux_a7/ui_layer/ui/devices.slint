@@ -163,6 +163,10 @@ component DeviceRow inherits Rectangle {
     VerticalLayout {
         padding: 12px;
         spacing: 6px;
+        // In the grid (issue #38) a card can be taller than its content --
+        // a row is as tall as its tallest card. Content then stays at the
+        // top instead of spreading out.
+        alignment: start;
 
         HorizontalLayout {
             spacing: 10px;
@@ -243,22 +247,37 @@ component DeviceRow inherits Rectangle {
     }
 }
 
-// The list itself; scrolls when there are more devices than fit.
+// The devices as a grid of cards (issue #38); scrolls when there are more
+// than fit. `rows` comes from main.rs, already split into rows of at most
+// `columns` cards: 1 column on the touchscreen (the list it always was), 2
+// or 3 on a monitor (app.slint decides by the window's width).
+//
+// Why main.rs does the splitting: Slint's layouts can't wrap a list into
+// rows by themselves, and main.rs already keeps the devices -- so it keeps
+// the rows too, and still updates only the one card that changed.
 export component DeviceList inherits Rectangle {
-    in property <[DeviceItem]> devices;
+    in property <[[DeviceItem]]> rows;
+    in property <int> columns: 1;
     callback set-switch(string, bool);
     callback set-level(string, int);
 
-    if devices.length == 0: Text {
+    if rows.length == 0: Text {
         text: "No devices yet";
         color: Theme.muted;
         font-size: 18px;
     }
 
     ListView {
-        for d in devices: VerticalLayout {
+        for row in rows: HorizontalLayout {
             padding-bottom: 8px;
-            DeviceRow {
+            spacing: 8px;
+            for d in row: DeviceRow {
+                // Exactly 1/columns of the width (minus the gaps), for
+                // every card and every gap filler below: the columns line
+                // up row after row. (Stretching instead shares out only the
+                // SPARE width, after each card's own preferred width -- a
+                // card with a slider came out wider than one without.)
+                width: (parent.width - (columns - 1) * parent.spacing) / columns;
                 item: d;
                 set-switch(id, on) => {
                     root.set-switch(id, on);
@@ -266,6 +285,11 @@ export component DeviceList inherits Rectangle {
                 set-level(id, level) => {
                     root.set-level(id, level);
                 }
+            }
+            // The last row may have fewer cards: empty places keep them at
+            // the normal width instead of stretching them.
+            for i in columns - row.length: Rectangle {
+                width: (parent.width - (columns - 1) * parent.spacing) / columns;
             }
         }
     }

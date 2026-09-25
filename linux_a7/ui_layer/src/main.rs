@@ -4,41 +4,46 @@
 // of its own beyond what's needed to draw the current frame. Everything
 // this file does falls into exactly one of these:
 //
-//   1. Set up rendering (fb_platform.rs) and touch input (touch_input.rs) --
-//      the two things Slint's software-renderer path doesn't provide out of
-//      the box, unlike the alternative DRM-based backend this project isn't
-//      using (see ui_layer/Cargo.toml's comment on why).
+//   1. Choose the screen -- the touchscreen, or an HDMI monitor if one is
+//      connected (display.rs, issue #38) -- and start Slint on it. Slint's
+//      KMS backend draws, and reads touch, mouse and keyboard (libinput).
 //   2. Connect to backend_daemon over WebSocket (ws_client.rs) and wire its
 //      updates into the UI's displayed state.
-//   3. Run one hand-written loop tying all three together -- there's no
-//      Tokio runtime and no single "just call .run() and let Slint drive
-//      everything" option here, because touch input and WebSocket updates
-//      both need polling on the same thread as rendering (see
-//      fb_platform.rs's `WindowOnlyPlatform` doc comment for why).
+//   3. Poll what Slint's own event loop can't know about -- the
+//      WebSocket's updates -- from a timer on that loop, and watch for a
+//      monitor being plugged in or out.
 
-mod fb_platform;
-mod touch_input;
+mod display;
+mod pointer;
 mod ws_client;
 
-use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
 use std::time::Duration;
 
-/// One display frame at 60 fps -- the longest the main loop ever sleeps,
-/// and also how long it sleeps between animation frames.
-const FRAME: Duration = Duration::from_millis(16);
+/// How often backend_daemon's updates are checked. 50 ms: a switched lamp
+/// shows up on screen within a twentieth of a second, which reads as
+/// instant, while the timer wakes the CPU only 20 times a second. (Until
+/// #38 the same loop also polled the touch panel, which needed every
+/// display frame, 16 ms; Slint's libinput reads input itself now, woken by
+/// the kernel only when something happens.)
+const POLL: Duration = Duration::from_millis(50);
+
+/// How often to check whether a monitor was plugged in or out (issue #38).
+const HOTPLUG_CHECK: Duration = Duration::from_secs(1);
+
+/// The exit code when the monitor was plugged in or out and restarting in
+/// place (see restart_on_other_screen) failed: the UI quits, and systemd
+/// starts it again (ui-layer.service, Restart=on-failure). 75 is the usual
+/// "temporary failure, try again" code (EX_TEMPFAIL).
+const EXIT_SCREEN_CHANGED: i32 = 75;
 
 /// How long to wait for the real display driver at most (see
-/// fb_platform::wait_for_display_driver). It normally takes ~8 s from the
+/// display::wait_for_display_driver). It normally takes ~5 s from the
 /// UI's start; generous, since a slow boot is better than a UI on the
-/// wrong framebuffer.
+/// wrong display device.
 const DISPLAY_WAIT: Duration = Duration::from_secs(60);
 
 /// How long a refused command's message stays under the device list.
 const DEVICE_MESSAGE_TIME: Duration = Duration::from_secs(4);
-
-/// How often to look for the touch panel again while it isn't there yet
-/// (its driver is loaded by udev at about the same time as the display's).
-const TOUCH_RETRY: Duration = Duration::from_secs(1);
 
 // This macro reads the compiled output of build.rs (which itself compiled
 // ui/app.slint) and makes its `AppWindow` type -- along with the
@@ -50,50 +55,35 @@ const TOUCH_RETRY: Duration = Duration::from_secs(1);
 slint::include_modules!();
 
 fn main() {
-    // The one `MinimalSoftwareWindow` this whole app has, created once and
-    // shared (via cheap `Rc` clones -- see fb_platform.rs's header comment)
-    // between the two things that each need their own handle to it: the
-    // `Platform` registration Slint requires globally, and the
-    // `FbRenderer` this loop calls directly every iteration.
-    let window = MinimalSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
-
-    // Slint requires exactly one call to `set_platform`, before creating
-    // any window (`AppWindow::new()`, below) -- this is what makes Slint
-    // know how to actually get pixels on screen at all. `.expect()` here is
-    // deliberate: if this fails, there is no possible UI, so there is
-    // nothing more useful this program could do than stop immediately with
-    // a clear message in the journal (see fb_platform.rs's own doc comment
-    // on why panicking is acceptable for a systemd service with no
-    // attached terminal).
-    slint::platform::set_platform(Box::new(fb_platform::WindowOnlyPlatform(window.clone())))
-        .expect("failed to set Slint platform");
-
-    // Now that a platform is registered, Slint can actually construct the
-    // window described in app.slint. `renderer` is kept around separately
-    // from `window` (even though `window` is technically for the platform
-    // registration above) because it also needs to open the real
-    // framebuffer device -- see fb_platform.rs's header comment for why
-    // these responsibilities are split into two structs instead of one.
-    //
     // Since issue #59 this process starts very early in boot (see
     // ui-layer.service), so first wait for the real display driver.
-    fb_platform::wait_for_display_driver(DISPLAY_WAIT);
-    let renderer = fb_platform::FbRenderer::new(window.clone())
-        .expect("failed to open the framebuffer -- is CONFIG_DRM_FBDEV_EMULATION on and is a display actually connected?");
+    display::wait_for_display_driver(DISPLAY_WAIT);
 
-    let ui = AppWindow::new().expect("failed to construct AppWindow from app.slint");
+    // Touchscreen or monitor (issue #38): tells Slint through an
+    // environment variable, so it must happen before the first window.
+    let output = display::choose_output();
+    // Remembered to notice a change later (the hotplug timer below).
+    let monitor_at_start = display::external_connected();
 
-    // A touchscreen not being present shouldn't be fatal (see
-    // touch_input.rs's own doc comment) -- `None` here just means the loop
-    // below skips polling it, and a missing/disconnected touch panel is
-    // still a better failure mode than refusing to display anything.
-    //
-    // Since issue #59 the UI starts before udev has necessarily loaded the
-    // touch panel's driver, so "not there yet" is normal right after boot:
-    // the loop below keeps looking for it every TOUCH_RETRY until it shows
-    // up. Only the first failure is logged.
-    let mut touch = open_touch(true);
-    let mut touch_checked = std::time::Instant::now();
+    // Slint's KMS backend, with a look at every input event first: the
+    // mouse pointer, and ignoring the touch panel while on a monitor (see
+    // pointer.rs).
+    let on_monitor = output.as_deref().is_some_and(display::is_external);
+    let pointer = std::rc::Rc::new(pointer::Pointer::new(on_monitor));
+    let hook_pointer = pointer.clone();
+    slint::BackendSelector::new()
+        .backend_name("linuxkms".into())
+        .with_libinput_event_hook(move |event| hook_pointer.on_event(event))
+        .select()
+        .expect("failed to set up Slint's KMS backend");
+
+    // Creating the first window starts the backend: it opens
+    // /dev/dri/card0 and sets the output's mode. `.expect()`: if this fails
+    // there is no possible UI, so stopping with a clear message in the
+    // journal is the most useful thing left to do (systemd restarts the
+    // service).
+    let ui = AppWindow::new().expect("failed to start the UI on the display (see the ui_layer: lines above for the chosen output)");
+    pointer.attach(&ui);
 
     // Starts ws_client.rs's background thread (see its own doc comment for
     // why this needs to be a separate OS thread rather than something
@@ -209,29 +199,23 @@ fn main() {
     });
     ui.on_mask(|text| "\u{2022}".repeat(text.chars().count()).into());
 
-    // The main loop. Runs forever (this is a long-lived UI process, not a
-    // one-shot tool), doing four things every iteration:
-    loop {
-        // 1. Let Slint advance any in-progress animations (button press
-        //    visual feedback, etc.) -- required even though app.slint
-        //    doesn't declare any explicit animations, since built-in
-        //    widgets like Button have their own.
-        slint::platform::update_timers_and_animations();
+    // Everything Slint's event loop doesn't know about by itself, checked
+    // every POLL on that same loop (Slint runs a timer's closure between
+    // frames, on the UI thread -- so it may touch the UI freely). Before
+    // #38 this was a hand-written loop that also drew the frames; Slint's
+    // KMS backend now draws, in step with the display's refresh.
+    //
+    // `move`: the closure takes over everything it uses (the device rows,
+    // the channel ends, ...) for the rest of the program. `ui_weak`: the UI through a weak reference, as in the
+    // callbacks above.
+    let ui_weak = ui.as_weak();
+    let poll_timer = slint::Timer::default();
+    poll_timer.start(slint::TimerMode::Repeated, POLL, move || {
+        let ui = ui_weak.unwrap();
 
-        // 2. Check for new touch events and turn them into Slint pointer
-        //    events (see touch_input.rs) -- this is what makes tapping the
-        //    button actually register as a tap.
-        if let Some(touch) = touch.as_mut() {
-            touch.poll(&window);
-        } else if touch_checked.elapsed() >= TOUCH_RETRY {
-            // (TouchInput::open logs the panel's range once it's found.)
-            touch = open_touch(false);
-            touch_checked = std::time::Instant::now();
-        }
-
-        // 3. Drain any updates from backend_daemon and reflect them in the
-        //    UI's properties -- `try_recv()` never blocks, so this loop
-        //    doesn't stall waiting for a message that might not be coming.
+        // Drain any updates from backend_daemon and reflect them in the
+        //    UI's properties -- `try_recv()` never blocks, so this doesn't
+        //    stall waiting for a message that might not be coming.
         //    This is the *only* place that changes what the screen shows
         //    about devices, matching ui_layer's "just displays what the
         //    daemon says" design: tapping a toggle does NOT flip it by
@@ -323,55 +307,59 @@ fn main() {
             ui.set_device_message("".into());
             device_message_until = None;
         }
+    });
 
-        // 4. Actually draw, if anything changed as a result of the above
-        //    (a touch, a property update, or an animation frame) --
-        //    `draw_if_needed` (inside `FbRenderer`) checks that on its own,
-        //    so this call is cheap on iterations where nothing did.
-        renderer.draw_if_needed();
+    // A monitor plugged in or out (issue #38): start again on the right
+    // screen (see restart_on_other_screen).
+    let hotplug_timer = slint::Timer::default();
+    hotplug_timer.start(slint::TimerMode::Repeated, HOTPLUG_CHECK, move || {
+        let monitor_now = display::external_connected();
+        if monitor_now != monitor_at_start {
+            println!(
+                "ui_layer: monitor {}, restarting on the other screen",
+                if monitor_now { "plugged in" } else { "unplugged" }
+            );
+            restart_on_other_screen();
+        }
+    });
 
-        // Don't spin the CPU checking all of the above hundreds of times a
-        // second -- ALWAYS sleep before the next iteration:
-        //   - while an animation runs (e.g. Button's press effect): one
-        //     frame, ~16 ms = 60 fps, which is all the display can show;
-        //   - otherwise: until Slint's next timer is due, but at most one
-        //     frame, so touch input is still picked up within ~16 ms.
-        //
-        // Before issue #31's measurement this loop didn't sleep at all
-        // during animations -- it redrew as fast as the CPU allowed. Tapping
-        // the button quickly keeps a press animation running almost
-        // constantly, so the UI used a whole A7 core (~50% of the board,
-        // measured) for an effect nobody can see above 60 fps. With the
-        // frame cap, the same tapping costs a few percent.
-        let wait = if window.has_active_animations() {
-            FRAME
-        } else {
-            slint::platform::duration_until_next_timer_update()
-                .map_or(FRAME, |until_timer| until_timer.min(FRAME))
-        };
-        std::thread::sleep(wait);
-    }
+    // Shows the window and runs Slint's event loop -- forever, in
+    // practice: this is a long-lived UI process.
+    ui.run().expect("the UI's event loop failed");
 }
 
-/// Opens the touch panel, if it exists yet (see its use in main). `log`:
-/// whether "not found"/errors are printed -- only on the first attempt, so
-/// retrying every second doesn't flood the journal.
-fn open_touch(log: bool) -> Option<touch_input::TouchInput> {
-    match touch_input::TouchInput::open() {
-        Ok(Some(touch)) => Some(touch),
-        Ok(None) => {
-            if log {
-                println!("ui_layer: no touch panel yet, will keep looking");
-            }
-            None
-        }
-        Err(e) => {
-            if log {
-                println!("ui_layer: touch input unavailable: {e}");
-            }
-            None
-        }
-    }
+/// Starts the UI again from scratch, so it chooses the screen afresh
+/// (display::choose_output). Simpler and more robust than switching screens
+/// inside a running Slint, whose KMS backend picks its output once, at
+/// start.
+///
+/// Done with exec(): the program REPLACES itself with a fresh copy of
+/// itself -- same process id, so systemd doesn't even notice. Everything
+/// open is closed on the way (Rust opens every file and socket
+/// "close-on-exec"), so the display is free for the new copy. The first
+/// version quit instead and let systemd restart it, but systemd waits
+/// RestartSec (2 s) first, and for those 2 s nobody drew anything: the
+/// kernel's fallback framebuffer showed the boot image instead (seen on the
+/// DK2 when unplugging the monitor). Now the gap is just the ~0.3 s the UI
+/// takes to start.
+///
+/// Started again from its real path (/usr/bin/ui-layer): Linux names a
+/// process after the file it was started from, so starting it through
+/// /proc/self/exe made it show up as "exe" in ps/top/systemctl (seen on
+/// the DK2). /proc/self/exe is only the fallback, for when the file was
+/// replaced on disk meanwhile (make deploy-ui): the kernel then reports the
+/// path as ".../ui-layer (deleted)", but /proc/self/exe still reaches this
+/// very program. exec() only returns if it failed; then quitting for
+/// systemd to restart is the last resort.
+fn restart_on_other_screen() -> ! {
+    use std::os::unix::process::CommandExt;
+    let program = std::env::current_exe()
+        .ok()
+        .filter(|path| !path.to_string_lossy().ends_with(" (deleted)"))
+        .unwrap_or_else(|| "/proc/self/exe".into());
+    let error = std::process::Command::new(program).exec();
+    println!("ui_layer: couldn't restart in place ({error}), quitting for systemd to restart the UI");
+    std::process::exit(EXIT_SCREEN_CHANGED);
 }
 
 /// ws_client's network status -> the struct app.slint shows (absent
@@ -453,27 +441,40 @@ fn apply_action_result(ui: &AppWindow, action: ws_client::Action, result: Result
 }
 
 /// The device list shown on the main screen (issue #34): the devices as
-/// backend_daemon last reported them, and the rows app.slint draws.
+/// backend_daemon last reported them, and the cards app.slint draws --
+/// split into rows of `columns` cards (issue #38: 1 on the touchscreen, 2
+/// or 3 on a monitor; app.slint decides by the window's width).
 ///
-/// The rows live in one VecModel for the program's whole life. On a change
-/// only the rows that differ are updated (set_row_data); the whole list is
-/// only replaced when devices appear, disappear or change order -- so the
-/// list doesn't jump back to the top every time a lamp is switched.
+/// Each row is its own model (VecModel), all held by one model of rows,
+/// for the program's whole life. On a change only the cards that differ
+/// are updated (set_row_data); the rows are only rebuilt when devices
+/// appear, disappear or change order (or the column count changes) -- so
+/// the list doesn't jump back to the top every time a lamp is switched.
 struct DeviceRows {
     devices: std::collections::BTreeMap<String, ws_client::Device>,
-    model: std::rc::Rc<slint::VecModel<DeviceItem>>,
-    /// The id of each row, in the model's order.
+    /// What app.slint shows: one entry per row of cards.
+    grid: std::rc::Rc<slint::VecModel<slint::ModelRc<DeviceItem>>>,
+    /// The same rows' own models, to update a single card.
+    rows: Vec<std::rc::Rc<slint::VecModel<DeviceItem>>>,
+    /// The id of each card, in order (row by row).
     ids: Vec<String>,
+    /// How many columns the rows were built for.
+    columns: usize,
+    /// To read the column count (weak: see the callbacks in main).
+    ui: slint::Weak<AppWindow>,
 }
 
 impl DeviceRows {
     fn new(ui: &AppWindow) -> Self {
-        let model = std::rc::Rc::new(slint::VecModel::default());
-        ui.set_devices(model.clone().into());
+        let grid = std::rc::Rc::new(slint::VecModel::default());
+        ui.set_device_rows(grid.clone().into());
         DeviceRows {
             devices: Default::default(),
-            model,
+            grid,
+            rows: Vec::new(),
             ids: Vec::new(),
+            columns: 0,
+            ui: ui.as_weak(),
         }
     }
 
@@ -492,23 +493,33 @@ impl DeviceRows {
         self.refresh();
     }
 
-    /// Brings the model in line with `devices`: sorted by room, then name
+    /// Brings the rows in line with `devices`: sorted by room, then name
     /// (so a room's devices stay together), then id.
     fn refresh(&mut self) {
         use slint::Model;
+        let columns = self.ui.upgrade().map_or(1, |ui| ui.get_columns().max(1) as usize);
         let mut sorted: Vec<&ws_client::Device> = self.devices.values().collect();
         sorted.sort_by(|a, b| (&a.room, &a.name, &a.id).cmp(&(&b.room, &b.name, &b.id)));
         let ids: Vec<String> = sorted.iter().map(|d| d.id.clone()).collect();
         let items: Vec<DeviceItem> = sorted.into_iter().map(device_item).collect();
-        if ids == self.ids {
-            for (row, item) in items.into_iter().enumerate() {
-                if self.model.row_data(row).as_ref() != Some(&item) {
-                    self.model.set_row_data(row, item);
+        if ids == self.ids && columns == self.columns {
+            // Same cards in the same places: card i is in row i / columns,
+            // at position i % columns.
+            for (i, item) in items.into_iter().enumerate() {
+                let row = &self.rows[i / columns];
+                if row.row_data(i % columns).as_ref() != Some(&item) {
+                    row.set_row_data(i % columns, item);
                 }
             }
         } else {
-            self.model.set_vec(items);
+            self.rows = items
+                .chunks(columns)
+                .map(|cards| std::rc::Rc::new(slint::VecModel::from(cards.to_vec())))
+                .collect();
+            self.grid
+                .set_vec(self.rows.iter().map(|row| slint::ModelRc::from(row.clone())).collect::<Vec<_>>());
             self.ids = ids;
+            self.columns = columns;
         }
     }
 }

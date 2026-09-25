@@ -19,6 +19,10 @@ export global Theme {
     out property <color> ok: #4ADE80;
     // Big enough to hit with a finger on the DK2's 4" screen.
     out property <length> touch-height: 48px;
+    // Issue #38: the widest the list and form pages get (Network,
+    // Settings, ...). On a monitor they're centred at this width instead
+    // of stretching across it -- about a phone held sideways.
+    out property <length> content-max-width: 760px;
 }
 
 // Characters the UI can show beyond plain ASCII (issue #34).
