@@ -73,6 +73,13 @@ tungstenite = "0.24"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# The hub's local time (issue #39, src/zones.rs): the clock runs on UTC,
+# the time zone is a hub setting. chrono-tz carries the time zone database
+# compiled in (the board has no /usr/share/zoneinfo). No default features:
+# only what's used.
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+chrono-tz = { version = "0.10", default-features = false, features = ["std"] }
+
 # The libinput event type the pointer hook receives (src/pointer.rs). The
 # same crate and version Slint's libinput support uses, so nothing new.
 input = "0.10"
@@ -90,3 +97,5 @@ qrcodegen = "1.8"
 [build-dependencies]
 # Used by build.rs to compile ui/app.slint -- see that file's own comment.
 slint-build = "1"
+# build.rs reads ui/tokens.json (the text sizes to pre-render, issue #39).
+serde_json = "1"

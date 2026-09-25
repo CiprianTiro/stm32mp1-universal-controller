@@ -24,6 +24,7 @@ Run from the repo root after changing the design, and commit the outputs:
     python3 tools/welcome/make_welcome.py
 Needs Pillow (pip install pillow).
 """
+import json
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
@@ -33,12 +34,15 @@ FONT = REPO / "linux_a7/ui_layer/fonts/DejaVuSans.ttf"  # the UI's own font
 UI_OUT = REPO / "linux_a7/ui_layer/ui/images/welcome.png"
 BMP_DIR = REPO / "yocto_layers/meta-universal-controller/recipes-bsp/u-boot/u-boot-stm32mp-splash"
 
-# The palette -- same values as the Slint side.
-BACKGROUND = "#0F172A"  # deep navy
-ACCENT = "#38BDF8"      # sky blue: icon, active dot
-TITLE = "#E2E8F0"       # near-white
-MUTED = "#94A3B8"       # status text
-DOT_OFF = "#334155"     # inactive dots (UI only)
+# The palette: the design tokens' "splash" colors (issue #39), the same
+# ones the UI's welcome screen uses (theme.slint's Splash) -- one source, so
+# the boot image and the welcome screen can't drift apart.
+SPLASH = json.loads((REPO / "linux_a7/ui_layer/ui/tokens.json").read_text())["splash"]
+BACKGROUND = SPLASH["background"]  # deep navy
+ACCENT = SPLASH["accent"]          # sky blue: icon, active dot
+TITLE = SPLASH["title"]            # near-white
+MUTED = SPLASH["muted"]            # status text
+DOT_OFF = SPLASH["dot-off"]        # inactive dots (UI only)
 
 # Layout of the 480x800 portrait screen (the DK2 panel's native orientation).
 WIDTH, HEIGHT = 480, 800

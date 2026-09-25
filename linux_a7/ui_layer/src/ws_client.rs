@@ -54,6 +54,42 @@ pub enum Request {
     // The setup hotspot (issue #36; only accepted from the hub itself).
     StartHotspot,
     StopHotspot,
+    // The hub's settings (issue #39): design preset + time zone. Only the
+    // fields given are changed.
+    GetSettings,
+    SetSettings {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        mode: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        accent: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        density: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        time_zone: Option<String>,
+    },
+}
+
+/// The hub's settings (issue #39), as backend_daemon's settings.rs sends
+/// them. `default`: a field an older backend doesn't send yet takes its
+/// default instead of breaking the message.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[serde(default)]
+pub struct HubSettings {
+    pub mode: String,
+    pub accent: String,
+    pub density: String,
+    pub time_zone: String,
+}
+
+impl Default for HubSettings {
+    fn default() -> Self {
+        HubSettings {
+            mode: "dark".into(),
+            accent: "sky".into(),
+            density: "comfortable".into(),
+            time_zone: "UTC".into(),
+        }
+    }
 }
 
 /// A device as backend_daemon describes it (its device.rs). Only what this
@@ -199,12 +235,14 @@ enum ServerMessage {
     WifiNetworks { networks: Vec<WifiNetwork> },
     Pairing(Pairing),
     Clients { clients: Vec<Client> },
+    Settings(HubSettings),
     Ack,
     Error { message: String },
     // Events (pushed after Subscribe).
     DeviceChanged { device: Device },
     DeviceRemoved { id: String },
     EventsLost,
+    SettingsChanged(HubSettings),
     #[serde(other)]
     Unknown,
 }
@@ -237,6 +275,9 @@ pub enum Update {
     ActionDone(Action, Result<(), String>),
     Pairing(Pairing),
     Clients(Vec<Client>),
+    /// The hub's settings: after connecting, and whenever they change --
+    /// from this screen or from a phone (issue #39).
+    Settings(HubSettings),
 }
 
 const BACKEND_URL: &str = "ws://127.0.0.1:8080/ws";
@@ -302,8 +343,11 @@ fn connection_loop(request_rx: mpsc::Receiver<Request>, update_tx: mpsc::Sender<
 /// Events can arrive at any moment in between; they're told apart by type.
 fn serve(socket: &mut Socket, request_rx: &mpsc::Receiver<Request>, update_tx: &mpsc::Sender<Update>) -> bool {
     let mut in_flight: VecDeque<Request> = VecDeque::new();
-    // Subscribe first, THEN list: nothing that changes in between is lost.
-    let mut outbox: VecDeque<Request> = VecDeque::from([Request::Subscribe, Request::ListDevices]);
+    // Subscribe first, THEN ask: nothing that changes in between is lost.
+    // The settings first (issue #39): the chosen look should replace the
+    // default one before the devices appear.
+    let mut outbox: VecDeque<Request> =
+        VecDeque::from([Request::Subscribe, Request::GetSettings, Request::ListDevices]);
     let mut next_network = Instant::now();
 
     loop {
@@ -358,6 +402,7 @@ fn serve(socket: &mut Socket, request_rx: &mpsc::Receiver<Request>, update_tx: &
             // Events aren't replies: nothing in flight is answered by them.
             ServerMessage::DeviceChanged { device } => Some(Update::DeviceChanged(device)),
             ServerMessage::DeviceRemoved { id } => Some(Update::DeviceRemoved(id)),
+            ServerMessage::SettingsChanged(settings) => Some(Update::Settings(settings)),
             ServerMessage::EventsLost => {
                 // Missed some changes: start over from the full list.
                 outbox.push_back(Request::ListDevices);
@@ -407,6 +452,7 @@ fn to_update(request: &Request, reply: ServerMessage) -> Option<Update> {
         (_, ServerMessage::WifiNetworks { networks }) => Some(Update::Networks(networks)),
         (_, ServerMessage::Pairing(pairing)) => Some(Update::Pairing(pairing)),
         (_, ServerMessage::Clients { clients }) => Some(Update::Clients(clients)),
+        (_, ServerMessage::Settings(settings)) => Some(Update::Settings(settings)),
         (Request::WifiScan, ServerMessage::Error { message }) => Some(Update::ScanFailed(message)),
         (Request::Command { id, .. }, ServerMessage::Error { message }) => {
             println!("ui_layer: command for {id} refused: {message}");

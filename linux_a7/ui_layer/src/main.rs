@@ -15,7 +15,9 @@
 
 mod display;
 mod pointer;
+mod theme;
 mod ws_client;
+mod zones;
 
 use std::time::Duration;
 
@@ -29,6 +31,10 @@ const POLL: Duration = Duration::from_millis(50);
 
 /// How often to check whether a monitor was plugged in or out (issue #38).
 const HOTPLUG_CHECK: Duration = Duration::from_secs(1);
+
+/// How often the time is looked at again (issue #39): for "auto" mode's
+/// switch between light and dark, and the clock on the Settings page.
+const CLOCK_CHECK: Duration = Duration::from_secs(30);
 
 /// The exit code when the monitor was plugged in or out and restarting in
 /// place (see restart_on_other_screen) failed: the UI quits, and systemd
@@ -199,6 +205,59 @@ fn main() {
     });
     ui.on_mask(|text| "\u{2022}".repeat(text.chars().count()).into());
 
+    // ---- Hub settings (issue #39) ----------------------------------------
+    // The settings as backend_daemon last reported them, shared by the
+    // update handling, the callbacks and the clock timer below (Rc: shared
+    // ownership on this one thread; RefCell: changed at run time). The
+    // defaults show until the backend answers -- the same look as
+    // theme.slint's starting values.
+    let hub_settings = std::rc::Rc::new(std::cell::RefCell::new(ws_client::HubSettings::default()));
+    let mut shown_dark: Option<bool> = None;
+    show_settings(&ui, &hub_settings.borrow(), &mut shown_dark);
+
+    // A tap on the Appearance page sends ONE changed field; the page shows
+    // the change once the backend confirms (Update::Settings below).
+    let set = |field: fn(String) -> ws_client::Request| {
+        let tx = request_tx.clone();
+        move |value: slint::SharedString| {
+            let _ = tx.send(field(value.to_string()));
+        }
+    };
+    ui.on_set_mode(set(|mode| ws_client::Request::SetSettings { mode: Some(mode), accent: None, density: None, time_zone: None }));
+    ui.on_set_accent(set(|accent| ws_client::Request::SetSettings { mode: None, accent: Some(accent), density: None, time_zone: None }));
+    ui.on_set_density(set(|density| ws_client::Request::SetSettings { mode: None, accent: None, density: Some(density), time_zone: None }));
+
+    // The time zone page: the regions first...
+    let ui_weak = ui.as_weak();
+    let settings = hub_settings.clone();
+    ui.on_open_time_zone(move || {
+        let ui = ui_weak.unwrap();
+        ui.set_zone_title("Time zone".into());
+        ui.set_zone_hint("The hub's clock stays on UTC; this is for the times it shows, and when \"auto\" switches to light and dark.".into());
+        ui.set_zone_items(zone_rows(zones::regions(&settings.borrow().time_zone)));
+    });
+    // ...then, for a tapped region, its places; a tapped place (or UTC) is
+    // the new time zone.
+    let ui_weak = ui.as_weak();
+    let settings = hub_settings.clone();
+    let tx = request_tx.clone();
+    ui.on_pick_zone(move |item| {
+        let ui = ui_weak.unwrap();
+        if let Some(region) = item.value.strip_suffix('/') {
+            ui.set_zone_title(region.into());
+            ui.set_zone_hint("Choose the place whose time the hub should follow.".into());
+            ui.set_zone_items(zone_rows(zones::places(&item.value, &settings.borrow().time_zone)));
+        } else {
+            let _ = tx.send(ws_client::Request::SetSettings {
+                mode: None,
+                accent: None,
+                density: None,
+                time_zone: Some(item.value.to_string()),
+            });
+            ui.set_page(4);
+        }
+    });
+
     // Everything Slint's event loop doesn't know about by itself, checked
     // every POLL on that same loop (Slint runs a timer's closure between
     // frames, on the UI thread -- so it may touch the UI freely). Before
@@ -209,6 +268,7 @@ fn main() {
     // the channel ends, ...) for the rest of the program. `ui_weak`: the UI through a weak reference, as in the
     // callbacks above.
     let ui_weak = ui.as_weak();
+    let settings = hub_settings.clone();
     let poll_timer = slint::Timer::default();
     poll_timer.start(slint::TimerMode::Repeated, POLL, move || {
         let ui = ui_weak.unwrap();
@@ -265,6 +325,12 @@ fn main() {
                     show_pairing(&ui, &pairing, &last_net, &mut qr_code_for);
                 }
                 ws_client::Update::Clients(clients) => ui.set_clients(client_rows(&clients)),
+                // Issue #39: a new look (or time zone), from this screen or
+                // a phone -- applied at once, no restart.
+                ws_client::Update::Settings(new) => {
+                    show_settings(&ui, &new, &mut shown_dark);
+                    *settings.borrow_mut() = new;
+                }
                 ws_client::Update::Networks(networks) => {
                     ui.set_scanning(false);
                     let rows: Vec<WifiNetwork> = networks
@@ -323,6 +389,16 @@ fn main() {
         }
     });
 
+    // The time moves on (issue #39): "auto" mode may switch between light
+    // and dark, and the Settings page's clock advances.
+    let ui_weak = ui.as_weak();
+    let settings = hub_settings.clone();
+    let mut clock_dark = None;
+    let clock_timer = slint::Timer::default();
+    clock_timer.start(slint::TimerMode::Repeated, CLOCK_CHECK, move || {
+        show_settings(&ui_weak.unwrap(), &settings.borrow(), &mut clock_dark);
+    });
+
     // Shows the window and runs Slint's event loop -- forever, in
     // practice: this is a long-lived UI process.
     ui.run().expect("the UI's event loop failed");
@@ -360,6 +436,49 @@ fn restart_on_other_screen() -> ! {
     let error = std::process::Command::new(program).exec();
     println!("ui_layer: couldn't restart in place ({error}), quitting for systemd to restart the UI");
     std::process::exit(EXIT_SCREEN_CHANGED);
+}
+
+/// Shows the hub's settings (issue #39): the design preset into the Theme
+/// (theme.rs), and the values the Settings/Appearance pages display.
+/// `shown_dark`: which palette the accent swatches were last made for, so
+/// they're only rebuilt when the mode actually flips (this runs every
+/// CLOCK_CHECK). Setting a Slint property to the value it already has
+/// changes nothing, so the Theme itself can be applied every time.
+fn show_settings(ui: &AppWindow, settings: &ws_client::HubSettings, shown_dark: &mut Option<bool>) {
+    let (hour, time) = zones::local_time(&settings.time_zone);
+    let dark = theme::is_dark(&settings.mode, hour);
+    let appearance = theme::Appearance {
+        mode: settings.mode.clone(),
+        accent: settings.accent.clone(),
+        density: settings.density.clone(),
+    };
+    theme::apply(ui, &appearance, dark);
+
+    ui.set_setting_mode(settings.mode.clone().into());
+    ui.set_setting_accent(settings.accent.clone().into());
+    ui.set_setting_density(settings.density.clone().into());
+    ui.set_setting_time_zone(settings.time_zone.clone().into());
+    ui.set_local_time(time.into());
+    let accents = theme::accents(dark);
+    let name = accents.iter().find(|(id, _, _)| *id == settings.accent).map_or("", |(_, name, _)| name.as_str());
+    ui.set_setting_accent_name(name.into());
+    if *shown_dark != Some(dark) {
+        let rows: Vec<AccentItem> = accents
+            .into_iter()
+            .map(|(id, name, color)| AccentItem { id: id.into(), name: name.into(), color })
+            .collect();
+        ui.set_accents(std::rc::Rc::new(slint::VecModel::from(rows)).into());
+        *shown_dark = Some(dark);
+    }
+}
+
+/// zones.rs's rows -> the model the time zone page shows.
+fn zone_rows(zones: Vec<zones::Zone>) -> slint::ModelRc<ZoneItem> {
+    let rows: Vec<ZoneItem> = zones
+        .into_iter()
+        .map(|z| ZoneItem { label: z.label.into(), value: z.value.into(), marked: z.marked })
+        .collect();
+    std::rc::Rc::new(slint::VecModel::from(rows)).into()
 }
 
 /// ws_client's network status -> the struct app.slint shows (absent

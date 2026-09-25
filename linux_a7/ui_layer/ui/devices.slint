@@ -37,16 +37,16 @@ component Toggle inherits Rectangle {
 
     width: 64px;
     height: 34px;
-    border-radius: 17px;
-    background: on ? Theme.accent : Theme.dot-off;
+    border-radius: self.height / 2;
+    background: on ? Theme.accent : Theme.outline;
 
     Rectangle {
         width: 28px;
         height: 28px;
-        border-radius: 14px;
+        border-radius: self.height / 2;
         y: 3px;
         x: on ? parent.width - self.width - 3px : 3px;
-        background: Theme.title;
+        background: Theme.knob;
         animate x { duration: 120ms; }
     }
 
@@ -103,13 +103,13 @@ component LevelBar inherits Rectangle {
     Rectangle {
         y: (parent.height - self.height) / 2;
         height: 8px;
-        border-radius: 4px;
-        background: Theme.dot-off;
+        border-radius: Theme.radius-small;
+        background: Theme.outline;
         Rectangle {
             x: 0;
             width: parent.width * shown / 100;
-            border-radius: 4px;
-            background: enabled ? Theme.accent : Theme.muted;
+            border-radius: Theme.radius-small;
+            background: enabled ? Theme.accent : Theme.text-muted;
         }
     }
 
@@ -117,10 +117,15 @@ component LevelBar inherits Rectangle {
     Rectangle {
         width: 26px;
         height: 26px;
-        border-radius: 13px;
+        border-radius: self.height / 2;
         x: (parent.width - self.width) * shown / 100;
         y: (parent.height - self.height) / 2;
-        background: enabled ? Theme.title : Theme.muted;
+        background: enabled ? Theme.knob : Theme.text-muted;
+        // An outline, so the knob stays visible where the bar isn't filled
+        // (issue #39: in the light theme the knob and the card are both
+        // white).
+        border-width: 1px;
+        border-color: Theme.outline;
     }
 
     touch := TouchArea {
@@ -157,32 +162,32 @@ component DeviceRow inherits Rectangle {
     callback set-switch(string, bool);
     callback set-level(string, int);
 
-    border-radius: 8px;
+    border-radius: Theme.radius-medium;
     background: Theme.surface;
 
     VerticalLayout {
-        padding: 12px;
-        spacing: 6px;
+        padding: Theme.space-l;
+        spacing: Theme.space-xs;
         // In the grid (issue #38) a card can be taller than its content --
         // a row is as tall as its tallest card. Content then stays at the
         // top instead of spreading out.
         alignment: start;
 
         HorizontalLayout {
-            spacing: 10px;
+            spacing: Theme.space-m;
             VerticalLayout {
                 alignment: center;
                 horizontal-stretch: 1;
                 Text {
                     text: item.name;
-                    color: Theme.title;
-                    font-size: 18px;
+                    color: Theme.text;
+                    font-size: Theme.font-subtitle;
                     overflow: elide;
                 }
                 if item.room != "": Text {
                     text: item.room;
-                    color: Theme.muted;
-                    font-size: 14px;
+                    color: Theme.text-muted;
+                    font-size: Theme.font-caption;
                 }
             }
             if item.has-color: VerticalLayout {
@@ -190,10 +195,10 @@ component DeviceRow inherits Rectangle {
                 Rectangle {
                     width: 26px;
                     height: 26px;
-                    border-radius: 13px;
+                    border-radius: self.height / 2;
                     background: item.color;
                     border-width: 1px;
-                    border-color: Theme.dot-off;
+                    border-color: Theme.outline;
                 }
             }
             if item.has-switch: VerticalLayout {
@@ -208,7 +213,7 @@ component DeviceRow inherits Rectangle {
         }
 
         if item.has-dimmer: HorizontalLayout {
-            spacing: 12px;
+            spacing: Theme.space-l;
             bar := LevelBar {
                 horizontal-stretch: 1;
                 level: item.level;
@@ -224,8 +229,8 @@ component DeviceRow inherits Rectangle {
             }
             Text {
                 text: bar.shown + "%";
-                color: (!item.has-switch || item.on) ? Theme.title : Theme.muted;
-                font-size: 16px;
+                color: (!item.has-switch || item.on) ? Theme.text : Theme.text-muted;
+                font-size: Theme.font-body;
                 vertical-alignment: center;
                 min-width: 48px;
                 horizontal-alignment: right;
@@ -234,14 +239,14 @@ component DeviceRow inherits Rectangle {
 
         if item.has-color: Text {
             text: "Color " + item.color-text;
-            color: Theme.muted;
-            font-size: 14px;
+            color: Theme.text-muted;
+            font-size: Theme.font-caption;
         }
 
         if item.sensor-text != "": Text {
             text: item.sensor-text;
-            color: Theme.title;
-            font-size: 16px;
+            color: Theme.text;
+            font-size: Theme.font-body;
             wrap: word-wrap;
         }
     }
@@ -263,14 +268,14 @@ export component DeviceList inherits Rectangle {
 
     if rows.length == 0: Text {
         text: "No devices yet";
-        color: Theme.muted;
-        font-size: 18px;
+        color: Theme.text-muted;
+        font-size: Theme.font-subtitle;
     }
 
     ListView {
         for row in rows: HorizontalLayout {
-            padding-bottom: 8px;
-            spacing: 8px;
+            padding-bottom: Theme.space-s;
+            spacing: Theme.space-s;
             for d in row: DeviceRow {
                 // Exactly 1/columns of the width (minus the gaps), for
                 // every card and every gap filler below: the columns line

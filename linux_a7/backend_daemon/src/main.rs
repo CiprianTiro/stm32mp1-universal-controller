@@ -16,6 +16,7 @@ mod hotspot;
 mod mqtt;
 mod network;
 mod rpmsg;
+mod settings;
 mod shadow;
 mod state;
 mod store;
@@ -117,6 +118,16 @@ async fn main() {
      * as clients.json next to the registry) and the hub's TLS identity
      * (tls.rs, created on first start). Without a TLS identity the LAN
      * door stays closed; the touchscreen's local door works regardless. */
+    /* The hub's settings (issue #39, settings.rs): the screen's design
+     * preset and the time zone, saved as settings.json next to the
+     * registry. */
+    let settings_store = store::Store::new(&store::data_dir(), "settings.json");
+    let hub_settings = settings_store.load_or_default("hub settings", settings::decode);
+    let settings = std::sync::Arc::new(settings::Settings::new(
+        hub_settings,
+        store::writer(settings_store, settings::SETTINGS_SCHEMA),
+    ));
+
     let clients_store = store::Store::new(&store::data_dir(), "clients.json");
     let clients = clients_store.load_or_default("paired clients", auth::decode_clients);
     let auth = std::sync::Arc::new(auth::Auth::new(
@@ -144,7 +155,7 @@ async fn main() {
 
     /* The WebSocket API (ws.rs), protocol v2: ws://127.0.0.1:8080 for the
      * hub itself, wss://<hub>:8443 (paired clients only) for the LAN. */
-    tokio::spawn(ws::run(control, auth, hotspot, identity, network_tx, events_tx, local_clients));
+    tokio::spawn(ws::run(control, auth, hotspot, identity, network_tx, events_tx, local_clients, settings));
 
     /* SIGTERM is what systemd sends on stop/restart; SIGINT covers Ctrl-C
      when running this interactively during development. */

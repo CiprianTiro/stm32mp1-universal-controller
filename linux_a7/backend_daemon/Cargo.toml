@@ -15,6 +15,13 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "tim
 libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# Checks the hub's time zone setting (settings.rs, issue #39) against the
+# IANA time zone database compiled into this crate -- the board has no
+# /usr/share/zoneinfo, and the check shouldn't depend on it. Only the
+# names are needed: no default features (no serde, no case-insensitive
+# lookup).
+chrono-tz = { version = "0.10", default-features = false, features = ["std"] }
 axum = { version = "0.7", features = ["ws"] }
 # MQTT over TLS with a client certificate (mutual TLS), as AWS IoT Core
 # requires -- see src/mqtt.rs. rustls is a pure-Rust TLS stack; its crypto

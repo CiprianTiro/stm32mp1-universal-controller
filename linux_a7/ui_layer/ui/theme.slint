@@ -1,28 +1,78 @@
-// theme.slint -- the UI's colors and a few shared sizes, in one place.
+// theme.slint -- the design tokens as Slint sees them (issue #39).
 //
-// The first five MUST stay identical to tools/welcome/make_welcome.py,
-// which draws the same design into the boot image U-Boot shows (issue #59):
-// the UI's welcome screen takes over from that image without a visible
-// jump. A `global` is a set of values any component can read, like
-// `Theme.accent`. The UI sprint (#39, themes) will turn this into
-// user-selectable presets.
+// The values live in tokens.json (next to this file): the single source
+// the UI, the boot image (tools/welcome/make_welcome.py) and the Flutter
+// app (#48) all read. `Theme` holds the CURRENT preset -- mode (dark or
+// light palette), accent, density. main.rs (src/theme.rs) sets these
+// properties whenever the preset changes, and Slint redraws everything
+// that uses them: a new look with no restart.
+//
+// `in-out`: Rust may set them. The values written here are only the
+// starting point -- the dark / sky / comfortable preset, what the screen
+// shows before the hub has said which preset is chosen. Keep them equal to
+// tokens.json's defaults. No component may use a color of its own.
 export global Theme {
+    // Which palette is on (for std-widgets' own look, see app.slint).
+    in-out property <bool> dark: true;
+
+    // ---- Colors (tokens.json "modes" + "accents") ------------------------
+    in-out property <color> background: #0F172A;
+    in-out property <color> surface: #1E293B;
+    in-out property <color> surface-pressed: #334155;
+    // Lines, inactive tracks and dots, signal bars that are off.
+    in-out property <color> outline: #334155;
+    in-out property <color> text: #E2E8F0;
+    in-out property <color> text-muted: #94A3B8;
+    // The round handle of a toggle or level bar.
+    in-out property <color> knob: #E2E8F0;
+    in-out property <color> error: #F87171;
+    in-out property <color> ok: #4ADE80;
+    in-out property <color> accent: #38BDF8;
+    // Text on an accent-colored surface (a primary button).
+    in-out property <color> on-accent: #0F172A;
+
+    // ---- Text sizes (tokens.json "typography") ---------------------------
+    in-out property <length> font-caption: 14px;
+    in-out property <length> font-body: 16px;
+    in-out property <length> font-subtitle: 18px;
+    in-out property <length> font-heading: 20px;
+    in-out property <length> font-title: 24px;
+    in-out property <length> font-display: 48px;
+
+    // ---- Corners (tokens.json "radii") ------------------------------------
+    // Circles and pills aren't tokens: they use half their own height.
+    in-out property <length> radius-small: 4px;
+    in-out property <length> radius-medium: 8px;
+
+    // ---- Density (tokens.json "density") ----------------------------------
+    // The height of anything meant to be tapped: big enough for a finger
+    // on the DK2's 4" screen when "comfortable".
+    in-out property <length> touch-height: 48px;
+    // Gaps and paddings, smallest to largest.
+    in-out property <length> space-xxs: 4px;
+    in-out property <length> space-xs: 6px;
+    in-out property <length> space-s: 8px;
+    in-out property <length> space-m: 10px;
+    in-out property <length> space-l: 12px;
+    in-out property <length> space-xl: 14px;
+
+    // ---- Layout (issue #38) -------------------------------------------------
+    // The widest the list and form pages get (Network, Settings, ...). On
+    // a monitor they're centred at this width instead of stretching across
+    // it -- about a phone held sideways.
+    in-out property <length> content-max-width: 760px;
+}
+
+// The welcome screen's colors (issue #59): FIXED, whatever the preset. The
+// welcome screen takes over from the boot image U-Boot shows, and must
+// match it pixel for pixel -- tokens.json "splash", the values
+// make_welcome.py draws the boot image with.
+export global Splash {
     out property <color> background: #0F172A;
     out property <color> accent: #38BDF8;
     out property <color> title: #E2E8F0;
     out property <color> muted: #94A3B8;
     out property <color> dot-off: #334155;
-    // Issue #61: surfaces (cards, keys), and colors for results.
-    out property <color> surface: #1E293B;
-    out property <color> surface-pressed: #334155;
-    out property <color> error: #F87171;
-    out property <color> ok: #4ADE80;
-    // Big enough to hit with a finger on the DK2's 4" screen.
-    out property <length> touch-height: 48px;
-    // Issue #38: the widest the list and form pages get (Network,
-    // Settings, ...). On a monitor they're centred at this width instead
-    // of stretching across it -- about a phone held sideways.
-    out property <length> content-max-width: 760px;
 }
 
 // Characters the UI can show beyond plain ASCII (issue #34).

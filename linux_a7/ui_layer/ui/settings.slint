@@ -7,9 +7,9 @@
 // list of paired devices are only available on the hub's own screen --
 // backend_daemon refuses them from the network.
 
-import { Button, ListView } from "std-widgets.slint";
+import { ListView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
-import { PageHeader } from "common.slint";
+import { PageHeader, ActionButton } from "common.slint";
 
 // A paired device, as the list shows it.
 export struct ClientItem {
@@ -26,22 +26,23 @@ component MenuRow inherits Rectangle {
     in property <string> detail;
     callback clicked();
 
-    height: 64px;
-    border-radius: 8px;
+    // 64 px when comfortable (a title + a detail line): follows density.
+    height: Theme.touch-height + Theme.space-l + Theme.space-xxs;
+    border-radius: Theme.radius-medium;
     background: touch.pressed ? Theme.surface-pressed : Theme.surface;
 
     VerticalLayout {
-        padding-left: 14px;
+        padding-left: Theme.space-xl;
         alignment: center;
         Text {
             text: title;
-            color: Theme.title;
-            font-size: 18px;
+            color: Theme.text;
+            font-size: Theme.font-subtitle;
         }
         if detail != "": Text {
             text: detail;
-            color: Theme.muted;
-            font-size: 14px;
+            color: Theme.text-muted;
+            font-size: Theme.font-caption;
         }
     }
 
@@ -55,15 +56,20 @@ component MenuRow inherits Rectangle {
 export component SettingsPage inherits Rectangle {
     in property <string> network-detail;
     in property <int> client-count;
+    // Issue #39, e.g. "Dark, Sky, comfortable" / "Europe/Bucharest, 14:05".
+    in property <string> appearance-detail;
+    in property <string> time-zone-detail;
     callback back();
     callback open-network();
     callback open-clients();
+    callback open-appearance();
+    callback open-time-zone();
 
     background: Theme.background;
 
     VerticalLayout {
-        padding: 12px;
-        spacing: 10px;
+        padding: Theme.space-l;
+        spacing: Theme.space-m;
         alignment: start;
 
         PageHeader {
@@ -88,6 +94,20 @@ export component SettingsPage inherits Rectangle {
                 open-clients();
             }
         }
+        MenuRow {
+            title: "Appearance";
+            detail: appearance-detail;
+            clicked => {
+                open-appearance();
+            }
+        }
+        MenuRow {
+            title: "Time zone";
+            detail: time-zone-detail;
+            clicked => {
+                open-time-zone();
+            }
+        }
     }
 }
 
@@ -102,8 +122,8 @@ export component ClientsPage inherits Rectangle {
     background: Theme.background;
 
     VerticalLayout {
-        padding: 12px;
-        spacing: 10px;
+        padding: Theme.space-l;
+        spacing: Theme.space-m;
 
         PageHeader {
             title: "Paired devices";
@@ -114,51 +134,52 @@ export component ClientsPage inherits Rectangle {
 
         Text {
             text: "These phones and computers can control the hub over the network. Remove one you no longer use (a lost phone, an old computer): it's locked out at once.";
-            color: Theme.muted;
-            font-size: 15px;
+            color: Theme.text-muted;
+            font-size: Theme.font-caption;
             wrap: word-wrap;
         }
 
         if message != "": Text {
             text: message;
             color: Theme.ok;
-            font-size: 16px;
+            font-size: Theme.font-body;
             wrap: word-wrap;
         }
 
         if clients.length == 0: Text {
             text: "None yet.";
-            color: Theme.muted;
-            font-size: 18px;
+            color: Theme.text-muted;
+            font-size: Theme.font-subtitle;
         }
 
         ListView {
             vertical-stretch: 1;
             for c in clients: VerticalLayout {
-                padding-bottom: 8px;
+                padding-bottom: Theme.space-s;
                 Rectangle {
-                    border-radius: 8px;
+                    border-radius: Theme.radius-medium;
                     background: Theme.surface;
                     HorizontalLayout {
-                        padding: 12px;
-                        spacing: 10px;
+                        padding: Theme.space-l;
+                        spacing: Theme.space-m;
                         VerticalLayout {
                             alignment: center;
                             horizontal-stretch: 1;
                             Text {
                                 text: c.name;
-                                color: Theme.title;
-                                font-size: 18px;
+                                color: Theme.text;
+                                font-size: Theme.font-subtitle;
                                 overflow: elide;
                             }
                             Text {
                                 text: c.seen-text;
-                                color: Theme.muted;
-                                font-size: 14px;
+                                color: Theme.text-muted;
+                                font-size: Theme.font-caption;
                             }
                         }
-                        Button {
+                        ActionButton {
                             text: "Remove";
+                            destructive: true;
                             clicked => {
                                 revoke(c.id);
                             }
@@ -168,7 +189,7 @@ export component ClientsPage inherits Rectangle {
             }
         }
 
-        Button {
+        ActionButton {
             text: "Pair a new device";
             primary: true;
             clicked => {
@@ -196,8 +217,8 @@ export component PairingPage inherits Rectangle {
     background: Theme.background;
 
     VerticalLayout {
-        padding: 12px;
-        spacing: 12px;
+        padding: Theme.space-l;
+        spacing: Theme.space-l;
 
         PageHeader {
             title: "Pair a new device";
@@ -207,11 +228,11 @@ export component PairingPage inherits Rectangle {
         }
 
         if state == "waiting": VerticalLayout {
-            spacing: 10px;
+            spacing: Theme.space-m;
             Text {
                 text: "Scan the code with the app, or type the numbers.";
-                color: Theme.muted;
-                font-size: 16px;
+                color: Theme.text-muted;
+                font-size: Theme.font-body;
                 wrap: word-wrap;
                 horizontal-alignment: center;
             }
@@ -228,21 +249,21 @@ export component PairingPage inherits Rectangle {
             Text {
                 // Two groups of three digits read easier: "212 570".
                 text: code;
-                color: Theme.title;
-                font-size: 48px;
-                letter-spacing: 6px;
+                color: Theme.text;
+                font-size: Theme.font-display;
+                letter-spacing: Theme.space-xs;
                 horizontal-alignment: center;
             }
             Text {
                 text: "Valid for " + seconds-left + " s, once.";
-                color: Theme.muted;
-                font-size: 16px;
+                color: Theme.text-muted;
+                font-size: Theme.font-body;
                 horizontal-alignment: center;
             }
             Text {
                 text: "Hub " + address + "   Certificate " + fingerprint-short;
-                color: Theme.muted;
-                font-size: 14px;
+                color: Theme.text-muted;
+                font-size: Theme.font-caption;
                 horizontal-alignment: center;
                 wrap: word-wrap;
             }
@@ -251,21 +272,21 @@ export component PairingPage inherits Rectangle {
         if state == "paired": Text {
             text: "Paired: " + client-name + ". It can control the hub now.";
             color: Theme.ok;
-            font-size: 20px;
+            font-size: Theme.font-heading;
             wrap: word-wrap;
             horizontal-alignment: center;
         }
         if state == "locked": Text {
             text: "Too many wrong codes. Start again if it was you.";
             color: Theme.error;
-            font-size: 20px;
+            font-size: Theme.font-heading;
             wrap: word-wrap;
             horizontal-alignment: center;
         }
         if state == "expired" || state == "none": Text {
             text: "The code expired.";
-            color: Theme.muted;
-            font-size: 20px;
+            color: Theme.text-muted;
+            font-size: Theme.font-heading;
             horizontal-alignment: center;
         }
 
@@ -273,7 +294,7 @@ export component PairingPage inherits Rectangle {
             vertical-stretch: 1;
         }
 
-        if state != "waiting": Button {
+        if state != "waiting": ActionButton {
             text: state == "paired" ? "Pair another device" : "New code";
             clicked => {
                 restart();

@@ -1,0 +1,225 @@
+// appearance.slint -- the Appearance and Time zone pages (issue #39).
+//
+// Appearance: the design preset -- mode (light / dark / auto), accent color,
+// density. Time zone: the hub's time zone, picked in two steps (a region,
+// then a place), which "auto" uses for its hours (and #47's automations
+// later). Both are hub settings saved by backend_daemon (settings.rs): a
+// tap sends the change, and the page shows it once the backend confirms --
+// on this screen and on any phone at the same time.
+
+import { ListView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { PageHeader, Choice } from "common.slint";
+
+// One accent color, for its swatch (the color is the current mode's shade).
+export struct AccentItem {
+    id: string,
+    name: string,
+    color: color,
+}
+
+// One row of the time zone lists: what it shows, what it stands for
+// ("Buenos Aires" / "America/Argentina/Buenos_Aires"), and whether it's the
+// hub's current zone (or the region that holds it) -- worked out by main.rs.
+export struct ZoneItem {
+    label: string,
+    value: string,
+    marked: bool,
+}
+
+// A section title, e.g. "Mode".
+component SectionTitle inherits Text {
+    color: Theme.text;
+    font-size: Theme.font-subtitle;
+}
+
+export component AppearancePage inherits Rectangle {
+    // The hub's current settings.
+    in property <string> mode;
+    in property <string> accent;
+    in property <string> density;
+    in property <[AccentItem]> accents;
+    // The chosen accent's name, e.g. "Sky" (main.rs looks it up).
+    in property <string> accent-name;
+    // For the "auto" explanation, e.g. "Europe/Bucharest".
+    in property <string> time-zone;
+    callback back();
+    callback set-mode(string);
+    callback set-accent(string);
+    callback set-density(string);
+
+    background: Theme.background;
+
+    VerticalLayout {
+        padding: Theme.space-l;
+        spacing: Theme.space-m;
+        alignment: start;
+
+        PageHeader {
+            title: "Appearance";
+            back => {
+                root.back();
+            }
+        }
+
+        SectionTitle {
+            text: "Mode";
+        }
+        HorizontalLayout {
+            spacing: Theme.space-s;
+            Choice {
+                text: "Light";
+                selected: mode == "light";
+                clicked => {
+                    set-mode("light");
+                }
+            }
+            Choice {
+                text: "Dark";
+                selected: mode == "dark";
+                clicked => {
+                    set-mode("dark");
+                }
+            }
+            Choice {
+                text: "Auto";
+                selected: mode == "auto";
+                clicked => {
+                    set-mode("auto");
+                }
+            }
+        }
+        if mode == "auto": Text {
+            text: "Light from 07:00 to 19:00, dark otherwise (time zone: " + time-zone + ").";
+            color: Theme.text-muted;
+            font-size: Theme.font-caption;
+            wrap: word-wrap;
+        }
+
+        SectionTitle {
+            text: "Accent color";
+        }
+        HorizontalLayout {
+            spacing: Theme.space-s;
+            alignment: start;
+            for a in accents: Rectangle {
+                // A swatch; the chosen one gets a ring around it.
+                width: Theme.touch-height;
+                height: Theme.touch-height;
+                border-radius: self.height / 2;
+                border-width: a.id == accent ? 3px : 0;
+                border-color: Theme.text;
+                Rectangle {
+                    width: parent.width - 12px;
+                    height: parent.height - 12px;
+                    border-radius: self.height / 2;
+                    background: a.color;
+                }
+                TouchArea {
+                    clicked => {
+                        set-accent(a.id);
+                    }
+                }
+            }
+        }
+        Text {
+            // The chosen accent's name, under the swatches.
+            text: accent-name;
+            color: Theme.text-muted;
+            font-size: Theme.font-caption;
+        }
+
+        SectionTitle {
+            text: "Density";
+        }
+        HorizontalLayout {
+            spacing: Theme.space-s;
+            Choice {
+                text: "Comfortable";
+                selected: density == "comfortable";
+                clicked => {
+                    set-density("comfortable");
+                }
+            }
+            Choice {
+                text: "Compact";
+                selected: density == "compact";
+                clicked => {
+                    set-density("compact");
+                }
+            }
+        }
+        Text {
+            text: "Compact fits more on screen; comfortable is easier to tap on the touchscreen.";
+            color: Theme.text-muted;
+            font-size: Theme.font-caption;
+            wrap: word-wrap;
+        }
+    }
+}
+
+// A list of time zone choices: the regions ("Europe"), then the places in
+// the chosen region ("Bucharest"). The same page serves both steps.
+export component TimeZonePage inherits Rectangle {
+    in property <string> title;
+    // e.g. "Choose a region" / "Places in Europe".
+    in property <string> hint;
+    in property <[ZoneItem]> items;
+    callback back();
+    callback pick(ZoneItem);
+
+    background: Theme.background;
+
+    VerticalLayout {
+        padding: Theme.space-l;
+        spacing: Theme.space-m;
+
+        PageHeader {
+            title: root.title;
+            back => {
+                root.back();
+            }
+        }
+        Text {
+            text: hint;
+            color: Theme.text-muted;
+            font-size: Theme.font-caption;
+            wrap: word-wrap;
+        }
+        ListView {
+            vertical-stretch: 1;
+            for item in items: VerticalLayout {
+                padding-bottom: Theme.space-xs;
+                Rectangle {
+                    height: Theme.touch-height;
+                    border-radius: Theme.radius-medium;
+                    background: row-touch.pressed ? Theme.surface-pressed : Theme.surface;
+                    HorizontalLayout {
+                        padding-left: Theme.space-xl;
+                        padding-right: Theme.space-xl;
+                        Text {
+                            text: item.label;
+                            color: Theme.text;
+                            font-size: Theme.font-body;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                            overflow: elide;
+                        }
+                        // The current zone (or its region) is marked.
+                        if item.marked: Text {
+                            text: "\u{2022}";
+                            color: Theme.accent;
+                            font-size: Theme.font-title;
+                            vertical-alignment: center;
+                        }
+                    }
+                    row-touch := TouchArea {
+                        clicked => {
+                            pick(item);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

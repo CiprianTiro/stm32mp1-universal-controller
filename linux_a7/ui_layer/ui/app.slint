@@ -19,15 +19,18 @@ import "../fonts/DejaVuSans.ttf";
 
 // The colors (shared with the boot image, see theme.slint) and the network
 // screens (issue #61).
-import { Theme, Glyphs } from "theme.slint";
+import { Theme, Splash, Glyphs } from "theme.slint";
 import { HeaderButton } from "common.slint";
 import { DeviceItem, DeviceList } from "devices.slint";
 import { ClientItem, SettingsPage, ClientsPage, PairingPage } from "settings.slint";
 import { NetStatus, WifiNetwork, NetIndicator, NetworkPage, PasswordPage, CountryPage } from "network.slint";
+import { AccentItem, ZoneItem, AppearancePage, TimeZonePage } from "appearance.slint";
 
 // Re-exported so main.rs can use these types (the Rust side only sees what
 // the main file exports).
-export { NetStatus, WifiNetwork, DeviceItem, ClientItem }
+export { NetStatus, WifiNetwork, DeviceItem, ClientItem, AccentItem, ZoneItem }
+// The design tokens (issue #39): main.rs's theme.rs sets them.
+export { Theme }
 
 // Shown from the UI's start until backend_daemon answers for the first time
 // (issue #59). The background picture (icon + name) is the very same file
@@ -35,7 +38,8 @@ export { NetStatus, WifiNetwork, DeviceItem, ClientItem }
 // three loading dots and the status text below them. Their positions are
 // the constants from make_welcome.py (dots centred at y=560, 28 px apart,
 // radius 7; text centred at y=600) -- if the design changes there, change
-// them here too.
+// them here too. Its colors are the fixed `Splash` ones (issue #39), not
+// the chosen theme's: it has to match the boot image exactly.
 component WelcomeScreen inherits Rectangle {
     // Set after 30 s without the backend: the text changes, so a hub whose
     // backend never comes up doesn't look like it's simply still booting.
@@ -44,7 +48,7 @@ component WelcomeScreen inherits Rectangle {
     // Which dot is lit: 0, 1, 2, 0, ...
     property <int> phase: 0;
 
-    background: Theme.background;
+    background: Splash.background;
 
     Image {
         source: @image-url("images/welcome.png");
@@ -70,14 +74,15 @@ component WelcomeScreen inherits Rectangle {
         y: 560px - 7px;
         width: 14px;
         height: 14px;
-        border-radius: 7px;
-        background: i == phase ? Theme.accent : Theme.dot-off;
+        border-radius: self.height / 2;
+        background: i == phase ? Splash.accent : Splash.dot-off;
     }
 
     Text {
         // `\u{2026}` is the single "..." character, as in the boot image.
         text: slow ? "Still starting\u{2026} (hub service not answering)" : "Starting\u{2026}";
-        color: Theme.muted;
+        color: Splash.muted;
+        // 20 px as in make_welcome.py, fixed like the colors (not a token).
         font-size: 20px;
         width: parent.width;
         horizontal-alignment: center;
@@ -130,7 +135,8 @@ export component AppWindow inherits Window {
 
     // ---- Network (issue #61) ----------------------------------------
     // Which screen is shown: 0 = main, 1 = network, 2 = WiFi password,
-    // 3 = WiFi country, 4 = settings, 5 = paired devices, 6 = pairing.
+    // 3 = WiFi country, 4 = settings, 5 = paired devices, 6 = pairing,
+    // 7 = appearance, 8 = time zone (issue #39).
     in-out property <int> page: 0;
     // Where the network page's Back goes (main screen or settings).
     property <int> network-back: 0;
@@ -165,6 +171,30 @@ export component AppWindow inherits Window {
     in property <string> pairing-address;
     // The setup hotspot (issue #36).
     in property <image> hotspot-qr;
+
+    // ---- Hub settings (issue #39) --------------------------------------
+    // The hub's settings as backend_daemon last reported them (main.rs).
+    in property <string> setting-mode;
+    in property <string> setting-accent;
+    in property <string> setting-density;
+    in property <string> setting-time-zone;
+    // The chosen accent's display name, e.g. "Sky".
+    in property <string> setting-accent-name;
+    // The accent swatches, in the current mode's shades.
+    in property <[AccentItem]> accents;
+    // The current time in the hub's time zone, e.g. "14:05".
+    in property <string> local-time;
+    // The time zone page: regions first, then the places in one.
+    in property <[ZoneItem]> zone-items;
+    in property <string> zone-title;
+    in property <string> zone-hint;
+    callback set-mode(string);
+    callback set-accent(string);
+    callback set-density(string);
+    callback open-time-zone();
+    // A row tapped: a region (its places are listed next) or a place (the
+    // hub's new time zone) -- main.rs tells them apart.
+    callback pick-zone(ZoneItem);
     callback start-hotspot();
     callback stop-hotspot();
     callback open-clients();
@@ -192,12 +222,17 @@ export component AppWindow inherits Window {
     callback set-switch(string, bool);
     callback set-level(string, int);
 
-    // The whole UI uses the dark look of the welcome screen, so switching
-    // from it to the normal screen isn't a jump from dark to bright.
-    // `init` runs once, when the window is created.
     background: Theme.background;
+
+    // std-widgets (the ListView's scrollbar) have their own palette; it
+    // follows the theme's mode (issue #39). `init` runs once, when the
+    // window is created; `changed` whenever main.rs switches the mode.
+    property <bool> dark-mode: Theme.dark;
     init => {
-        Palette.color-scheme = ColorScheme.dark;
+        Palette.color-scheme = dark-mode ? ColorScheme.dark : ColorScheme.light;
+    }
+    changed dark-mode => {
+        Palette.color-scheme = dark-mode ? ColorScheme.dark : ColorScheme.light;
     }
 
     // Runs once, 30 s after start, if the backend still hasn't answered.
@@ -212,16 +247,16 @@ export component AppWindow inherits Window {
     // The normal screen: a top bar (title, network indicator), then every
     // device, drawn from its capabilities (devices.slint).
     if page == 0: VerticalLayout {
-        padding: 8px;
-        spacing: 8px;
+        padding: Theme.space-s;
+        spacing: Theme.space-s;
 
         HorizontalLayout {
             height: Theme.touch-height;
-            spacing: 8px;
+            spacing: Theme.space-s;
             Text {
                 text: "Devices";
-                color: Theme.title;
-                font-size: 24px;
+                color: Theme.text;
+                font-size: Theme.font-title;
                 vertical-alignment: center;
                 horizontal-stretch: 1;
             }
@@ -247,14 +282,14 @@ export component AppWindow inherits Window {
         if !connected: Text {
             text: "Connection to the hub lost, reconnecting\u{2026}";
             color: Theme.error;
-            font-size: 16px;
+            font-size: Theme.font-body;
             wrap: word-wrap;
         }
 
         if device-message != "": Text {
             text: device-message;
             color: Theme.error;
-            font-size: 16px;
+            font-size: Theme.font-body;
             wrap: word-wrap;
         }
 
@@ -279,8 +314,18 @@ export component AppWindow inherits Window {
         network-detail: root.net.uplink == "ethernet" ? "Connected by cable"
             : root.net.uplink == "wifi" ? ("WiFi " + root.net.wifi-ssid) : "Offline";
         client-count: root.clients.length;
+        appearance-detail: (setting-mode == "auto" ? "Auto" : setting-mode == "light" ? "Light" : "Dark")
+            + ", " + setting-accent-name + ", " + setting-density;
+        time-zone-detail: setting-time-zone + ", " + local-time;
         back => {
             page = 0;
+        }
+        open-appearance => {
+            page = 7;
+        }
+        open-time-zone => {
+            root.open-time-zone();
+            page = 8;
         }
         open-network => {
             net-message = "";
@@ -443,6 +488,51 @@ export component AppWindow inherits Window {
         }
         save => {
             set-country(country-code);
+        }
+    }
+
+    if page == 7: AppearancePage {
+        width: min(parent.width, Theme.content-max-width);
+        x: (parent.width - self.width) / 2;
+        height: parent.height;
+        mode: root.setting-mode;
+        accent: root.setting-accent;
+        density: root.setting-density;
+        accents: root.accents;
+        accent-name: root.setting-accent-name;
+        time-zone: root.setting-time-zone;
+        back => {
+            page = 4;
+        }
+        set-mode(m) => {
+            root.set-mode(m);
+        }
+        set-accent(a) => {
+            root.set-accent(a);
+        }
+        set-density(d) => {
+            root.set-density(d);
+        }
+    }
+
+    if page == 8: TimeZonePage {
+        width: min(parent.width, Theme.content-max-width);
+        x: (parent.width - self.width) / 2;
+        height: parent.height;
+        title: root.zone-title;
+        hint: root.zone-hint;
+        items: root.zone-items;
+        // main.rs knows whether a list of places is showing: then Back
+        // returns to the regions, otherwise to the settings.
+        back => {
+            if (zone-title == "Time zone") {
+                page = 4;
+            } else {
+                root.open-time-zone();
+            }
+        }
+        pick(item) => {
+            root.pick-zone(item);
         }
     }
 
