@@ -9,6 +9,7 @@
 
 import { Button, ListView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
+import { PageHeader } from "common.slint";
 
 // A paired device, as the list shows it.
 export struct ClientItem {
@@ -18,25 +19,6 @@ export struct ClientItem {
     seen-text: string,
 }
 
-// A title row with a back button (same look as the network pages).
-component Header inherits HorizontalLayout {
-    in property <string> title;
-    callback back();
-    spacing: 12px;
-    height: Theme.touch-height;
-    Button {
-        text: "< Back";
-        clicked => {
-            back();
-        }
-    }
-    Text {
-        text: title;
-        color: Theme.title;
-        font-size: 24px;
-        vertical-alignment: center;
-    }
-}
 
 // One tappable row of the settings menu.
 component MenuRow inherits Rectangle {
@@ -84,7 +66,7 @@ export component SettingsPage inherits Rectangle {
         spacing: 10px;
         alignment: start;
 
-        Header {
+        PageHeader {
             title: "Settings";
             back => {
                 root.back();
@@ -123,7 +105,7 @@ export component ClientsPage inherits Rectangle {
         padding: 12px;
         spacing: 10px;
 
-        Header {
+        PageHeader {
             title: "Paired devices";
             back => {
                 root.back();
@@ -217,7 +199,7 @@ export component PairingPage inherits Rectangle {
         padding: 12px;
         spacing: 12px;
 
-        Header {
+        PageHeader {
             title: "Pair a new device";
             back => {
                 root.back();

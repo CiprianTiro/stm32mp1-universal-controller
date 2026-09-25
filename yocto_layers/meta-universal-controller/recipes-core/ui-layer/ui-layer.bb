@@ -1,7 +1,8 @@
-SUMMARY = "Universal Controller touchscreen UI (Slint, direct-to-framebuffer)"
-DESCRIPTION = "Slint GUI rendering directly to /dev/fb0 for the DK2's onboard \
-display -- no X11/Wayland compositor. See linux_a7/ui_layer and \
-ARCHITECTURE.md for the design. Sprint 3 Task 12 (#14)."
+SUMMARY = "Universal Controller hub UI (Slint on DRM/KMS: touchscreen or HDMI monitor)"
+DESCRIPTION = "Slint GUI drawing through DRM/KMS on the DK2's touchscreen, \
+or on an HDMI monitor when one is connected (#38) -- no X11/Wayland \
+compositor. See linux_a7/ui_layer and ARCHITECTURE.md for the design. \
+Sprint 3 Task 12 (#14)."
 HOMEPAGE = "https://github.com/CiprianTiro/stm32mp1-universal-controller"
 LICENSE = "GPL-3.0-only"
 LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/GPL-3.0-only;md5=c79ff39f19dfec6d293b95dea7b07891"
@@ -17,7 +18,21 @@ LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/GPL-3.0-only;md5=c79ff39f19dfec
 # exact glibc/ABI. Upgrading Poky's Rust or the whole Yocto release was
 # considered and rejected: far more invasive, and risks meta-st-stm32mp
 # BSP compatibility.
-inherit systemd useradd
+inherit systemd useradd pkgconfig
+
+# Input through libinput (issue #38): Slint's KMS backend reads the touch
+# panel, a USB mouse and a USB keyboard itself. At build time the Rust
+# wrappers link against these C libraries, so they must be in this
+# recipe's sysroot: libinput (input devices), libxkbcommon (keyboard
+# layouts), udev (from systemd: finds the input devices, and notices one
+# being plugged in). At run time Yocto adds the libraries to the image by
+# itself (it sees the binary needs them) -- except xkeyboard-config: pure
+# data files (the keyboard layouts, /usr/share/X11/xkb) that libxkbcommon
+# reads, which nothing can detect, so it's listed by hand.
+# pkgconfig (above): the libudev-sys crate asks pkg-config where libudev
+# is; that class provides pkg-config and points it at the TARGET's sysroot.
+DEPENDS += "libinput libxkbcommon udev"
+RDEPENDS:${PN} += "xkeyboard-config"
 
 # Hardware-only (the image only installs it on stm32mp1common, see
 # universal-controller-image.bb), and do_compile below hardcodes the
@@ -37,14 +52,16 @@ SRC_URI = " \
     file://ui/app.slint \
     file://ui/devices.slint \
     file://ui/theme.slint \
+    file://ui/common.slint \
     file://ui/keyboard.slint \
     file://ui/network.slint \
     file://ui/settings.slint \
     file://ui/images/welcome.png \
+    file://ui/images/pointer.png \
     file://fonts/DejaVuSans.ttf \
     file://src/main.rs \
-    file://src/fb_platform.rs \
-    file://src/touch_input.rs \
+    file://src/display.rs \
+    file://src/pointer.rs \
     file://src/ws_client.rs \
     file://ui-layer.service \
 "
@@ -86,6 +103,16 @@ do_compile() {
     chmod +x ${WORKDIR}/target-link.sh ${WORKDIR}/target-cc.sh ${WORKDIR}/host-cc.sh
 
     export RUSTUP_HOME="${RUSTUP_HOME_DIR}"
+    # pkg-config (the Rust crate) refuses to answer for a different target
+    # than the build machine unless told this is on purpose (#38).
+    export PKG_CONFIG_ALLOW_CROSS=1
+    # libudev-sys's build script runs a bare `rustc` (to test for an
+    # optional libudev feature). bitbake's PATH has no rustc, and a missing
+    # command makes that script crash -- so the rustup toolchain goes on
+    # PATH. (The test itself may fail, compiling for the build machine;
+    # the script then just leaves that optional feature off, which nothing
+    # here needs.)
+    export PATH="${RUSTUP_CARGO_HOME}/bin:${PATH}"
     export CARGO_HOME="${RUSTUP_CARGO_HOME}"
 
     # Linkers, per target (target triple upper-cased, dashes -> underscores).

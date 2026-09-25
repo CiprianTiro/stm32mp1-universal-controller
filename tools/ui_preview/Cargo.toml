@@ -1,0 +1,25 @@
+[package]
+name = "ui-preview"
+version = "0.1.0"
+edition = "2021"
+description = "Renders the hub UI's pages to PNG files on the PC, at any screen size (issue #38)"
+license = "GPL-3.0-only"
+publish = false
+
+# A PC-only tool, NOT part of the board image: it compiles the very same
+# linux_a7/ui_layer/ui/app.slint (see build.rs) with Slint's software
+# renderer -- the one the board uses, so text and shapes come out the same
+# -- but draws into memory instead of onto a display, then saves PNGs. No
+# display, no board, no DRM/libinput needed. See src/main.rs for usage.
+
+[dependencies]
+# Same Slint version and renderer as ui_layer, without its KMS backend.
+slint = { version = "1", default-features = false, features = ["std", "renderer-software", "compat-1-18"] }
+# fontique's system-font lookup through dlopen, exactly as in ui_layer's
+# Cargo.toml (see the long comment there): the embedded font is all we use.
+fontique = { version = "0.11", default-features = false, features = ["fontconfig-dlopen"] }
+# Writes the PNG files.
+png = "0.17"
+
+[build-dependencies]
+slint-build = "1"

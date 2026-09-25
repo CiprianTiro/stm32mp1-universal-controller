@@ -21,8 +21,9 @@ Makefile's `build-a7` target:
 - **`linux_a7/backend_daemon`** — the hub. Owns every external connection
   (devices, mobile/LAN clients, cloud, the M4) and all application state.
   Async, built on Tokio.
-- **`linux_a7/ui_layer`** — the touchscreen GUI. Built with Slint, rendering
-  directly to `/dev/fb0`. Deliberately "dumb": displays whatever state the
+- **`linux_a7/ui_layer`** — the hub's GUI. Built with Slint, drawing through
+  DRM/KMS (`/dev/dri/card0`) on the touchscreen, or on an HDMI monitor when
+  one is connected (issue #38). Deliberately "dumb": displays whatever state the
   daemon gives it, forwards touch input back. Holds no state of its own.
 
 Both are empty placeholder directories as of 2026-09-22; Task 8 is the

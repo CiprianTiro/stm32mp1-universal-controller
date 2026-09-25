@@ -3,7 +3,7 @@
 # Target Architecture: STMicroelectronics STM32MP1 (Cortex-A7 + Cortex-M4)
 # =============================================================================
 
-.PHONY: help build-hw build-hw-prod build-qemu shell-yocto clean-yocto build-m4 build-a7 test-qemu verify-qemu flash-hw flash-hw-prod flash-m4 netboot restore-userfs audit
+.PHONY: help build-hw build-hw-prod build-qemu shell-yocto clean-yocto build-m4 build-a7 test-qemu verify-qemu flash-hw flash-hw-prod flash-m4 deploy-ui deploy-backend netboot restore-userfs audit
 
 # Zephyr workspace used to build the M4 firmware: a normal `west init` +
 # `west update` checkout at the Zephyr version pinned in firmware_m4/west.yml
@@ -28,6 +28,8 @@ help:
 	@echo "  make flash-hw-prod - Flash the production image (the board then has no SSH)"
 	@echo "  make restore-userfs - Put the newest /usr/local backup (taken by flash-hw) back on the board"
 	@echo "  make flash-m4      - Update ONLY the M4 firmware on a running board over SSH (no reflash)"
+	@echo "  make deploy-ui     - Rebuild ONLY the UI and put it on a running board over SSH (dev loop, no reflash)"
+	@echo "  make deploy-backend - The same for backend_daemon"
 	@echo "  make netboot       - One-shot TFTP/NFS netboot with the latest build, no eMMC changes (see wiki: Network-Boot)"
 	@echo "  make build-qemu    - Build Yocto Linux simulation image for QEMU ARM64"
 	@echo "  make test-qemu     - Automated headless boot smoke test (systemd/sshd/etc)"
@@ -94,6 +96,14 @@ restore-userfs:
 # accept-new: after a reflash the board has fresh SSH host keys and flash_hw.sh
 # clears the old entry, so the first connection must be allowed to add the new
 # one. A key that CHANGED without that cleanup is still rejected.
+# Fast dev loop (issue #38): one app rebuilt with bitbake and copied onto a
+# running board over SSH, no reflash. See yocto_layers/deploy_app.sh.
+deploy-ui:
+	@cd yocto_layers && BOARD_HOST=$(BOARD_HOST) ./deploy_app.sh ui-layer
+
+deploy-backend:
+	@cd yocto_layers && BOARD_HOST=$(BOARD_HOST) ./deploy_app.sh backend-daemon
+
 flash-m4: build-m4
 	@echo "📲 Deploying M4 firmware to $(BOARD_HOST) over SSH..."
 	@scp -q -o StrictHostKeyChecking=accept-new firmware_m4/build/zephyr/zephyr.elf root@$(BOARD_HOST):/lib/firmware/rproc-m4-fw
