@@ -17,7 +17,7 @@ LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/GPL-3.0-only;md5=c79ff39f19dfec
 # exact glibc/ABI. Upgrading Poky's Rust or the whole Yocto release was
 # considered and rejected: far more invasive, and risks meta-st-stm32mp
 # BSP compatibility.
-inherit systemd
+inherit systemd useradd
 
 # Hardware-only (the image only installs it on stm32mp1common, see
 # universal-controller-image.bb), and do_compile below hardcodes the
@@ -128,6 +128,13 @@ do_install() {
     install -d ${D}${systemd_system_unitdir}
     install -m 0644 ${WORKDIR}/ui-layer.service ${D}${systemd_system_unitdir}/ui-layer.service
 }
+
+# The UI's own user (issue #37): ui-layer.service runs it as "hubui"
+# instead of root. A system account with its own group, no home folder and
+# no login shell. The groups for the screen and touch panel (video, input)
+# are added by the unit's SupplementaryGroups=.
+USERADD_PACKAGES = "${PN}"
+USERADD_PARAM:${PN} = "--system --user-group --no-create-home --home-dir /nonexistent --shell /sbin/nologin hubui"
 
 SYSTEMD_SERVICE:${PN} = "ui-layer.service"
 SYSTEMD_AUTO_ENABLE:${PN} = "enable"

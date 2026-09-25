@@ -11,6 +11,7 @@ mod ble;
 mod control;
 mod device;
 mod health;
+mod helper;
 mod hotspot;
 mod mqtt;
 mod network;
@@ -27,6 +28,15 @@ mod ws;
 #[tokio::main(worker_threads = 2)]
 async fn main() {
     println!("backend_daemon starting (arch: {})", std::env::consts::ARCH);
+
+    /* TLS crypto: ring, for every TLS connection in the process -- the
+     * WebSocket server (tls.rs) names it itself, but the MQTT client
+     * (rumqttc) takes rustls's process-wide default. rustls would pick
+     * ring on its own while it's the only one compiled in; setting it here
+     * keeps that true even if a dependency ever brought in a second one
+     * (rustls would then refuse to guess, and MQTT would fail). The result
+     * only says whether a default was already set; nothing to handle. */
+    let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
 
     tokio::spawn(heartbeat());
 

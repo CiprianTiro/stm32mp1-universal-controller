@@ -150,6 +150,13 @@ pub enum Load<T> {
     Loaded { value: T, problem: Option<String> },
     /* Both copies are damaged (kept as *.bad). */
     Failed(String),
+    /* A copy exists but can't be READ at all: permission denied, an I/O
+     * error, ... (issue #37). That says nothing about the data, which is
+     * most likely perfectly fine -- it's the daemon's access that's wrong
+     * (seen on the DK2: files kept from an image where the daemon ran as
+     * root). So nothing is moved aside, and the caller must NOT carry on
+     * empty: its first save would replace the real data. */
+    Unreadable(String),
 }
 
 /* One store = one file name in the data directory (with its .prev/.tmp
@@ -165,6 +172,8 @@ enum Copy<T> {
     Missing,
     Good(T),
     Bad(String),
+    /* Exists, but reading it failed (see Load::Unreadable). */
+    Unreadable(String),
 }
 
 impl Store {
@@ -194,6 +203,9 @@ impl Store {
     pub fn load<T>(&self, decode_payload: impl Fn(u32, &[u8]) -> Result<T, String>) -> Load<T> {
         let latest_problem = match read_copy(&self.latest, &decode_payload) {
             Copy::Good(value) => return Load::Loaded { value, problem: None },
+            /* Not "damaged": don't touch it, and don't fall back to an
+             * older .prev either (the latest copy is probably fine). */
+            Copy::Unreadable(problem) => return Load::Unreadable(problem),
             Copy::Missing => None,
             Copy::Bad(problem) => {
                 self.quarantine(&self.latest);
@@ -201,6 +213,7 @@ impl Store {
             }
         };
         match (read_copy(&self.prev, &decode_payload), latest_problem) {
+            (Copy::Unreadable(problem), _) => Load::Unreadable(problem),
             (Copy::Missing, None) => Load::Fresh,
             (Copy::Missing, Some(problem)) => Load::Failed(problem),
             (Copy::Good(value), problem) => Load::Loaded {
@@ -221,7 +234,14 @@ impl Store {
 
     /* load(), with every outcome logged, and T's default (e.g. an empty
      * map) when there's nothing usable. `what` names the content for the
-     * log ("device registry"). */
+     * log ("device registry").
+     *
+     * Load::Unreadable EXITS the daemon (with an error code, so systemd's
+     * Restart=on-failure tries again a few seconds later): starting empty
+     * would mean the next save overwrites data that's fine, just not
+     * readable right now. Better a daemon that visibly doesn't start, with
+     * the reason in the journal, than one that silently forgets every
+     * device and paired client. */
     pub fn load_or_default<T: Default>(&self, what: &str, decode_payload: impl Fn(u32, &[u8]) -> Result<T, String>) -> T {
         match self.load(decode_payload) {
             Load::Fresh => {
@@ -236,6 +256,10 @@ impl Store {
             Load::Failed(problem) => {
                 println!("store: ERROR {what}: no usable copy ({problem}) -- starting EMPTY; damaged files kept as *.bad in {}", self.parent().display());
                 T::default()
+            }
+            Load::Unreadable(problem) => {
+                println!("store: FATAL {what}: can't read {problem} -- NOT starting empty (that would overwrite it); check the owner/permissions of {} and its parent folders", self.parent().display());
+                std::process::exit(1);
             }
         }
     }
@@ -291,13 +315,14 @@ impl Store {
     }
 }
 
-/* Reads and checks one copy. Only "file not found" counts as Missing; any
- * other read error (permissions, I/O error) is a Bad copy. */
+/* Reads and checks one copy. "File not found" counts as Missing; any
+ * other read error (permissions, I/O error) as Unreadable -- only content
+ * that was read but fails the checks is a Bad (damaged) copy. */
 fn read_copy<T>(path: &Path, decode_payload: &impl Fn(u32, &[u8]) -> Result<T, String>) -> Copy<T> {
     let bytes = match fs::read(path) {
         Ok(bytes) => bytes,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Copy::Missing,
-        Err(e) => return Copy::Bad(format!("{}: {e}", path.display())),
+        Err(e) => return Copy::Unreadable(format!("{}: {e}", path.display())),
     };
     match decode(&bytes).and_then(|(schema, payload)| decode_payload(schema, payload)) {
         Ok(value) => Copy::Good(value),
@@ -485,6 +510,30 @@ mod tests {
         assert!(dir.join("data.json.prev.bad").exists());
         /* load_or_default hands back the empty default. */
         assert_eq!(store.load_or_default("test data", text), String::new());
+    }
+
+    #[test]
+    fn a_copy_that_cant_be_read_is_not_treated_as_damaged() {
+        /* The real case is "permission denied" (issue #37), but a test
+         * running as root could read a mode-000 file anyway. A DIRECTORY
+         * in the file's place fails to read for everyone -- also with an
+         * error other than "not found", which is all that matters here. */
+        let dir = test_dir("unreadable");
+        let store = Store::new(&dir, "data.json");
+        store.save(1, b"good data").unwrap();
+        fs::create_dir(dir.join("data.json.prev")).unwrap();
+        fs::remove_file(dir.join("data.json")).unwrap();
+        fs::create_dir(dir.join("data.json")).unwrap();
+
+        assert!(matches!(store.load(text), Load::Unreadable(_)));
+        /* Nothing was moved aside. */
+        assert!(dir.join("data.json").is_dir());
+        assert!(!dir.join("data.json.bad").exists());
+
+        /* An unreadable .prev behind a missing latest copy: the same. */
+        fs::remove_dir(dir.join("data.json")).unwrap();
+        assert!(matches!(store.load(text), Load::Unreadable(_)));
+        assert!(!dir.join("data.json.prev.bad").exists());
     }
 
     #[test]

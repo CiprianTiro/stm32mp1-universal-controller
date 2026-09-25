@@ -30,6 +30,8 @@ use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio_rustls::rustls;
+use tokio_rustls::rustls::pki_types::pem::PemObject;
+use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 
 /* Where the key and certificate live unless overridden with HUB_TLS_DIR
  * (e.g. when running the daemon on the PC). */
@@ -60,20 +62,21 @@ pub fn load_or_create(dir: &Path) -> Result<Identity, String> {
     let key_pem = fs::read(&key_path).map_err(|e| format!("{}: {e}", key_path.display()))?;
     let cert_pem = fs::read(&cert_path).map_err(|e| format!("{}: {e}", cert_path.display()))?;
 
-    let key = rustls_pemfile::private_key(&mut key_pem.as_slice())
-        .map_err(|e| format!("{}: {e}", key_path.display()))?
-        .ok_or_else(|| format!("{}: no private key in it", key_path.display()))?;
-    let cert = rustls_pemfile::certs(&mut cert_pem.as_slice())
-        .next()
-        .ok_or_else(|| format!("{}: no certificate in it", cert_path.display()))?
-        .map_err(|e| format!("{}: {e}", cert_path.display()))?;
+    /* PEM ("-----BEGIN ...-----" text) to the binary DER form rustls
+     * uses, with rustls's own reader (pki_types::pem). */
+    let key = PrivateKeyDer::from_pem_slice(&key_pem).map_err(|e| format!("{}: {e}", key_path.display()))?;
+    let cert = CertificateDer::from_pem_slice(&cert_pem).map_err(|e| format!("{}: {e}", cert_path.display()))?;
 
     let fingerprint = hex(ring::digest::digest(&ring::digest::SHA256, cert.as_ref()).as_ref());
 
     /* No client certificates: clients prove who they are with their token,
      * inside the encrypted connection (auth.rs). with_single_cert also
      * checks that the key belongs to the certificate. */
-    let mut config = rustls::ServerConfig::builder()
+    /* ring as the crypto provider, named explicitly (rather than relying
+     * on it being the only one compiled in). */
+    let mut config = rustls::ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+        .with_safe_default_protocol_versions()
+        .map_err(|e| format!("TLS settings: {e}"))?
         .with_no_client_auth()
         .with_single_cert(vec![cert], key)
         .map_err(|e| format!("TLS key/certificate unusable: {e}"))?;

@@ -10,6 +10,10 @@ After=network.target
 # that entry, e.g. QEMU, these two lines simply have no effect.)
 Wants=usr-local.mount
 After=usr-local.mount
+# The four things that need root (the setup hotspot, avahi, syncing the
+# WiFi config) are asked of hub-helper (issue #37, see hub-helper.sh).
+Wants=hub-helper.socket
+After=hub-helper.socket
 
 [Service]
 # Optional per-device settings, e.g. MQTT_BROKER_HOST / MQTT_THING_NAME
@@ -18,10 +22,113 @@ After=usr-local.mount
 # (/usr/local), next to the device certificate, not in /etc: it differs per
 # unit and must survive rootfs updates and a read-only rootfs. The leading
 # "-" means a missing file is fine. Edit it on the board and
-# `systemctl restart backend-daemon`; no rebuild needed.
+# `systemctl restart backend-daemon`; no rebuild needed. (Read by systemd
+# itself, as root, before the daemon starts -- so it stays root's file.)
 EnvironmentFile=-/usr/local/etc/universal-controller/backend-daemon.env
+# Before every start: create the daemon's folders on /usr/local and give
+# them (and everything in them) to hubd -- see backend-daemon-tmpfiles.conf.
+# The "+" runs this one command as root, outside the sandbox below.
+ExecStartPre=+/usr/bin/systemd-tmpfiles --create /usr/lib/tmpfiles.d/backend-daemon.conf
 ExecStart=/usr/bin/backend-daemon
 Restart=on-failure
+
+# =====================================================================
+# Least privilege (issue #37)
+# =====================================================================
+# backend_daemon is the part of the hub that talks to the outside world
+# (LAN clients, the cloud, the setup page, Bluetooth). Rust rules out
+# memory-corruption bugs, but not every bug; if one were ever exploited,
+# everything below limits what the attacker would get. Each line removes
+# something the daemon doesn't need. `systemd-analyze security
+# backend-daemon` on the board rates the result (see the wiki's
+# Hardening page for the before/after score).
+
+# --- Who it runs as --------------------------------------------------
+# Its own user, created by the backend-daemon recipe. No login, no home,
+# owns only its own files on /usr/local (backend-daemon-tmpfiles.conf).
+User=hubd
+Group=hubd
+# rpmsg: /dev/rpmsg0, the channel to the M4 (the LEDs); the device node
+# belongs to group rpmsg (ST's udev rule). Group hubd is also the one
+# wpa_supplicant's control socket is opened to (hub-wifi-init.sh).
+SupplementaryGroups=rpmsg
+# Files the daemon creates are its own only.
+UMask=0077
+
+# --- Privileges ------------------------------------------------------
+# Of all root's powers ("capabilities") it keeps exactly one:
+# CAP_NET_BIND_SERVICE, to open port 80 for the setup page on the hotspot
+# (ports below 1024 are privileged). Nothing else, not even as a
+# possibility (the bounding set is the ceiling).
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+# It can never gain more: no setuid programs, no new capabilities.
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+
+# --- Files -----------------------------------------------------------
+# The whole filesystem is read-only for it, except the places it writes:
+ProtectSystem=strict
+#   its data (devices, paired clients, shadows) and its TLS identity. The
+#   "-" means: if a folder is missing, start anyway (ExecStartPre= above
+#   creates them, so that's only for a broken userfs).
+ReadWritePaths=-/usr/local/var/lib/universal-controller
+ReadWritePaths=-/usr/local/etc/universal-controller/tls
+#   and three folders in /run (RAM) that systemd creates for it, owned by
+#   hubd: its WiFi control socket ends (network.rs), the hotspot's hostapd
+#   config (hotspot.rs), the one-interface avahi config (network.rs).
+#   Preserve: hostapd and avahi read their config from there while this
+#   daemon restarts, so it must not vanish when the daemon stops.
+RuntimeDirectory=backend-daemon hub-hotspot hub-avahi
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+# No /home, /root; its own empty /tmp.
+ProtectHome=yes
+PrivateTmp=yes
+# Other users' processes are invisible in /proc.
+ProtectProc=invisible
+
+# --- Kernel and system -----------------------------------------------
+# No kernel settings (/proc/sys), modules, kernel log, cgroups or hostname
+# changes -- none of that is its job.
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+# The clock: NOT via ProtectClock=yes, which also quietly adds a device
+# allow-list entry (for the RTC) -- and any allow-list blocks every device
+# not on it, /dev/rpmsg0 included (see Devices below). Setting the clock
+# needs a capability the daemon doesn't have anyway, and the system call
+# filter below refuses the clock-setting calls (in ~@privileged) on top.
+# No containers, no real-time scheduling, no odd execution modes.
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+# Memory can't be both writable and executable: an injected piece of code
+# can't be run. (Rust doesn't generate code at run time, so nothing breaks.)
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+# Devices: NOT limited with DevicePolicy=. /dev/rpmsg0 only appears after
+# the M4 firmware starts, and its driver (rpmsg_char) is a module loaded
+# then, so an allow-list made at start time wouldn't know it. Without any
+# capability the daemon can open only what the file permissions give user
+# hubd / group rpmsg anyway.
+
+# --- System calls and network ----------------------------------------
+# Only the system calls ordinary services use (no mount, reboot, module
+# loading, raw I/O, ptrace, ...), minus the privileged ones among them
+# (changing owners or user ids, setting the clock, ...) and the ones that
+# change priorities or resource limits, and only native
+# 32-bit ARM ones. A refused call fails with "permission denied".
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+SystemCallArchitectures=native
+# Only these kinds of sockets: Unix (D-Bus for Bluetooth, wpa_supplicant,
+# hub-helper, the journal), IPv4/IPv6 (WebSocket, MQTT, setup page) and
+# netlink (the list of network interfaces, network.rs).
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 
 [Install]
 WantedBy=multi-user.target

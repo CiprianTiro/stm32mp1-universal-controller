@@ -63,6 +63,17 @@ IMAGE_INSTALL:append:stm32mp1common = " resolved-public-dns"
 # WiFi chip.
 IMAGE_INSTALL:append:stm32mp1common = " hub-wifi"
 
+# Hardware-only: the firewall (default deny, only the hub's own services
+# open) and kernel hardening settings (issue #37, recipes-core/hub-hardening).
+# QEMU's kernel has no nftables families configured, and its user-mode
+# network already hides the guest from everything but forwarded ports.
+IMAGE_INSTALL:append:stm32mp1common = " hub-hardening"
+# This image is the DEVELOPMENT one: SSH is open in the firewall (sshd is
+# installed above), and systemd-analyze is there to check the services'
+# sandboxing on the board (`systemd-analyze security`). The production
+# variant, universal-controller-image-prod.bb, removes all three.
+IMAGE_INSTALL:append:stm32mp1common = " hub-hardening-ssh systemd-analyze"
+
 # ST's partition splitter (meta-st-stm32mp, image_types-stsplitpartitions
 # .bbclass) copies the finished rootfs into ${WORKDIR}/splitted_rootfs with
 # `cp -ar` -- into a folder that is never emptied between builds. New and

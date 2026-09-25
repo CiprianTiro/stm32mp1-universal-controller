@@ -91,10 +91,15 @@ USER builder
 # bind mount and would hide anything installed there at image-build time.
 #
 # Why not Yocto's own Rust: scarthgap's Poky ships rustc 1.75, too old for
-# Slint 1.18 (needs >= 1.85 / edition 2024). ui_layer's recipe (ui-layer.bb)
-# therefore calls THIS toolchain's cargo directly, and only borrows Yocto's
-# C cross-gcc for the final link. backend_daemon still uses Yocto's own
-# Rust through the normal `inherit cargo` class -- nothing else changes.
+# Slint 1.18 (needs >= 1.85 / edition 2024) and for security fixes in
+# backend_daemon's dependencies (issue #37: time >= 0.3.47 needs 1.88).
+# Both recipes (ui-layer.bb, backend-daemon.bb) therefore call THIS
+# toolchain's cargo directly, and only borrow Yocto's C cross-gcc for C code
+# and the final link.
+#
+# Targets: 32-bit ARM (the DK2) and 64-bit ARM (backend_daemon in the QEMU
+# image, qemuarm64). backend-daemon.bb also adds its target itself if it's
+# missing, for containers made from an older image.
 #
 # Pinned to an exact version (same one used on the dev host) so every
 # container build compiles ui_layer with the same compiler. Bump it
@@ -103,6 +108,6 @@ USER builder
 ARG RUST_TOOLCHAIN=1.97.1
 RUN wget -qO- https://sh.rustup.rs | sh -s -- -y --profile minimal \
         --default-toolchain ${RUST_TOOLCHAIN} --no-modify-path \
-    && /home/builder/.cargo/bin/rustup target add armv7-unknown-linux-gnueabihf
+    && /home/builder/.cargo/bin/rustup target add armv7-unknown-linux-gnueabihf aarch64-unknown-linux-gnu
 
 WORKDIR /home/builder/workspace

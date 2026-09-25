@@ -7,8 +7,10 @@ set -euo pipefail
 
 MODE="${1:-hardware}"
 # Custom image recipe (yocto_layers/meta-universal-controller/recipes-core/images/)
-# instead of the generic core-image-minimal placeholder.
-TARGET_IMAGE="universal-controller-image"
+# instead of the generic core-image-minimal placeholder. Optional second
+# argument: another image recipe, e.g. the production variant without SSH
+# (issue #37): ./run_build.sh hardware universal-controller-image-prod
+TARGET_IMAGE="${2:-universal-controller-image}"
 
 if [ "$MODE" = "qemu" ]; then
     TARGET_MACHINE="qemuarm64"
@@ -95,13 +97,29 @@ compile_inside_container() {
         fi
     fi
 
+    # No busybox syslogd/klogd (issue #37). Poky puts them in every image
+    # (packagegroup-core-boot, via VIRTUAL-RUNTIME_base-utils-syslog), but
+    # with systemd, journald already collects everything -- the kernel's
+    # messages included. With them, klogd fed every kernel line into the
+    # journal a SECOND time (seen on the DK2: each firewall log line twice,
+    # once as "kernel:" and once as "kernel[<klogd pid>]:"), and syslogd
+    # kept a third copy in /var/log/messages. Two fewer root daemons, too.
+    # Outside the "fresh local.conf" block above, so an existing build
+    # folder picks it up as well; the grep keeps it from being added twice.
+    if ! grep -q "VIRTUAL-RUNTIME_base-utils-syslog" conf/local.conf; then
+        echo "  -> Dropping busybox syslogd/klogd (journald does the logging)..."
+        echo 'VIRTUAL-RUNTIME_base-utils-syslog = ""' >> conf/local.conf
+    fi
+
     # Verify/append layer dependencies to bblayers.conf. Read conf/bblayers.conf
     # directly instead of shelling out to `bitbake-layers show-layers` per
     # layer - same result, no repeated bitbake server round-trips. Guarded
     # with -f since oe-init-build-env always generates this file, but a
     # broken/partial build dir shouldn't make this die on a missing-file grep.
     echo "  -> Verifying metadata layer paths configuration..."
-    for layer in meta-oe meta-python; do
+    # meta-networking: nftables, for the hub's firewall (issue #37). Needs
+    # meta-oe and meta-python, added before it by this same loop.
+    for layer in meta-oe meta-python meta-networking; do
         if [ ! -f conf/bblayers.conf ] || ! grep -q "$layer" conf/bblayers.conf; then
             echo "     [+] Adding openembedded:$layer layer extension"
             bitbake-layers add-layer ../meta-openembedded/$layer
@@ -132,6 +150,7 @@ echo "==========================================================================
 echo "🚀 Starting Automated Yocto Build System"
 echo "🎯 Target Machine : ${TARGET_MACHINE}"
 echo "📁 Build Directory: ${BUILD_DIR}"
+echo "🖼️  Image          : ${TARGET_IMAGE}"
 echo "📍 Execution Mode : $( $INSIDE_CONTAINER && echo 'CONTAINER SANDBOX' || echo 'HOST WORKSTATION' )"
 echo "============================================================================="
 
@@ -147,7 +166,7 @@ else
 
     echo "⚡ Step 3: Forwarding execution sequence into container sandbox..."
     echo "-----------------------------------------------------------------------------"
-    docker compose exec yocto-builder bash -c "cd /home/builder/workspace && ./run_build.sh $MODE"
+    docker compose exec yocto-builder bash -c "cd /home/builder/workspace && ./run_build.sh $MODE $TARGET_IMAGE"
 fi
 
 echo "-----------------------------------------------------------------------------"
