@@ -1,0 +1,24 @@
+# hub-helper's socket (issue #37): backend_daemon runs unprivileged and asks
+# through here for the four things it needs root for (see hub-helper.sh and
+# linux_a7/backend_daemon/src/helper.rs).
+#
+# systemd itself listens on the socket and starts one hub-helper@.service
+# per connection (Accept=yes) -- so no helper process runs at all between
+# requests, and each request gets a fresh one.
+[Unit]
+Description=Universal Controller privileged helper socket
+
+[Socket]
+ListenStream=/run/hub-helper.sock
+# Only root and the group hubd (backend_daemon's) may connect: to connect
+# to a Unix socket you need write permission on it.
+SocketUser=root
+SocketGroup=hubd
+SocketMode=0660
+Accept=yes
+# At most this many requests at once; the backend never sends more than a
+# couple (e.g. an avahi restart while the hotspot starts).
+MaxConnections=4
+
+[Install]
+WantedBy=sockets.target

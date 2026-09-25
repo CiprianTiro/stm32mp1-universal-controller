@@ -29,5 +29,81 @@ ExecStart=/usr/bin/ui-layer
 Restart=on-failure
 RestartSec=2
 
+# =====================================================================
+# Least privilege (issue #37)
+# =====================================================================
+# The UI only draws on the screen, reads the touch panel, and talks to
+# backend_daemon on 127.0.0.1. Everything else is taken away, so a bug in
+# it (or in a library it uses) gives an attacker nothing more than that.
+# `systemd-analyze security ui-layer` on the board rates the result.
+#
+# None of these settings may make the UI wait for anything (it starts
+# right at the beginning of boot, see above). That's why PrivateTmp= is
+# NOT used: it makes a service wait for systemd-tmpfiles-setup, i.e. for
+# the whole filesystem setup -- exactly the wait #59 removed. It isn't
+# needed either: with ProtectSystem=strict below, /tmp is read-only for the
+# UI, so it can't put anything there, let alone share it.
+
+# --- Who it runs as --------------------------------------------------
+# Its own user, created by the ui-layer recipe: no login, no home, owns no
+# files at all. video: /dev/fb0 (the screen); input: /dev/input/event*
+# (the touch panel). Both device nodes belong to those groups.
+User=hubui
+Group=hubui
+SupplementaryGroups=video input
+UMask=0077
+
+# --- Privileges ------------------------------------------------------
+# No capabilities at all, and no way to gain any.
+CapabilityBoundingSet=
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+
+# --- Files -----------------------------------------------------------
+# Everything read-only; it writes nothing (only into the screen's memory).
+ProtectSystem=strict
+ProtectHome=yes
+ProtectProc=invisible
+
+# --- Devices ---------------------------------------------------------
+# Only the screen (the "fb" devices) and input devices, plus the harmless
+# standard ones (/dev/null, /dev/urandom, ...). By device TYPE, not by
+# path: at the time the UI starts, the final /dev/fb0 may not exist yet
+# (it waits for the display driver itself), but the kernel registers the
+# types themselves at boot.
+DevicePolicy=closed
+DeviceAllow=char-fb rw
+DeviceAllow=char-input rw
+
+# --- Network ---------------------------------------------------------
+# It only ever talks to backend_daemon on 127.0.0.1:8080. Any other
+# address is blocked by the kernel for this service, whatever the UI
+# tries: it can't reach the LAN or the internet at all.
+IPAddressDeny=any
+IPAddressAllow=localhost
+# Unix sockets only for the journal (its log messages).
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+# --- Kernel and system -----------------------------------------------
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+# Memory can't be both writable and executable (the software renderer
+# draws with plain CPU code; nothing is generated at run time).
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+# Only ordinary services' system calls, minus the privileged ones and those
+# changing priorities/limits; native 32-bit ARM only.
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+SystemCallArchitectures=native
+
 [Install]
 WantedBy=multi-user.target

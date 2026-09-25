@@ -26,7 +26,10 @@
  *
  * SECURITY. WiFi passwords pass through here but are never logged, and
  * never sent back to clients. Only requests from the hub itself may change
- * the WiFi (see ws.rs) until LAN clients are authenticated (#35).
+ * the WiFi (see ws.rs). The daemon isn't root (issue #37): it may use the
+ * control socket because wpa_supplicant's config gives it to the group
+ * "hubd" (ctrl_interface=... GROUP=hubd, see hub-wifi-init.sh), but it
+ * can't read the saved config file with the passwords.
  *
  * THE COUNTRY. WiFi channels are regulated per country. Out of the box the
  * chip runs in "world" mode, legal everywhere (channels 1-11). Routers
@@ -50,6 +53,8 @@ use tokio::net::UnixDatagram;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{timeout, Instant};
 
+use crate::helper;
+
 /* Network interface names on the DK2. "end0" is the Ethernet port (the
  * kernel's predictable name for the on-board MAC). */
 const ETHERNET_IF: &str = "end0";
@@ -57,9 +62,11 @@ const WIFI_IF: &str = "wlan0";
 
 /* wpa_supplicant's control socket for wlan0 (ctrl_interface in its config). */
 const WPA_CTRL: &str = "/run/wpa_supplicant/wlan0";
-/* Its config file -- only needed here to force it onto the flash after a
- * save (see sync_config). */
-const WPA_CONF: &str = "/usr/local/etc/universal-controller/wifi/wpa_supplicant.conf";
+/* Where our own ends of the control socket go (see Ctrl::open): a folder
+ * systemd makes for us, owned by our user (RuntimeDirectory= in
+ * backend-daemon.service). We run unprivileged (issue #37) and may not
+ * create files directly in /run. */
+const CTRL_DIR: &str = "/run/backend-daemon";
 
 /* How long one command may take to be answered. */
 const REPLY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -244,28 +251,29 @@ const AVAHI_HUB_CONF: &str = "/run/hub-avahi/avahi-daemon.conf";
  * avahi's config with that one interface and restarts avahi -- about a
  * second without the name, only when the link changes. */
 async fn follow_avahi(iface: &str) -> Result<(), String> {
-    let iface = iface.to_string();
-    tokio::task::spawn_blocking(move || {
+    let owned = iface.to_string();
+    let changed = tokio::task::spawn_blocking(move || -> Result<bool, String> {
         let stock = std::fs::read_to_string(AVAHI_STOCK_CONF).map_err(|e| format!("{AVAHI_STOCK_CONF}: {e}"))?;
-        let conf = avahi_config(&stock, &iface);
+        let conf = avahi_config(&stock, &owned);
         if std::fs::read_to_string(AVAHI_HUB_CONF).ok().as_deref() == Some(conf.as_str()) {
-            return Ok(()); /* already on this interface */
+            return Ok(false); /* already on this interface */
         }
+        /* The folder is made by systemd for us (RuntimeDirectory= in
+         * backend-daemon.service); creating it here too keeps this working
+         * when the daemon runs as root on a PC. */
         let dir = std::path::Path::new(AVAHI_HUB_CONF).parent().unwrap_or(Path::new("/run"));
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         std::fs::write(AVAHI_HUB_CONF, conf).map_err(|e| e.to_string())?;
-        let status = std::process::Command::new("systemctl")
-            .args(["restart", "avahi-daemon.service"])
-            .status()
-            .map_err(|e| format!("systemctl: {e}"))?;
-        if !status.success() {
-            return Err("systemctl restart avahi-daemon failed".into());
-        }
-        println!("network: the .local name is now announced on {iface} only");
-        Ok(())
+        Ok(true)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+    if changed {
+        /* Restarting a service needs root: hub-helper does it (helper.rs). */
+        helper::run(helper::Command::AvahiRestart).await?;
+        println!("network: the .local name is now announced on {iface} only");
+    }
+    Ok(())
 }
 
 /* The stock avahi config with `allow-interfaces=<iface>` in its [server]
@@ -486,19 +494,15 @@ async fn set_network(ctrl: &Ctrl, id: &str, name: &str, value: &str) -> Result<(
 }
 
 /* SAVE_CONFIG writes the config to a .tmp file and renames it into place
- * (wpa_supplicant's config_file.c), but never fsyncs. Doing that here makes
- * the new setting survive a power cut right after. */
+ * (wpa_supplicant's config_file.c), but never fsyncs. Syncing it makes the
+ * new setting survive a power cut right after. The file holds the WiFi
+ * passwords and is root-only, and we aren't root (issue #37), so
+ * hub-helper does the sync (helper.rs). */
 async fn save_config(ctrl: &Ctrl) -> Result<(), String> {
     expect_ok(ctrl.request("SAVE_CONFIG").await?, "save configuration")?;
-    tokio::task::spawn_blocking(|| sync_config(Path::new(WPA_CONF)))
+    helper::run(helper::Command::WifiSync)
         .await
-        .map_err(|e| e.to_string())?
         .map_err(|e| format!("could not sync the WiFi configuration: {e}"))
-}
-
-fn sync_config(path: &Path) -> std::io::Result<()> {
-    std::fs::File::open(path)?.sync_all()?;
-    std::fs::File::open(path.parent().unwrap_or(Path::new("/")))?.sync_all()
 }
 
 fn expect_ok(answer: String, what: &str) -> Result<(), String> {
@@ -529,7 +533,10 @@ impl Ctrl {
     /* `attach`: also receive events (see the header comment). */
     async fn open(attach: bool) -> Result<Self, String> {
         let n = NEXT_SOCKET.fetch_add(1, Ordering::Relaxed);
-        let local = PathBuf::from(format!("/run/backend-daemon-wpa-{}-{n}", std::process::id()));
+        /* Only matters when running as root on a PC; on the board systemd
+         * has made the folder already, and we couldn't create it anyway. */
+        let _ = std::fs::create_dir_all(CTRL_DIR);
+        let local = PathBuf::from(format!("{CTRL_DIR}/wpa-{}-{n}", std::process::id()));
         /* A leftover from a crashed run would make bind() fail. */
         let _ = std::fs::remove_file(&local);
         let socket = UnixDatagram::bind(&local).map_err(|e| format!("WiFi control socket: {e}"))?;

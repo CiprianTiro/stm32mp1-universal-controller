@@ -1,0 +1,107 @@
+#!/usr/sbin/nft -f
+# The hub's firewall (issue #37). Loaded by hub-firewall.service before any
+# network interface comes up.
+#
+# RULE: nothing from the network reaches the hub unless it's listed here.
+# Only the services the hub offers are open:
+#
+#   tcp 8443   the LAN API (wss://, paired clients only -- ws.rs)
+#   udp 5353   mDNS: answering "where is stm32mp1.local?" (avahi)
+#   on the setup hotspot's interface (uap0) only, so only while it's open:
+#     tcp 80   the setup page (hotspot.rs)
+#     udp 67   DHCP: handing out addresses to phones that join it
+#
+# plus replies to connections the hub itself opened (MQTT to the cloud,
+# DNS, time, DHCP, ...), which are let through automatically. Development
+# images also open SSH (tcp 22) via /etc/hub-firewall/hub.d/ssh.nft; the
+# production image has neither sshd nor that file.
+#
+# Not listed = not reachable, even if some program starts listening by
+# mistake (e.g. backend_daemon's local API is on 127.0.0.1:8080 anyway;
+# this would stop it from the LAN even if it weren't). Outgoing traffic is
+# not restricted: that would mostly break updates/cloud, and is better
+# handled per service (see IPAddressDeny= in ui-layer.service).
+#
+# Check it on the board: `nft list ruleset`. Counters show how much was
+# dropped; `journalctl -k | grep hub-firewall` shows a sample of it.
+
+# Replace the table in one go (the whole file is one transaction): create
+# it if it's missing, so deleting can't fail, then delete and redefine.
+table inet hub
+delete table inet hub
+
+# "inet" = one table for IPv4 and IPv6 together.
+table inet hub {
+    # The TCP ports of services the hub offers on every interface. A set,
+    # so ssh.nft can add port 22 to it without touching these rules.
+    set lan_tcp {
+        type inet_service
+        elements = { 8443 }
+    }
+
+    chain input {
+        # Every packet addressed to the hub itself passes through here.
+        # policy drop: whatever no rule accepts is thrown away, silently
+        # (no "port closed" answer that would help someone scanning).
+        type filter hook input priority filter; policy drop;
+
+        # Replies to connections the hub started, and traffic belonging to
+        # connections already accepted. Broken/impossible packets: out.
+        ct state vmap { established : accept, related : accept, invalid : drop }
+
+        # The hub talking to itself (the UI to backend_daemon on 127.0.0.1).
+        iif "lo" accept
+
+        # ICMP: "ping" answered, but at most 5 per second (no ping
+        # floods). IPv6 doesn't work at all without ICMPv6 (it finds its
+        # neighbours and routers with it), so that's accepted in full.
+        icmp type echo-request limit rate 5/second accept
+        icmp type { destination-unreachable, time-exceeded, parameter-problem } accept
+        icmpv6 type echo-request limit rate 5/second accept
+        icmpv6 type != echo-request accept
+
+        # DHCP: the router's answers when the hub asks for an address
+        # (IPv4 from port 67 to 68; IPv6 from a link-local address 547 to
+        # 546). Mostly handled as replies already; these cover broadcasts.
+        udp sport 67 udp dport 68 accept
+        ip6 saddr fe80::/10 udp sport 547 udp dport 546 accept
+
+        # mDNS (stm32mp1.local).
+        udp dport 5353 accept
+
+        # The hub's own services.
+        tcp dport @lan_tcp accept
+
+        # The setup hotspot: its interface only exists while it's open.
+        iifname "uap0" tcp dport 80 accept
+        iifname "uap0" udp dport 67 accept
+
+        # Windows file-sharing name lookups (NetBIOS, ports 137/138): home
+        # routers ask every device on the LAN for its name, on the DK2
+        # every 15 s. Harmless, and the hub has no such service -- dropped
+        # WITHOUT logging, or they'd be most of the log below (seen on the
+        # board: ~11,000 useless lines a day written to flash).
+        udp dport { 137, 138 } counter drop comment "NetBIOS, not logged"
+
+        # Everything else is dropped (policy above). Packets sent to the
+        # hub specifically (not broadcasts, of which a home network has
+        # plenty) are also logged, at most 5 a minute, and counted.
+        meta pkttype host limit rate 5/minute log prefix "hub-firewall drop: "
+        counter comment "dropped"
+    }
+
+    chain forward {
+        # The hub is not a router: nothing is passed between interfaces
+        # (e.g. from the setup hotspot to the home network).
+        type filter hook forward priority filter; policy drop;
+    }
+
+    chain output {
+        # What the hub sends: not restricted (see above).
+        type filter hook output priority filter; policy accept;
+    }
+}
+
+# Additions from other packages (development: ssh.nft). A pattern that
+# matches no file is not an error.
+include "/etc/hub-firewall/hub.d/*.nft"

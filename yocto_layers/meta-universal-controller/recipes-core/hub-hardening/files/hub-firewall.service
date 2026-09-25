@@ -1,0 +1,37 @@
+# Loads the hub's firewall (issue #37, see hub-firewall.nft) before any
+# network interface is configured, so there's no moment where the hub is
+# on the network without it.
+[Unit]
+Description=Universal Controller firewall
+# Run early: not after the usual base system (DefaultDependencies=no), but
+# before the network (network-pre.target is exactly for this; systemd-
+# networkd waits for it). Needs only the rootfs (nft and its rules).
+DefaultDependencies=no
+Wants=network-pre.target
+Before=network-pre.target
+# And back out cleanly at shutdown.
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/hub-firewall/hub.nft
+# `systemctl reload hub-firewall` after editing the rules: the file
+# replaces the table in one transaction (see its top).
+ExecReload=/usr/sbin/nft -f /etc/hub-firewall/hub.nft
+ExecStop=/usr/sbin/nft delete table inet hub
+
+# nft only needs to talk to the kernel's netfilter (netlink) with the
+# network-admin capability; everything else is off.
+CapabilityBoundingSet=CAP_NET_ADMIN
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+RestrictAddressFamilies=AF_NETLINK AF_UNIX
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

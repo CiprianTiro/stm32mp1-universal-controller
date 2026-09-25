@@ -3,7 +3,7 @@
 # Target Architecture: STMicroelectronics STM32MP1 (Cortex-A7 + Cortex-M4)
 # =============================================================================
 
-.PHONY: help build-hw build-qemu shell-yocto clean-yocto build-m4 build-a7 test-qemu verify-qemu flash-hw flash-m4 netboot restore-userfs
+.PHONY: help build-hw build-hw-prod build-qemu shell-yocto clean-yocto build-m4 build-a7 test-qemu verify-qemu flash-hw flash-hw-prod flash-m4 netboot restore-userfs audit
 
 # Zephyr workspace used to build the M4 firmware: a normal `west init` +
 # `west update` checkout at the Zephyr version pinned in firmware_m4/west.yml
@@ -24,6 +24,8 @@ help:
 	@echo "Available Execution Commands:"
 	@echo "  make build-hw      - Build EVERYTHING for the DK2: M4 firmware + Yocto image (A7 apps included)"
 	@echo "  make flash-hw      - Flash the built image to the DK2 over USB (keeps /usr/local; FULL_FLASH=1 wipes it)"
+	@echo "  make build-hw-prod - Build the PRODUCTION image variant (no SSH at all)"
+	@echo "  make flash-hw-prod - Flash the production image (the board then has no SSH)"
 	@echo "  make restore-userfs - Put the newest /usr/local backup (taken by flash-hw) back on the board"
 	@echo "  make flash-m4      - Update ONLY the M4 firmware on a running board over SSH (no reflash)"
 	@echo "  make netboot       - One-shot TFTP/NFS netboot with the latest build, no eMMC changes (see wiki: Network-Boot)"
@@ -35,6 +37,7 @@ help:
 	@echo "-----------------------------------------------------------------------------"
 	@echo "  make build-m4      - Compile only the Cortex-M4 Zephyr firmware"
 	@echo "  make build-a7      - Compile Cortex-A7 Linux native daemons (Rust/Cargo)"
+	@echo "  make audit         - Check all Rust crates for known vulnerabilities + licenses (cargo audit/deny)"
 	@echo "============================================================================="
 
 # -----------------------------------------------------------------------------
@@ -48,6 +51,13 @@ help:
 build-hw: build-m4
 	@echo "🎬 Invoking Yocto hardware build pipeline..."
 	@cd yocto_layers && ./run_build.sh
+
+# The production variant (issue #37): same image without SSH (see
+# universal-controller-image-prod.bb). Built next to the development one,
+# in the same build directory, so switching between them is quick.
+build-hw-prod: build-m4
+	@echo "🎬 Invoking Yocto hardware build pipeline (production image)..."
+	@cd yocto_layers && ./run_build.sh hardware universal-controller-image-prod
 
 build-qemu:
 	@echo "🎬 Invoking Yocto QEMU emulation build pipeline..."
@@ -65,6 +75,12 @@ clean-yocto:
 flash-hw:
 	@echo "📲 Flashing production image to DK2 over USB DFU..."
 	@cd yocto_layers && BOARD_HOST=$(BOARD_HOST) ./flash_hw.sh
+
+# Without SSH on the production image, the automatic /usr/local backup
+# can't be taken first (it's skipped with a note); /usr/local is kept anyway.
+flash-hw-prod:
+	@echo "📲 Flashing PRODUCTION image to DK2 over USB DFU..."
+	@cd yocto_layers && IMAGE=universal-controller-image-prod BOARD_HOST=$(BOARD_HOST) ./flash_hw.sh
 
 # Restores the board identity + device registry saved by flash-hw (#56).
 restore-userfs:
@@ -111,6 +127,23 @@ build-a7:
 	@echo "🦀 Compiling Cortex-A7 Application Daemons via Cargo Matrix..."
 	@cd linux_a7/backend_daemon && cargo build --release
 	@cd linux_a7/ui_layer && cargo build --release
+
+# Dependency audit (issue #37), for every Rust program in the repo:
+#   cargo audit -- any crate in Cargo.lock with a known security advisory
+#                  (RustSec database, downloaded fresh each run)?
+#   cargo deny  -- the same advisories, plus: only allowed licenses, crates
+#                  only from crates.io, duplicate versions reported
+#                  (policy: linux_a7/deny.toml).
+# Fails on any finding. Run before every merge; the result at the time of
+# #37 is on the wiki's Hardening page.
+# (rust-hello, the toolchain smoke test, has no dependencies: nothing to audit.)
+RUST_CRATES := linux_a7/backend_daemon linux_a7/ui_layer
+audit:
+	@for crate in $(RUST_CRATES); do \
+		echo "🔍 $$crate"; \
+		(cd $$crate && cargo audit && cargo deny --config $(CURDIR)/linux_a7/deny.toml check) || exit 1; \
+	done
+	@echo "✅ No known vulnerabilities, all licenses allowed."
 
 # -----------------------------------------------------------------------------
 # 3. KERNEL MANIPULATION PIPELINES

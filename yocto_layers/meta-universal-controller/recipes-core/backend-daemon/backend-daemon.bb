@@ -7,15 +7,29 @@ HOMEPAGE = "https://github.com/CiprianTiro/stm32mp1-universal-controller"
 LICENSE = "GPL-3.0-only"
 LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/GPL-3.0-only;md5=c79ff39f19dfec6d293b95dea7b07891"
 
-inherit cargo systemd
+# NOTE: deliberately NOT `inherit cargo` any more (issue #37) -- built the
+# same way as ui-layer.bb: with the rustup toolchain in the yocto-builder
+# container (see yocto_layers/Dockerfile), borrowing only Yocto's C
+# cross-toolchain for C code and the final link.
+#
+# Why: the cargo class compiles with Poky's own Rust, 1.75 on scarthgap.
+# Security fixes increasingly need newer compilers -- the one that forced
+# this: `time` fixed a denial-of-service bug (RUSTSEC-2026-0009) only in
+# versions that need Rust 1.88. Stuck on 1.75, the hub could not take such
+# fixes at all, which `make audit` (zero known vulnerabilities) can't
+# accept. Side benefits: no more crate:// list with 170 checksums to keep
+# in sync with Cargo.lock by hand, no Cargo.lock "version = 3" edits, no
+# pinning crates back for the old compiler.
+# Tradeoff (same as ui-layer): do_compile downloads the crates itself (see
+# do_compile[network]) instead of bitbake's fetcher. Integrity is the same:
+# --locked builds exactly what Cargo.lock lists, and cargo checks every
+# downloaded crate against the SHA-256 checksum recorded there.
+inherit systemd useradd
 
 # Real source lives at linux_a7/backend_daemon/ (repo root), not duplicated
 # into this layer (unlike rust-hello.bb) -- referencing it via
 # FILESEXTRAPATHS means editing that source and rebuilding actually picks up
 # the change, since bitbake tracks a checksum of the fetched file:// content.
-# A plain S pointing straight at that directory with no fetcher at all would
-# build from current disk state too, but bitbake would have no way to notice
-# the source changed and re-trigger do_compile.
 #
 # The build always runs inside the yocto-builder Docker container (see
 # run_build.sh), which only bind-mounts yocto_layers/ as its workspace --
@@ -29,8 +43,8 @@ FILESEXTRAPATHS:prepend := "/home/builder/linux_a7/backend_daemon:"
 
 # file://src/main.rs (not just main.rs) preserves that subpath under
 # ${WORKDIR}, landing at ${WORKDIR}/src/main.rs already correctly laid out
-# for cargo -- no do_configure:prepend shuffle needed here, unlike
-# rust-hello.bb's flat file:// list.
+# for cargo. patched/rumqttc is a whole folder (a patched copy of one
+# dependency, see its PATCHED.md), fetched as is.
 SRC_URI = " \
     file://Cargo.toml \
     file://Cargo.lock \
@@ -39,6 +53,7 @@ SRC_URI = " \
     file://src/control.rs \
     file://src/device.rs \
     file://src/health.rs \
+    file://src/helper.rs \
     file://src/hotspot.rs \
     file://src/main.rs \
     file://src/mqtt.rs \
@@ -49,377 +64,121 @@ SRC_URI = " \
     file://src/store.rs \
     file://src/tls.rs \
     file://src/ws.rs \
+    file://patched/rumqttc \
 "
 
-# The actual dependency tree (Tokio + Axum/WebSocket + transitive deps),
-# pinned to exactly what's resolved in Cargo.lock. Regenerate this list by
-# running `cargo bitbake` from linux_a7/backend_daemon/ whenever
-# dependencies change, then merge the new crate:// list back in here.
-# Note "syn" appears twice, at two different major versions (2.x and 3.x)
-# -- different parts of the dependency tree require different majors, and
-# cargo resolves both into the lockfile simultaneously; that's expected,
-# not a mistake, and both need their own crate:// entry and checksum.
-#
-# GOTCHA hit repeatedly while setting this up: any `cargo` command that
-# touches Cargo.lock (cargo add/update/check/test after editing Cargo.toml)
-# regenerates it with "version = 4" at the top -- Cargo 1.97+'s new
-# default. Both cargo-bitbake (generating this recipe) and Yocto's own
-# bundled cargo here (scarthgap-era) fail outright on that ("lock file
-# version 4 requires -Znext-lockfile-bump"). After any such command,
-# manually edit that line back to "version = 3" in
-# linux_a7/backend_daemon/Cargo.lock before rebuilding -- the rest of the
-# file's content is otherwise unaffected.
+# The rustup toolchain baked into the container image (Dockerfile). Absolute
+# paths because bitbake scrubs PATH/HOME down to its own minimal set inside
+# tasks, so `cargo` and rustup's default ~ lookups wouldn't resolve.
+RUSTUP_HOME_DIR = "/home/builder/.rustup"
+RUSTUP_CARGO_HOME = "/home/builder/.cargo"
+
+# The Rust target for the machine being built: 32-bit ARM with hardware
+# floating point on the DK2 (Cortex-A7), 64-bit ARM for QEMU (qemuarm64).
+# ("aarch64" is an override bitbake sets itself when TARGET_ARCH is aarch64.)
+BACKEND_RUST_TARGET = "armv7-unknown-linux-gnueabihf"
+BACKEND_RUST_TARGET:aarch64 = "aarch64-unknown-linux-gnu"
+# Optimize for the actual CPU (Cortex-A7, with NEON) instead of the generic
+# armv7 baseline. QEMU's generic ARM64: no extra flag.
+BACKEND_RUST_CPU_FLAGS = "-C target-cpu=cortex-a7"
+BACKEND_RUST_CPU_FLAGS:aarch64 = ""
+
+# Crates are downloaded by cargo during do_compile (see the NOTE at the top)
+# -- bitbake blocks network in every task except do_fetch unless told
+# otherwise. Cached in ${RUSTUP_CARGO_HOME}/registry, so only once.
+do_compile[network] = "1"
+
+do_compile() {
+    # Make sure the toolchain can build for this machine. Instant if the
+    # target is installed already (the Dockerfile adds both); a container
+    # made from an older image gets the missing one here, once.
+    ${RUSTUP_CARGO_HOME}/bin/rustup target add ${BACKEND_RUST_TARGET}
+
+    # Cargo wants the linker to be a single executable path, but Yocto's
+    # ${CC} is a command PLUS flags ("arm-poky-linux-gnueabi-gcc -mthumb
+    # -mfpu=neon-vfpv4 -mfloat-abi=hard -mcpu=cortex-a7 --sysroot=...").
+    # A tiny wrapper script bridges that. ${LDFLAGS} adds Yocto's standard
+    # link flags (e.g. --hash-style=gnu, which Yocto's QA checks require).
+    # The same wrapper serves as the C compiler for the dependencies that
+    # compile C code through the `cc` crate: ring (crypto) and libdbus-sys
+    # (D-Bus for Bluetooth, built from source -- the "vendored" feature).
+    printf '#!/bin/sh\nexec %s %s "$@"\n' "${CC}" "${LDFLAGS}" > ${WORKDIR}/target-link.sh
+    printf '#!/bin/sh\nexec %s "$@"\n' "${CC}" > ${WORKDIR}/target-cc.sh
+    # Build scripts (build.rs) and proc-macros run on the BUILD machine
+    # (x86_64, inside the container), so they need the host's own gcc, not
+    # the ARM one. Rust's default host linker name is `cc`, which isn't in
+    # bitbake's restricted PATH -- point it at ${BUILD_CC} explicitly.
+    printf '#!/bin/sh\nexec %s "$@"\n' "${BUILD_CC}" > ${WORKDIR}/host-cc.sh
+    chmod +x ${WORKDIR}/target-link.sh ${WORKDIR}/target-cc.sh ${WORKDIR}/host-cc.sh
+
+    export RUSTUP_HOME="${RUSTUP_HOME_DIR}"
+    export CARGO_HOME="${RUSTUP_CARGO_HOME}"
+
+    # Cargo's and the cc crate's per-target variables are named after the
+    # target: upper-case with underscores for cargo
+    # (CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER), underscores for
+    # cc (CC_armv7_unknown_linux_gnueabihf). Target-specific names win over
+    # the plain CC/CFLAGS bitbake exports, so host build scripts don't get
+    # ARM flags or vice versa.
+    target_upper=$(echo ${BACKEND_RUST_TARGET} | tr 'a-z-' 'A-Z_')
+    target_lower=$(echo ${BACKEND_RUST_TARGET} | tr '-' '_')
+    export "CARGO_TARGET_${target_upper}_LINKER=${WORKDIR}/target-link.sh"
+    export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER="${WORKDIR}/host-cc.sh"
+    # --remap-path-prefix: rustc embeds source file paths in the binary (for
+    # panic messages / debug info), which would leak build-machine paths
+    # like /home/builder/workspace/build/tmp/... -- Yocto's QA flags that
+    # as a [buildpaths] issue. These rewrite them to neutral paths instead.
+    export "CARGO_TARGET_${target_upper}_RUSTFLAGS=${BACKEND_RUST_CPU_FLAGS} --remap-path-prefix=${WORKDIR}=/usr/src/debug/${PN}/${PV} --remap-path-prefix=${RUSTUP_CARGO_HOME}=/cargo"
+    export "CC_${target_lower}=${WORKDIR}/target-cc.sh"
+    export "CFLAGS_${target_lower}=${CFLAGS}"
+    export CC_x86_64_unknown_linux_gnu="${WORKDIR}/host-cc.sh"
+    export CFLAGS_x86_64_unknown_linux_gnu="${BUILD_CFLAGS}"
+
+    ${RUSTUP_CARGO_HOME}/bin/cargo build \
+        --release \
+        --locked \
+        --target ${BACKEND_RUST_TARGET} \
+        --manifest-path ${S}/Cargo.toml \
+        --target-dir ${B}/target
+}
+
 SRC_URI += " \
-    crate://crates.io/async-trait/0.1.92 \
-    crate://crates.io/atomic-waker/1.1.2 \
-    crate://crates.io/autocfg/1.5.1 \
-    crate://crates.io/axum/0.7.9 \
-    crate://crates.io/axum-core/0.4.5 \
-    crate://crates.io/base64/0.22.1 \
-    crate://crates.io/bitflags/2.13.2 \
-    crate://crates.io/block-buffer/0.10.4 \
-    crate://crates.io/bluer/0.17.4 \
-    crate://crates.io/byteorder/1.5.0 \
-    crate://crates.io/bytes/1.12.1 \
-    crate://crates.io/cc/1.4.7 \
-    crate://crates.io/cfg-if/1.0.5 \
-    crate://crates.io/cfg_aliases/0.2.2 \
-    crate://crates.io/core-foundation/0.9.4 \
-    crate://crates.io/core-foundation-sys/0.8.7 \
-    crate://crates.io/cpufeatures/0.2.17 \
-    crate://crates.io/crypto-common/0.1.7 \
-    crate://crates.io/curve25519-dalek/4.1.3 \
-    crate://crates.io/curve25519-dalek-derive/0.1.1 \
-    crate://crates.io/custom_debug/0.6.2 \
-    crate://crates.io/custom_debug_derive/0.6.2 \
-    crate://crates.io/darling/0.20.11 \
-    crate://crates.io/darling_core/0.20.11 \
-    crate://crates.io/darling_macro/0.20.11 \
-    crate://crates.io/data-encoding/2.11.1 \
-    crate://crates.io/dbus/0.9.12 \
-    crate://crates.io/dbus-crossroads/0.5.3 \
-    crate://crates.io/dbus-tokio/0.7.6 \
-    crate://crates.io/deranged/0.4.0 \
-    crate://crates.io/digest/0.10.7 \
-    crate://crates.io/displaydoc/0.2.7 \
-    crate://crates.io/errno/0.3.14 \
-    crate://crates.io/fiat-crypto/0.2.9 \
-    crate://crates.io/find-msvc-tools/0.1.13 \
-    crate://crates.io/flume/0.11.1 \
-    crate://crates.io/fnv/1.0.7 \
-    crate://crates.io/form_urlencoded/1.2.2 \
-    crate://crates.io/futures/0.3.34 \
-    crate://crates.io/futures-channel/0.3.34 \
-    crate://crates.io/futures-core/0.3.34 \
-    crate://crates.io/futures-executor/0.3.34 \
-    crate://crates.io/futures-io/0.3.34 \
-    crate://crates.io/futures-macro/0.3.34 \
-    crate://crates.io/futures-sink/0.3.34 \
-    crate://crates.io/futures-task/0.3.34 \
-    crate://crates.io/futures-util/0.3.34 \
-    crate://crates.io/generic-array/0.14.7 \
-    crate://crates.io/getrandom/0.2.17 \
-    crate://crates.io/heck/0.5.0 \
-    crate://crates.io/hex/0.4.3 \
-    crate://crates.io/hkdf/0.12.4 \
-    crate://crates.io/hmac/0.12.1 \
-    crate://crates.io/http/1.5.0 \
-    crate://crates.io/http-body/1.1.0 \
-    crate://crates.io/http-body-util/0.1.5 \
-    crate://crates.io/httparse/1.10.1 \
-    crate://crates.io/httpdate/1.0.3 \
-    crate://crates.io/hyper/1.11.1 \
-    crate://crates.io/hyper-util/0.1.20 \
-    crate://crates.io/ident_case/1.0.1 \
-    crate://crates.io/itoa/1.0.18 \
-    crate://crates.io/lazy_static/1.5.0 \
-    crate://crates.io/libc/0.2.189 \
-    crate://crates.io/libdbus-sys/0.2.7 \
-    crate://crates.io/lock_api/0.4.14 \
-    crate://crates.io/log/0.4.34 \
-    crate://crates.io/macaddr/1.0.1 \
-    crate://crates.io/matchit/0.7.3 \
-    crate://crates.io/memchr/2.8.3 \
-    crate://crates.io/mime/0.3.17 \
-    crate://crates.io/mio/1.2.3 \
-    crate://crates.io/nix/0.29.0 \
-    crate://crates.io/num-conv/0.1.0 \
-    crate://crates.io/num-derive/0.4.2 \
-    crate://crates.io/num-traits/0.2.19 \
-    crate://crates.io/once_cell/1.21.4 \
-    crate://crates.io/openssl-probe/0.1.6 \
-    crate://crates.io/pem/3.0.6 \
-    crate://crates.io/percent-encoding/2.3.2 \
-    crate://crates.io/pin-project/1.1.13 \
-    crate://crates.io/pin-project-internal/1.1.13 \
-    crate://crates.io/pin-project-lite/0.2.17 \
-    crate://crates.io/pkg-config/0.3.34 \
-    crate://crates.io/powerfmt/0.2.0 \
-    crate://crates.io/ppv-lite86/0.2.21 \
-    crate://crates.io/proc-macro2/1.0.107 \
-    crate://crates.io/quote/1.0.47 \
-    crate://crates.io/rand/0.8.8 \
-    crate://crates.io/rand_chacha/0.3.1 \
-    crate://crates.io/rand_core/0.6.4 \
-    crate://crates.io/rcgen/0.13.2 \
-    crate://crates.io/ring/0.17.14 \
-    crate://crates.io/rumqttc/0.24.0 \
-    crate://crates.io/rustc_version/0.4.1 \
-    crate://crates.io/rustls/0.22.4 \
-    crate://crates.io/rustls-native-certs/0.7.3 \
-    crate://crates.io/rustls-pemfile/2.2.0 \
-    crate://crates.io/rustls-pki-types/1.15.1 \
-    crate://crates.io/rustls-webpki/0.102.8 \
-    crate://crates.io/rustversion/1.0.23 \
-    crate://crates.io/ryu/1.0.23 \
-    crate://crates.io/schannel/0.1.29 \
-    crate://crates.io/scopeguard/1.2.0 \
-    crate://crates.io/security-framework/2.11.1 \
-    crate://crates.io/security-framework-sys/2.17.0 \
-    crate://crates.io/semver/1.0.28 \
-    crate://crates.io/serde/1.0.229 \
-    crate://crates.io/serde_core/1.0.229 \
-    crate://crates.io/serde_derive/1.0.229 \
-    crate://crates.io/serde_json/1.0.151 \
-    crate://crates.io/serde_path_to_error/0.1.20 \
-    crate://crates.io/serde_urlencoded/0.7.1 \
-    crate://crates.io/sha1/0.10.7 \
-    crate://crates.io/sha2/0.10.9 \
-    crate://crates.io/shlex/2.0.1 \
-    crate://crates.io/signal-hook-registry/1.4.8 \
-    crate://crates.io/slab/0.4.12 \
-    crate://crates.io/smallvec/1.16.1 \
-    crate://crates.io/socket2/0.6.5 \
-    crate://crates.io/spake2/0.4.0 \
-    crate://crates.io/spin/0.9.9 \
-    crate://crates.io/strsim/0.11.1 \
-    crate://crates.io/strum/0.26.3 \
-    crate://crates.io/strum_macros/0.26.4 \
-    crate://crates.io/subtle/2.6.1 \
-    crate://crates.io/syn/2.0.119 \
-    crate://crates.io/syn/3.0.6 \
-    crate://crates.io/sync_wrapper/1.0.2 \
-    crate://crates.io/synstructure/0.13.2 \
-    crate://crates.io/thiserror/1.0.69 \
-    crate://crates.io/thiserror-impl/1.0.69 \
-    crate://crates.io/time/0.3.41 \
-    crate://crates.io/time-core/0.1.4 \
-    crate://crates.io/tokio/1.53.1 \
-    crate://crates.io/tokio-macros/2.7.2 \
-    crate://crates.io/tokio-rustls/0.25.0 \
-    crate://crates.io/tokio-stream/0.1.19 \
-    crate://crates.io/tokio-tungstenite/0.24.0 \
-    crate://crates.io/tower/0.5.3 \
-    crate://crates.io/tower-layer/0.3.3 \
-    crate://crates.io/tower-service/0.3.3 \
-    crate://crates.io/tracing/0.1.44 \
-    crate://crates.io/tracing-core/0.1.36 \
-    crate://crates.io/tungstenite/0.24.0 \
-    crate://crates.io/typenum/1.20.1 \
-    crate://crates.io/unicode-ident/1.0.26 \
-    crate://crates.io/untrusted/0.9.0 \
-    crate://crates.io/utf-8/0.7.6 \
-    crate://crates.io/uuid/1.10.0 \
-    crate://crates.io/version_check/0.9.5 \
-    crate://crates.io/wasi/0.11.1+wasi-snapshot-preview1 \
-    crate://crates.io/windows-link/0.2.1 \
-    crate://crates.io/windows-sys/0.52.0 \
-    crate://crates.io/windows-sys/0.61.2 \
-    crate://crates.io/windows-targets/0.52.6 \
-    crate://crates.io/windows_aarch64_gnullvm/0.52.6 \
-    crate://crates.io/windows_aarch64_msvc/0.52.6 \
-    crate://crates.io/windows_i686_gnu/0.52.6 \
-    crate://crates.io/windows_i686_gnullvm/0.52.6 \
-    crate://crates.io/windows_i686_msvc/0.52.6 \
-    crate://crates.io/windows_x86_64_gnu/0.52.6 \
-    crate://crates.io/windows_x86_64_gnullvm/0.52.6 \
-    crate://crates.io/windows_x86_64_msvc/0.52.6 \
-    crate://crates.io/yasna/0.5.2 \
-    crate://crates.io/zerocopy/0.8.57 \
-    crate://crates.io/zerocopy-derive/0.8.57 \
-    crate://crates.io/zeroize/1.8.2 \
-    crate://crates.io/zmij/1.0.23 \
+    file://backend-daemon.service \
+    file://backend-daemon-tmpfiles.conf \
+    file://hub-helper.sh \
+    file://hub-helper.socket \
+    file://hub-helper@.service \
 "
-
-SRC_URI[async-trait-0.1.92.sha256sum] = "82f6aeea286b8eb4dd3431a1be1b59d290ace00f5bfd8e2a159bc2a05e2c1667"
-SRC_URI[atomic-waker-1.1.2.sha256sum] = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
-SRC_URI[autocfg-1.5.1.sha256sum] = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
-SRC_URI[axum-0.7.9.sha256sum] = "edca88bc138befd0323b20752846e6587272d3b03b0343c8ea28a6f819e6e71f"
-SRC_URI[axum-core-0.4.5.sha256sum] = "09f2bd6146b97ae3359fa0cc6d6b376d9539582c7b4220f041a33ec24c226199"
-SRC_URI[base64-0.22.1.sha256sum] = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
-SRC_URI[bitflags-2.13.2.sha256sum] = "3ded4057c258ba199e2d26386d3af3780957ecaee6c4ef4041c6b4b8b97c0b06"
-SRC_URI[block-buffer-0.10.4.sha256sum] = "3078c7629b62d3f0439517fa394996acacc5cbc91c5a20d8c658e77abd503a71"
-SRC_URI[bluer-0.17.4.sha256sum] = "af68112f5c60196495c8b0eea68349817855f565df5b04b2477916d09fb1a901"
-SRC_URI[byteorder-1.5.0.sha256sum] = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
-SRC_URI[bytes-1.12.1.sha256sum] = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
-SRC_URI[cc-1.4.7.sha256sum] = "54413ede23c2daf518f35156dfde027feb2374004d63bd497f983c8db9c0e313"
-SRC_URI[cfg-if-1.0.5.sha256sum] = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
-SRC_URI[cfg_aliases-0.2.2.sha256sum] = "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527"
-SRC_URI[core-foundation-0.9.4.sha256sum] = "91e195e091a93c46f7102ec7818a2aa394e1e1771c3ab4825963fa03e45afb8f"
-SRC_URI[core-foundation-sys-0.8.7.sha256sum] = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
-SRC_URI[cpufeatures-0.2.17.sha256sum] = "59ed5838eebb26a2bb2e58f6d5b5316989ae9d08bab10e0e6d103e656d1b0280"
-SRC_URI[crypto-common-0.1.7.sha256sum] = "78c8292055d1c1df0cce5d180393dc8cce0abec0a7102adb6c7b1eef6016d60a"
-SRC_URI[curve25519-dalek-4.1.3.sha256sum] = "97fb8b7c4503de7d6ae7b42ab72a5a59857b4c937ec27a3d4539dba95b5ab2be"
-SRC_URI[curve25519-dalek-derive-0.1.1.sha256sum] = "f46882e17999c6cc590af592290432be3bce0428cb0d5f8b6715e4dc7b383eb3"
-SRC_URI[custom_debug-0.6.2.sha256sum] = "2da7d1ad9567b3e11e877f1d7a0fa0360f04162f94965fc4448fbed41a65298e"
-SRC_URI[custom_debug_derive-0.6.2.sha256sum] = "a707ceda8652f6c7624f2be725652e9524c815bf3b9d55a0b2320be2303f9c11"
-SRC_URI[darling-0.20.11.sha256sum] = "fc7f46116c46ff9ab3eb1597a45688b6715c6e628b5c133e288e709a29bcb4ee"
-SRC_URI[darling_core-0.20.11.sha256sum] = "0d00b9596d185e565c2207a0b01f8bd1a135483d02d9b7b0a54b11da8d53412e"
-SRC_URI[darling_macro-0.20.11.sha256sum] = "fc34b93ccb385b40dc71c6fceac4b2ad23662c7eeb248cf10d529b7e055b6ead"
-SRC_URI[data-encoding-2.11.1.sha256sum] = "4583a4551df46e2792f82ceeac45e850d2e2d5debba0b91f102385cda5b11f06"
-SRC_URI[dbus-0.9.12.sha256sum] = "3ab69f03cc8c4340c9c8e315114e1658e6775a9b16a04357973aa21cec22b32e"
-SRC_URI[dbus-crossroads-0.5.3.sha256sum] = "64bff0bd181fba667660276c6b7ebdc50cff37ce593e7adf9e734f89c8f444e8"
-SRC_URI[dbus-tokio-0.7.6.sha256sum] = "007688d459bc677131c063a3a77fb899526e17b7980f390b69644bdbc41fad13"
-SRC_URI[deranged-0.4.0.sha256sum] = "9c9e6a11ca8224451684bc0d7d5a7adbf8f2fd6887261a1cfc3c0432f9d4068e"
-SRC_URI[digest-0.10.7.sha256sum] = "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
-SRC_URI[displaydoc-0.2.7.sha256sum] = "c6232dd377dcc64799954cbd3a9bb882e9cdc1308ccd87b1c098f1fb2eaf82a8"
-SRC_URI[errno-0.3.14.sha256sum] = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
-SRC_URI[fiat-crypto-0.2.9.sha256sum] = "28dea519a9695b9977216879a3ebfddf92f1c08c05d984f8996aecd6ecdc811d"
-SRC_URI[find-msvc-tools-0.1.13.sha256sum] = "ef25905e51abafe4dcea6c15fec58c57b601cdbd0ee53d22ea1d3016c587d39b"
-SRC_URI[flume-0.11.1.sha256sum] = "da0e4dd2a88388a1f4ccc7c9ce104604dab68d9f408dc34cd45823d5a9069095"
-SRC_URI[fnv-1.0.7.sha256sum] = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
-SRC_URI[form_urlencoded-1.2.2.sha256sum] = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
-SRC_URI[futures-0.3.34.sha256sum] = "9a31d2a3fbaaeb2af2368bbdd904aa8e812d3c04a1ee10d3171f52d556e5d0a3"
-SRC_URI[futures-channel-0.3.34.sha256sum] = "b1f9e3d69d39e4862ffed03ed071a76f9a13ba1d9109d355b0f0aa6b15e393c4"
-SRC_URI[futures-core-0.3.34.sha256sum] = "92d699e522242e69e3003b94ecc1f960f3a5e015aa7c5d7486e65ad01dd94f5e"
-SRC_URI[futures-executor-0.3.34.sha256sum] = "031b47cf1a3c6cc8bc2fc76cd437f521619387907d469316e7c0bc278f1f5432"
-SRC_URI[futures-io-0.3.34.sha256sum] = "53c0fa8157de1303bfffdaa1cc2a673bfffb60102f76b0ef4441659124373fed"
-SRC_URI[futures-macro-0.3.34.sha256sum] = "9fb9654ba8355388abeb8dcb4fc62f511300867002afc858860463bdd9fe0c44"
-SRC_URI[futures-sink-0.3.34.sha256sum] = "1944426bf7d03f1d14f708785e4b33efd750b36d48a157b836b3efc15ede8e1d"
-SRC_URI[futures-task-0.3.34.sha256sum] = "cd417de3d1d015fc3bfd2b1ea46dfc7bab72ef86f1cc7cc9c78e728b34a6d1fd"
-SRC_URI[futures-util-0.3.34.sha256sum] = "0d50a92467f8ba5dd6e3ee5d4bd04d73ab2e4e1c44474a0674821dfce14b79bc"
-SRC_URI[generic-array-0.14.7.sha256sum] = "85649ca51fd72272d7821adaf274ad91c288277713d9c18820d8499a7ff69e9a"
-SRC_URI[getrandom-0.2.17.sha256sum] = "ff2abc00be7fca6ebc474524697ae276ad847ad0a6b3faa4bcb027e9a4614ad0"
-SRC_URI[heck-0.5.0.sha256sum] = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
-SRC_URI[hex-0.4.3.sha256sum] = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
-SRC_URI[hkdf-0.12.4.sha256sum] = "7b5f8eb2ad728638ea2c7d47a21db23b7b58a72ed6a38256b8a1849f15fbbdf7"
-SRC_URI[hmac-0.12.1.sha256sum] = "6c49c37c09c17a53d937dfbb742eb3a961d65a994e6bcdcf37e7399d0cc8ab5e"
-SRC_URI[http-1.5.0.sha256sum] = "918d3568bebf352712bc2ef3d46a8bcf1a75b373be6539de198e9105cbbf9ce0"
-SRC_URI[http-body-1.1.0.sha256sum] = "ca2a8f2913ee65f60facd6a5905613afaa448497a0230cc41ce022d93290bc2c"
-SRC_URI[http-body-util-0.1.5.sha256sum] = "23169fe34a5fbcdd3f3862e78fb9b6fccd5f02a6dc6f732547005d45631ce71c"
-SRC_URI[httparse-1.10.1.sha256sum] = "6dbf3de79e51f3d586ab4cb9d5c3e2c14aa28ed23d180cf89b4df0454a69cc87"
-SRC_URI[httpdate-1.0.3.sha256sum] = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
-SRC_URI[hyper-1.11.1.sha256sum] = "27b501faa50e7a26c3d3560ca625132f4078a17771f4810baf70475ae48cbe43"
-SRC_URI[hyper-util-0.1.20.sha256sum] = "96547c2556ec9d12fb1578c4eaf448b04993e7fb79cbaad930a656880a6bdfa0"
-SRC_URI[ident_case-1.0.1.sha256sum] = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
-SRC_URI[itoa-1.0.18.sha256sum] = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
-SRC_URI[lazy_static-1.5.0.sha256sum] = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
-SRC_URI[libc-0.2.189.sha256sum] = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
-SRC_URI[libdbus-sys-0.2.7.sha256sum] = "328c4789d42200f1eeec05bd86c9c13c7f091d2ba9a6ea35acdf51f31bc0f043"
-SRC_URI[lock_api-0.4.14.sha256sum] = "224399e74b87b5f3557511d98dff8b14089b3dadafcab6bb93eab67d3aace965"
-SRC_URI[log-0.4.34.sha256sum] = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
-SRC_URI[macaddr-1.0.1.sha256sum] = "baee0bbc17ce759db233beb01648088061bf678383130602a298e6998eedb2d8"
-SRC_URI[matchit-0.7.3.sha256sum] = "0e7465ac9959cc2b1404e8e2367b43684a6d13790fe23056cc8c6c5a6b7bcb94"
-SRC_URI[memchr-2.8.3.sha256sum] = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
-SRC_URI[mime-0.3.17.sha256sum] = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
-SRC_URI[mio-1.2.3.sha256sum] = "4b18443e9c262bfe8fa82f51666e2642c53393f7e5c27b3e1aeab922cff5b9d8"
-SRC_URI[nix-0.29.0.sha256sum] = "71e2746dc3a24dd78b3cfcb7be93368c6de9963d30f43a6a73998a9cf4b17b46"
-SRC_URI[num-conv-0.1.0.sha256sum] = "51d515d32fb182ee37cda2ccdcb92950d6a3c2893aa280e540671c2cd0f3b1d9"
-SRC_URI[num-derive-0.4.2.sha256sum] = "ed3955f1a9c7c0c15e092f9c887db08b1fc683305fdf6eb6684f22555355e202"
-SRC_URI[num-traits-0.2.19.sha256sum] = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
-SRC_URI[once_cell-1.21.4.sha256sum] = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
-SRC_URI[openssl-probe-0.1.6.sha256sum] = "d05e27ee213611ffe7d6348b942e8f942b37114c00cc03cec254295a4a17852e"
-SRC_URI[pem-3.0.6.sha256sum] = "1d30c53c26bc5b31a98cd02d20f25a7c8567146caf63ed593a9d87b2775291be"
-SRC_URI[percent-encoding-2.3.2.sha256sum] = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
-SRC_URI[pin-project-1.1.13.sha256sum] = "2466b2336ed02bcdca6b294417127b90ec92038d1d5c4fbeac971a922e0e0924"
-SRC_URI[pin-project-internal-1.1.13.sha256sum] = "c96395f0a926bc13b1c17622aaddda1ecb55d49c8f1bf9777e4d877800a43f8b"
-SRC_URI[pin-project-lite-0.2.17.sha256sum] = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
-SRC_URI[pkg-config-0.3.34.sha256sum] = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
-SRC_URI[powerfmt-0.2.0.sha256sum] = "439ee305def115ba05938db6eb1644ff94165c5ab5e9420d1c1bcedbba909391"
-SRC_URI[ppv-lite86-0.2.21.sha256sum] = "85eae3c4ed2f50dcfe72643da4befc30deadb458a9b590d720cde2f2b1e97da9"
-SRC_URI[proc-macro2-1.0.107.sha256sum] = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
-SRC_URI[quote-1.0.47.sha256sum] = "1fbf4db142a473a8d80c26bbf18454ed458bf8d26c8219c331daecfdbd079001"
-SRC_URI[rand-0.8.8.sha256sum] = "e058c7de0b26af77780c769414d6257830bb240f3c38477dbc2c16e5f54d6d4c"
-SRC_URI[rand_chacha-0.3.1.sha256sum] = "e6c10a63a0fa32252be49d21e7709d4d4baf8d231c2dbce1eaa8141b9b127d88"
-SRC_URI[rand_core-0.6.4.sha256sum] = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
-SRC_URI[rcgen-0.13.2.sha256sum] = "75e669e5202259b5314d1ea5397316ad400819437857b90861765f24c4cf80a2"
-SRC_URI[ring-0.17.14.sha256sum] = "a4689e6c2294d81e88dc6261c768b63bc4fcdb852be6d1352498b114f61383b7"
-SRC_URI[rumqttc-0.24.0.sha256sum] = "e1568e15fab2d546f940ed3a21f48bbbd1c494c90c99c4481339364a497f94a9"
-SRC_URI[rustc_version-0.4.1.sha256sum] = "cfcb3a22ef46e85b45de6ee7e79d063319ebb6594faafcf1c225ea92ab6e9b92"
-SRC_URI[rustls-0.22.4.sha256sum] = "bf4ef73721ac7bcd79b2b315da7779d8fc09718c6b3d2d1b2d94850eb8c18432"
-SRC_URI[rustls-native-certs-0.7.3.sha256sum] = "e5bfb394eeed242e909609f56089eecfe5fda225042e8b171791b9c95f5931e5"
-SRC_URI[rustls-pemfile-2.2.0.sha256sum] = "dce314e5fee3f39953d46bb63bb8a46d40c2f8fb7cc5a3b6cab2bde9721d6e50"
-SRC_URI[rustls-pki-types-1.15.1.sha256sum] = "2f4925028c7eb5d1fcdaf196971378ed9d2c1c4efc7dc5d011256f76c99c0a96"
-SRC_URI[rustls-webpki-0.102.8.sha256sum] = "64ca1bc8749bd4cf37b5ce386cc146580777b4e8572c7b97baf22c83f444bee9"
-SRC_URI[rustversion-1.0.23.sha256sum] = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
-SRC_URI[ryu-1.0.23.sha256sum] = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
-SRC_URI[schannel-0.1.29.sha256sum] = "91c1b7e4904c873ef0710c1f407dde2e6287de2bebc1bbbf7d430bb7cbffd939"
-SRC_URI[scopeguard-1.2.0.sha256sum] = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
-SRC_URI[security-framework-2.11.1.sha256sum] = "897b2245f0b511c87893af39b033e5ca9cce68824c4d7e7630b5a1d339658d02"
-SRC_URI[security-framework-sys-2.17.0.sha256sum] = "6ce2691df843ecc5d231c0b14ece2acc3efb62c0a398c7e1d875f3983ce020e3"
-SRC_URI[semver-1.0.28.sha256sum] = "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
-SRC_URI[serde-1.0.229.sha256sum] = "4148590afebada386688f18773da617792bf2ef03ffc1e4cbd2b1d45b023e0ba"
-SRC_URI[serde_core-1.0.229.sha256sum] = "67dca2c9c51e58a4791a4b1ed58308b39c64224d349a935ab5039aa360942a48"
-SRC_URI[serde_derive-1.0.229.sha256sum] = "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348"
-SRC_URI[serde_json-1.0.151.sha256sum] = "c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14"
-SRC_URI[serde_path_to_error-0.1.20.sha256sum] = "10a9ff822e371bb5403e391ecd83e182e0e77ba7f6fe0160b795797109d1b457"
-SRC_URI[serde_urlencoded-0.7.1.sha256sum] = "d3491c14715ca2294c4d6a88f15e84739788c1d030eed8c110436aafdaa2f3fd"
-SRC_URI[sha1-0.10.7.sha256sum] = "a978451301f4db1d02937a4ab3ccce137717b81826e79b7d49ffe3244a13c3b8"
-SRC_URI[sha2-0.10.9.sha256sum] = "a7507d819769d01a365ab707794a4084392c824f54a7a6a7862f8c3d0892b283"
-SRC_URI[shlex-2.0.1.sha256sum] = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
-SRC_URI[signal-hook-registry-1.4.8.sha256sum] = "c4db69cba1110affc0e9f7bcd48bbf87b3f4fc7c61fc9155afd4c469eb3d6c1b"
-SRC_URI[slab-0.4.12.sha256sum] = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
-SRC_URI[smallvec-1.16.1.sha256sum] = "ba467056f1b547ed52077911161fc86985becbc60e8e1857c8a144dab0def891"
-SRC_URI[socket2-0.6.5.sha256sum] = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
-SRC_URI[spake2-0.4.0.sha256sum] = "c5482afe85a0b6ce956c945401598dbc527593c77ba51d0a87a586938b1b893a"
-SRC_URI[spin-0.9.9.sha256sum] = "3763264f6b73151db08c50ff20d7d8a0b8796e021cdea7ceedad07b80155fa0e"
-SRC_URI[strsim-0.11.1.sha256sum] = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
-SRC_URI[strum-0.26.3.sha256sum] = "8fec0f0aef304996cf250b31b5a10dee7980c85da9d759361292b8bca5a18f06"
-SRC_URI[strum_macros-0.26.4.sha256sum] = "4c6bee85a5a24955dc440386795aa378cd9cf82acd5f764469152d2270e581be"
-SRC_URI[subtle-2.6.1.sha256sum] = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
-SRC_URI[syn-2.0.119.sha256sum] = "872831b642d1a07999a962a351ed35b955ea2cfc8f3862091e2a240a84f17297"
-SRC_URI[syn-3.0.6.sha256sum] = "8593e8e72159ed2257d083c7a454a85cbf854f37a0966d8d483aff8c8a3ebcee"
-SRC_URI[sync_wrapper-1.0.2.sha256sum] = "0bf256ce5efdfa370213c1dabab5935a12e49f2c58d15e9eac2870d3b4f27263"
-SRC_URI[synstructure-0.13.2.sha256sum] = "728a70f3dbaf5bab7f0c4b1ac8d7ae5ea60a4b5549c8a5914361c99147a709d2"
-SRC_URI[thiserror-1.0.69.sha256sum] = "b6aaf5339b578ea85b50e080feb250a3e8ae8cfcdff9a461c9ec2904bc923f52"
-SRC_URI[thiserror-impl-1.0.69.sha256sum] = "4fee6c4efc90059e10f81e6d42c60a18f76588c3d74cb83a0b242a2b6c7504c1"
-SRC_URI[time-0.3.41.sha256sum] = "8a7619e19bc266e0f9c5e6686659d394bc57973859340060a69221e57dbc0c40"
-SRC_URI[time-core-0.1.4.sha256sum] = "c9e9a38711f559d9e3ce1cdb06dd7c5b8ea546bc90052da6d06bb76da74bb07c"
-SRC_URI[tokio-1.53.1.sha256sum] = "202caea871b69668250d242070849eb495be178ed697a3e98aebce5bc81a0bed"
-SRC_URI[tokio-macros-2.7.2.sha256sum] = "78773a2a397f451582ce068015985c33193cf6dea8b74d2a639fe457b2f07b0e"
-SRC_URI[tokio-rustls-0.25.0.sha256sum] = "775e0c0f0adb3a2f22a00c4745d728b479985fc15ee7ca6a2608388c5569860f"
-SRC_URI[tokio-stream-0.1.19.sha256sum] = "a3d06f0b082ba57c26b79407372e57cf2a1e28124f78e9479fe80322cf53420b"
-SRC_URI[tokio-tungstenite-0.24.0.sha256sum] = "edc5f74e248dc973e0dbb7b74c7e0d6fcc301c694ff50049504004ef4d0cdcd9"
-SRC_URI[tower-0.5.3.sha256sum] = "ebe5ef63511595f1344e2d5cfa636d973292adc0eec1f0ad45fae9f0851ab1d4"
-SRC_URI[tower-layer-0.3.3.sha256sum] = "121c2a6cda46980bb0fcd1647ffaf6cd3fc79a013de288782836f6df9c48780e"
-SRC_URI[tower-service-0.3.3.sha256sum] = "8df9b6e13f2d32c91b9bd719c00d1958837bc7dec474d94952798cc8e69eeec3"
-SRC_URI[tracing-0.1.44.sha256sum] = "63e71662fa4b2a2c3a26f570f037eb95bb1f85397f3cd8076caed2f026a6d100"
-SRC_URI[tracing-core-0.1.36.sha256sum] = "db97caf9d906fbde555dd62fa95ddba9eecfd14cb388e4f491a66d74cd5fb79a"
-SRC_URI[tungstenite-0.24.0.sha256sum] = "18e5b8366ee7a95b16d32197d0b2604b43a0be89dc5fac9f8e96ccafbaedda8a"
-SRC_URI[typenum-1.20.1.sha256sum] = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
-SRC_URI[unicode-ident-1.0.26.sha256sum] = "d245f478577f809a851594d02313b640fb437e0bb33866753cff937863096954"
-SRC_URI[untrusted-0.9.0.sha256sum] = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
-SRC_URI[utf-8-0.7.6.sha256sum] = "09cc8ee72d2a9becf2f2febe0205bbed8fc6615b7cb429ad062dc7b7ddd036a9"
-SRC_URI[uuid-1.10.0.sha256sum] = "81dfa00651efa65069b0b6b651f4aaa31ba9e3c3ce0137aaad053604ee7e0314"
-SRC_URI[version_check-0.9.5.sha256sum] = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
-SRC_URI[wasi-0.11.1+wasi-snapshot-preview1.sha256sum] = "ccf3ec651a847eb01de73ccad15eb7d99f80485de043efb2f370cd654f4ea44b"
-SRC_URI[windows-link-0.2.1.sha256sum] = "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
-SRC_URI[windows-sys-0.52.0.sha256sum] = "282be5f36a8ce781fad8c8ae18fa3f9beff57ec1b52cb3de0789201425d9a33d"
-SRC_URI[windows-sys-0.61.2.sha256sum] = "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc"
-SRC_URI[windows-targets-0.52.6.sha256sum] = "9b724f72796e036ab90c1021d4780d4d3d648aca59e491e6b98e725b84e99973"
-SRC_URI[windows_aarch64_gnullvm-0.52.6.sha256sum] = "32a4622180e7a0ec044bb555404c800bc9fd9ec262ec147edd5989ccd0c02cd3"
-SRC_URI[windows_aarch64_msvc-0.52.6.sha256sum] = "09ec2a7bb152e2252b53fa7803150007879548bc709c039df7627cabbd05d469"
-SRC_URI[windows_i686_gnu-0.52.6.sha256sum] = "8e9b5ad5ab802e97eb8e295ac6720e509ee4c243f69d781394014ebfe8bbfa0b"
-SRC_URI[windows_i686_gnullvm-0.52.6.sha256sum] = "0eee52d38c090b3caa76c563b86c3a4bd71ef1a819287c19d586d7334ae8ed66"
-SRC_URI[windows_i686_msvc-0.52.6.sha256sum] = "240948bc05c5e7c6dabba28bf89d89ffce3e303022809e73deaefe4f6ec56c66"
-SRC_URI[windows_x86_64_gnu-0.52.6.sha256sum] = "147a5c80aabfbf0c7d901cb5895d1de30ef2907eb21fbbab29ca94c5b08b1a78"
-SRC_URI[windows_x86_64_gnullvm-0.52.6.sha256sum] = "24d5b23dc417412679681396f2b49f3de8c1473deb516bd34410872eff51ed0d"
-SRC_URI[windows_x86_64_msvc-0.52.6.sha256sum] = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
-SRC_URI[yasna-0.5.2.sha256sum] = "e17bb3549cc1321ae1296b9cdc2698e2b6cb1992adfa19a8c72e5b7a738f44cd"
-SRC_URI[zerocopy-0.8.57.sha256sum] = "d35102a9f36d089ccae9e4c6802bc118be4487b80aaffc0ab4e0cf5ce92d2873"
-SRC_URI[zerocopy-derive-0.8.57.sha256sum] = "146c01f5ab44258da43cf276c74a2763db2ff3969c9c652c3f2de07041d0b2bc"
-SRC_URI[zeroize-1.8.2.sha256sum] = "b97154e67e32c85465826e8bcc1c59429aaaf107c1e4a9e53c8d8ccd5eff88d0"
-SRC_URI[zmij-1.0.23.sha256sum] = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
-
-SRC_URI += "file://backend-daemon.service"
 
 S = "${WORKDIR}"
-CARGO_SRC_DIR = ""
 
-SYSTEMD_SERVICE:${PN} = "backend-daemon.service"
+# The daemon's own user (issue #37): backend-daemon.service runs it as
+# "hubd" instead of root. A system account (uid below 1000), with its own
+# group of the same name, no home folder and no login shell -- nobody can
+# log in as it; it only exists to own the daemon's files and process.
+# Further groups (rpmsg for the M4 channel) are added by the unit's
+# SupplementaryGroups=, so this recipe doesn't depend on who creates them.
+USERADD_PACKAGES = "${PN}"
+USERADD_PARAM:${PN} = "--system --user-group --no-create-home --home-dir /nonexistent --shell /sbin/nologin hubd"
+
+# hub-helper.socket is enabled (it's how the daemon gets the few things it
+# needs root for, see hub-helper.sh); hub-helper@.service is started by it,
+# per request, and is never enabled itself.
+SYSTEMD_SERVICE:${PN} = "backend-daemon.service hub-helper.socket"
 SYSTEMD_AUTO_ENABLE:${PN} = "enable"
 
-do_install:append() {
+do_install() {
+    install -D -m 0755 ${B}/target/${BACKEND_RUST_TARGET}/release/backend-daemon ${D}${bindir}/backend-daemon
     install -d ${D}${systemd_system_unitdir}
     install -m 0644 ${WORKDIR}/backend-daemon.service ${D}${systemd_system_unitdir}/backend-daemon.service
+    install -m 0644 ${WORKDIR}/hub-helper.socket ${D}${systemd_system_unitdir}/hub-helper.socket
+    install -m 0644 ${WORKDIR}/hub-helper@.service ${D}${systemd_system_unitdir}/hub-helper@.service
+    install -D -m 0755 ${WORKDIR}/hub-helper.sh ${D}${libexecdir}/hub-helper
+    install -D -m 0644 ${WORKDIR}/backend-daemon-tmpfiles.conf ${D}${nonarch_libdir}/tmpfiles.d/backend-daemon.conf
 }
+
+FILES:${PN} += " \
+    ${systemd_system_unitdir}/hub-helper@.service \
+    ${libexecdir}/hub-helper \
+    ${nonarch_libdir}/tmpfiles.d/backend-daemon.conf \
+"

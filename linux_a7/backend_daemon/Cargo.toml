@@ -5,13 +5,10 @@ edition = "2021"
 description = "Universal Controller hub daemon (Tokio async runtime)"
 repository = "https://github.com/CiprianTiro/stm32mp1-universal-controller"
 license = "GPL-3.0-only"
-# This crate is built by Yocto's own Rust (scarthgap ships 1.75), not the
-# newer rustup toolchain on the dev PC. Declaring it here lets cargo's
-# MSRV-aware resolver pick dependency versions that still support 1.75
-# when Cargo.lock is updated (run with
-# CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS=fallback), instead of the newest
-# versions, which may need a newer compiler and only fail inside bitbake.
-rust-version = "1.75"
+# Built with the rustup toolchain in the yocto-builder container (the same
+# one as ui_layer), NOT Poky's own Rust 1.75 any more (issue #37): stuck on
+# 1.75, security fixes that need a newer compiler (e.g. time >= 0.3.47,
+# Rust 1.88) could not be taken. See backend-daemon.bb.
 
 [dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time", "sync", "net", "fs", "io-util"] }
@@ -19,24 +16,24 @@ libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 axum = { version = "0.7", features = ["ws"] }
-# "use-rustls": MQTT over TLS with a client certificate (mutual TLS), as
-# AWS IoT Core requires -- see src/mqtt.rs. rustls is a pure-Rust TLS stack;
-# its crypto comes from the `ring` crate, which compiles some C/assembly
-# for ARM during the Yocto build (the cargo class provides the cross C
-# compiler for that).
-rumqttc = { version = "0.24", default-features = false, features = ["use-rustls"] }
+# MQTT over TLS with a client certificate (mutual TLS), as AWS IoT Core
+# requires -- see src/mqtt.rs. rustls is a pure-Rust TLS stack; its crypto
+# comes from the `ring` crate, which compiles some C/assembly for ARM
+# during the Yocto build. "use-rustls-no-provider" instead of "use-rustls":
+# the latter would also build aws-lc-rs, a second, large C crypto library
+# (CMake build) -- ring is chosen below, through tokio-rustls.
+# This is a PATCHED copy (see [patch.crates-io] at the end, issue #37).
+rumqttc = { version = "0.25.1", default-features = false, features = ["use-rustls-no-provider"] }
 # Issue #35 -- the LAN connection over TLS (wss://) with pairing.
 # rcgen creates the hub's own TLS certificate on first start (there is no
 # `openssl` command on the board); with the "ring" backend it uses the same
-# crypto library as everything else below. It's the only one of these that
-# added crates to the build (rcgen, time, yasna, pem + small helpers).
-rcgen = { version = "0.13", default-features = false, features = ["ring", "pem"] }
-# Already in the build through rumqttc (same versions and features), now
-# used directly: tokio-rustls = TLS for the WebSocket server, rustls-pemfile
-# reads the certificate files, ring = random numbers + SHA-256, base64 =
-# the client tokens as text.
-tokio-rustls = "0.25"
-rustls-pemfile = "2"
+# crypto library as everything else below.
+rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }
+# tokio-rustls = TLS for the WebSocket server (and, through rumqttc, for
+# MQTT); "ring" picks ring as rustls's crypto (see above). Certificate/key
+# files are read with rustls's own PEM reader (rustls::pki_types::pem).
+# ring = random numbers + SHA-256, base64 = the client tokens as text.
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "logging", "tls12"] }
 ring = "0.17"
 base64 = "0.22"
 # Already in the build through axum: serving axum's router over our own TLS
@@ -49,3 +46,10 @@ tower-service = "0.3"
 bluer = { version = "0.17.4", features = ["bluetoothd"] }
 spake2 = "0.4.0"
 dbus = { version = "0.9", features = ["vendored"] }
+
+# Issue #37: rumqttc 0.25.1 (its latest release) still depends on
+# rustls-webpki 0.102, which has known vulnerabilities. This local copy
+# differs from the published crate in that one version number only -- see
+# patched/rumqttc/PATCHED.md, including when to remove it.
+[patch.crates-io]
+rumqttc = { path = "patched/rumqttc" }

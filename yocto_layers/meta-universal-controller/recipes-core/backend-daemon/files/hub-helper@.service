@@ -1,0 +1,49 @@
+# One hub-helper run, for one connection to hub-helper.socket (issue #37).
+# Runs as root -- that's its purpose -- but is kept as small as possible:
+# it can only do what hub-helper.sh knows (four fixed commands), and is
+# sandboxed below as far as that allows.
+[Unit]
+Description=Universal Controller privileged helper (one request)
+# Only ever started by the socket.
+RefuseManualStart=yes
+
+[Service]
+ExecStart=/usr/libexec/hub-helper
+# The connection is stdin and stdout; messages for the log go to stderr,
+# which must go to the journal, not back into the connection.
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal
+# A client that connects and sends nothing is cut off.
+RuntimeMaxSec=60
+
+# --- Sandbox -----------------------------------------------------------
+# It needs to be root only to talk to systemd (over a Unix socket, which
+# works even with PrivateNetwork=) and to fsync one root-only file.
+# Everything else is taken away.
+NoNewPrivileges=yes
+# The whole filesystem read-only (fsync works on read-only open files).
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+RestrictAddressFamilies=AF_UNIX
+# No capabilities at all. None is needed: systemd accepts commands from
+# user id 0 (it checks the id, not capabilities), and the WiFi config is
+# owned by root, so root may open it as its owner.
+CapabilityBoundingSet=
+UMask=0077

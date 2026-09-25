@@ -66,29 +66,40 @@ const STANDIN_FB_NAME: &str = "simpledrmdrmfb";
 /// usable, instead of whenever systemd would otherwise have got round to
 /// starting it.
 ///
-/// Checks every 50 ms (reading one small sysfs file: negligible CPU).
-/// Gives up waiting after `timeout` and carries on with whatever fb0 there
-/// is -- e.g. a kernel with the display driver built in never has the
-/// stand-in, and an image without it still gets a (maybe blank) UI rather
-/// than none.
+/// "Ready" also means the UI may OPEN the new /dev/fb0 (issue #37). The UI
+/// runs as user hubui, allowed in only through group "video" -- but the
+/// kernel creates the new device node as root-only, and udev sets its
+/// group a moment AFTER the sysfs name above has already changed. Opening
+/// in that gap fails with "permission denied" (seen on the DK2: the UI
+/// crashed and was restarted by systemd 2 s later, delaying the screen).
+/// So the open is checked here too, and the gap is simply waited out.
+///
+/// Checks every 50 ms (reading one small sysfs file, and trying one open:
+/// negligible CPU). Gives up waiting after `timeout` and carries on with
+/// whatever fb0 there is -- e.g. a kernel with the display driver built in
+/// never has the stand-in, and an image without it still gets a (maybe
+/// blank) UI rather than none.
 pub fn wait_for_display_driver(timeout: std::time::Duration) {
     let start = std::time::Instant::now();
     let mut announced = false;
     loop {
         let name = std::fs::read_to_string(FB_NAME_SYSFS).unwrap_or_default();
         let name = name.trim();
-        if !name.is_empty() && name != STANDIN_FB_NAME {
+        // Opened only to test the permissions: the file is closed again
+        // right away (dropped at the end of the statement).
+        let can_open = std::fs::OpenOptions::new().read(true).write(true).open(FB_PATH).is_ok();
+        if !name.is_empty() && name != STANDIN_FB_NAME && can_open {
             if announced {
                 println!("ui_layer: display driver \"{name}\" ready after {:.1} s", start.elapsed().as_secs_f32());
             }
             return;
         }
         if start.elapsed() >= timeout {
-            println!("ui_layer: display driver not ready after {} s (fb0: \"{name}\"), starting anyway", timeout.as_secs());
+            println!("ui_layer: display driver not ready after {} s (fb0: \"{name}\", can open: {can_open}), starting anyway", timeout.as_secs());
             return;
         }
         if !announced {
-            println!("ui_layer: waiting for the display driver (fb0: \"{name}\")");
+            println!("ui_layer: waiting for the display driver (fb0: \"{name}\", can open: {can_open})");
             announced = true;
         }
         std::thread::sleep(std::time::Duration::from_millis(50));

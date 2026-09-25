@@ -1,0 +1,5 @@
+# Development images only (issue #37): lets SSH (tcp 22) through the hub's
+# firewall, for `make flash-m4`, the userfs backup in `make flash-hw`, and
+# debugging. Package hub-firewall-ssh; the production image leaves it out,
+# together with sshd itself.
+add element inet hub lan_tcp { 22 }

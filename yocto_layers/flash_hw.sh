@@ -15,6 +15,10 @@
 set -euo pipefail
 
 VARIANT="${1:-optee}"
+# Which image to flash: the development one by default; IMAGE=
+# universal-controller-image-prod for the production variant (issue #37,
+# `make flash-hw-prod`).
+IMAGE="${IMAGE:-universal-controller-image}"
 FULL_FLASH="${FULL_FLASH:-0}"
 BOARD_HOST="${BOARD_HOST:-stm32mp1.local}"
 # Where userfs backups go (git-ignored, see .gitignore): absolute, because
@@ -22,7 +26,7 @@ BOARD_HOST="${BOARD_HOST:-stm32mp1.local}"
 BACKUP_ROOT="$(cd "$(dirname "$0")" && pwd)/userfs-backups"
 
 DEPLOY_DIR="build/tmp/deploy/images/stm32mp1"
-TSV_REL="flashlayout_universal-controller-image/${VARIANT}/FlashLayout_sdcard_stm32mp157f-dk2-${VARIANT}.tsv"
+TSV_REL="flashlayout_${IMAGE}/${VARIANT}/FlashLayout_sdcard_stm32mp157f-dk2-${VARIANT}.tsv"
 
 # CLI resolves the binary paths referenced inside the .tsv (arm-trusted-firmware/,
 # fip/, ...) relative to the current working directory, not the .tsv's own
@@ -32,7 +36,7 @@ cd "$(dirname "$0")/${DEPLOY_DIR}"
 if [ ! -f "${TSV_REL}" ]; then
     echo "Error: flash layout not found: ${DEPLOY_DIR}/${TSV_REL}"
     echo "Available variants:"
-    find flashlayout_universal-controller-image -maxdepth 1 -mindepth 1 -type d -printf '  - %f\n'
+    find "flashlayout_${IMAGE}" -maxdepth 1 -mindepth 1 -type d -printf '  - %f\n'
     exit 1
 fi
 

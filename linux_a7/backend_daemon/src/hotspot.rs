@@ -48,9 +48,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 
+use crate::helper;
 use crate::network;
 
-const SERVICE: &str = "hub-hotspot.service";
 const CONF_DIR: &str = "/run/hub-hotspot";
 /* The hub's address on the hotspot (26-hotspot.network). */
 const ADDRESS: Ipv4Addr = Ipv4Addr::new(192, 168, 4, 1);
@@ -218,7 +218,7 @@ impl Hotspot {
             };
             let conf = hostapd_conf(&ssid, &password, channel, net.wifi.country.as_deref());
             write_conf(&conf).map_err(|e| format!("hotspot configuration: {e}"))?;
-            systemctl("start").await?;
+            helper::run(helper::Command::HotspotStart).await?;
 
             let server = tokio::spawn(serve_setup_page(self.clone()));
             {
@@ -248,7 +248,7 @@ impl Hotspot {
         if let Some(server) = server {
             server.abort();
         }
-        if let Err(e) = systemctl("stop").await {
+        if let Err(e) = helper::run(helper::Command::HotspotStop).await {
             println!("hotspot: {e}");
         }
         /* The config holds the password; don't leave it lying around. */
@@ -675,8 +675,11 @@ max_num_sta=4\n"
     conf
 }
 
-/* In /run (RAM, gone at reboot), readable by root only: it holds the
- * password. */
+/* In /run (RAM, gone at reboot), readable only by us (user hubd) and root
+ * (hostapd runs as root): it holds the password. The folder itself is
+ * made by systemd for us (RuntimeDirectory= in backend-daemon.service --
+ * we may not create folders in /run ourselves); creating it here too keeps
+ * this working when the daemon runs as root on a PC. */
 fn write_conf(conf: &str) -> std::io::Result<()> {
     use std::io::Write;
     use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
@@ -688,23 +691,6 @@ fn write_conf(conf: &str) -> std::io::Result<()> {
         .mode(0o600)
         .open(format!("{CONF_DIR}/hostapd.conf"))?;
     file.write_all(conf.as_bytes())
-}
-
-/* `systemctl start|stop hub-hotspot.service`, run directly (no shell), on
- * Tokio's thread pool for blocking work. */
-async fn systemctl(action: &'static str) -> Result<(), String> {
-    let output = tokio::task::spawn_blocking(move || std::process::Command::new("systemctl").args([action, SERVICE]).output())
-        .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| format!("systemctl: {e}"))?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(format!(
-            "systemctl {action} {SERVICE} failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ))
-    }
 }
 
 async fn ask<T>(

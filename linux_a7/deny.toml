@@ -1,0 +1,74 @@
+# cargo-deny policy for every Rust program on the hub (issue #37).
+# Used by `make audit` for linux_a7/backend_daemon and linux_a7/ui_layer:
+#
+#   cargo deny --config linux_a7/deny.toml check
+#
+# It checks the crates listed in each program's Cargo.lock -- everything that
+# ends up compiled into the board's software -- for:
+#   advisories  known vulnerabilities (the RustSec database, same as
+#               `cargo audit`), crates pulled back by their authors (yanked),
+#               and abandoned crates we depend on directly;
+#   licenses    only the licenses allowed below;
+#   sources     crates only from crates.io (or this repo);
+#   bans        several versions of the same crate: reported, not failed.
+
+[graph]
+# Only what's built for the boards: the DK2 (32-bit ARM) and the QEMU image
+# (64-bit ARM, backend_daemon only). Crates only used on other systems
+# (Windows, macOS, WebAssembly) are in Cargo.lock too, but never compiled
+# for the hub, so they're not judged.
+targets = ["armv7-unknown-linux-gnueabihf", "aarch64-unknown-linux-gnu"]
+
+[advisories]
+# Any known vulnerability fails the check (the default). Nothing is ignored:
+# a vulnerability is fixed (dependency updated, or patched -- see
+# backend_daemon/patched/), not waved through. If one ever had to be
+# accepted, it would be listed here with its RUSTSEC id and the reason.
+ignore = []
+# Abandoned ("unmaintained") crates: fail only for crates WE depend on
+# directly -- those we can replace. Deeper ones (e.g. rustls-pemfile inside
+# rumqttc, bincode inside Slint) are shown as warnings; they're their
+# authors' choice, and not a vulnerability.
+unmaintained = "workspace"
+# (Yanked crates -- withdrawn by their authors, often for a serious bug --
+# always fail.)
+
+[licenses]
+# Licenses allowed in the hub's software. All are permissive (use, change,
+# ship freely, keep the notice), except GPL-3.0-only, which is this
+# project's own license (and one of the three Slint is offered under).
+# All are compatible with shipping the hub under GPL-3.0.
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "GPL-3.0-only",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+# A crate whose license can only be guessed from its text with less than
+# 80 % certainty counts as unlicensed (fails).
+confidence-threshold = 0.8
+
+[bans]
+# The same crate in two versions (e.g. base64 0.22 and 0.23, one per
+# dependency) makes the program bigger, but isn't a risk by itself: listed
+# as warnings, not failures.
+multiple-versions = "warn"
+# "Any version" (*) dependencies are refused -- except for local folders
+# (backend_daemon's patched/rumqttc), which have no version to pin.
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+# Crates only from crates.io, never from some other registry or a git
+# repository (a git dependency can change under the same name).
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
