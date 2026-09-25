@@ -1,4 +1,4 @@
-// common.slint -- pieces every page shares (issue #38).
+// common.slint -- pieces every page shares (issues #38, #39).
 //
 // Until #38 network.slint and settings.slint each had their own copy of
 // the page header, both using the standard Button. That Button stretched
@@ -8,34 +8,57 @@
 
 import { Theme } from "theme.slint";
 
-// A button for the top row of a page ("< Back", "Settings"):
-// finger-sized on the touchscreen, a fixed width on every screen, the UI's
-// own colors and text size.
-export component HeaderButton inherits Rectangle {
+// The UI's button (issue #39), in place of std-widgets' Button, which
+// doesn't follow the theme (its own colors, a smaller font). Same
+// interface -- text, enabled, primary, clicked -- plus `destructive` for
+// actions that take something away (red text, e.g. "Remove").
+export component ActionButton inherits Rectangle {
     in property <string> text;
+    in property <bool> enabled: true;
+    // The page's main action: filled with the accent color.
+    in property <bool> primary: false;
+    in property <bool> destructive: false;
     callback clicked();
 
-    width: 104px;
     height: Theme.touch-height;
-    border-radius: 8px;
-    background: touch.pressed ? Theme.surface-pressed : Theme.surface;
-    Text {
+    // As wide as its text needs (a layout may give it more).
+    min-width: label.preferred-width + 2 * Theme.space-l;
+    border-radius: Theme.radius-medium;
+    border-width: primary ? 0 : 1px;
+    border-color: Theme.outline;
+    background: primary
+        ? (touch.pressed ? Theme.accent.darker(0.2) : Theme.accent)
+        : (touch.pressed ? Theme.surface-pressed : Theme.surface);
+    // Disabled: faded, and taps are ignored (TouchArea below).
+    opacity: enabled ? 1 : 0.45;
+
+    label := Text {
         text: root.text;
-        color: Theme.title;
-        font-size: 16px;
+        color: primary ? Theme.on-accent : destructive ? Theme.error : Theme.text;
+        font-size: Theme.font-body;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        overflow: elide;
     }
     touch := TouchArea {
+        enabled: root.enabled;
         clicked => {
             root.clicked();
         }
     }
 }
 
+// A button for the top row of a page ("< Back", "Settings"): the same
+// button at a fixed width, so it never stretches across a wide screen.
+export component HeaderButton inherits ActionButton {
+    width: 104px;
+}
+
 // A page's title row: the back button, then the title.
 export component PageHeader inherits HorizontalLayout {
     in property <string> title;
     callback back();
-    spacing: 12px;
+    spacing: Theme.space-l;
     height: Theme.touch-height;
     HeaderButton {
         text: "< Back";
@@ -45,10 +68,41 @@ export component PageHeader inherits HorizontalLayout {
     }
     Text {
         text: title;
-        color: Theme.title;
-        font-size: 24px;
+        color: Theme.text;
+        font-size: Theme.font-title;
         vertical-alignment: center;
         overflow: elide;
         horizontal-stretch: 1;
+    }
+}
+
+// One option of a small set, e.g. Light / Dark / Auto (issue #39): the
+// chosen one filled with the accent color. Like everything in ui_layer it
+// only SHOWS what's chosen -- `selected` comes from the hub's settings, so a
+// tap changes it once backend_daemon has confirmed.
+export component Choice inherits Rectangle {
+    in property <string> text;
+    in property <bool> selected;
+    callback clicked();
+
+    height: Theme.touch-height;
+    min-width: label.preferred-width + 2 * Theme.space-l;
+    horizontal-stretch: 1;
+    border-radius: Theme.radius-medium;
+    border-width: selected ? 0 : 1px;
+    border-color: Theme.outline;
+    background: selected ? Theme.accent : (touch.pressed ? Theme.surface-pressed : Theme.surface);
+
+    label := Text {
+        text: root.text;
+        color: selected ? Theme.on-accent : Theme.text;
+        font-size: Theme.font-body;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
     }
 }

@@ -7,9 +7,9 @@
 // ui_layer: nothing here decides whether a connection worked, it shows
 // what the backend says.
 
-import { Button, ListView } from "std-widgets.slint";
+import { ListView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
-import { PageHeader } from "common.slint";
+import { PageHeader, ActionButton } from "common.slint";
 import { Keyboard } from "keyboard.slint";
 
 // One network from a scan -- filled in by main.rs from ws_client's
@@ -57,7 +57,7 @@ export component SignalBars inherits Rectangle {
         width: 5px;
         height: (i + 1) * 5px;
         border-radius: 1px;
-        background: i < bars ? lit : Theme.dot-off;
+        background: i < bars ? lit : Theme.outline;
     }
 }
 
@@ -69,13 +69,13 @@ export component NetIndicator inherits Rectangle {
 
     height: Theme.touch-height;
     width: 190px;
-    border-radius: 8px;
+    border-radius: Theme.radius-medium;
     background: touch.pressed ? Theme.surface-pressed : Theme.surface;
 
     HorizontalLayout {
-        padding-left: 12px;
-        padding-right: 12px;
-        spacing: 8px;
+        padding-left: Theme.space-l;
+        padding-right: Theme.space-l;
+        spacing: Theme.space-s;
         alignment: center;
         if net.uplink == "wifi": SignalBars {
             bars: net.wifi-bars;
@@ -84,8 +84,8 @@ export component NetIndicator inherits Rectangle {
         Text {
             text: net.uplink == "ethernet" ? "Ethernet" : (net.uplink == "wifi" ? "WiFi"
                 : (net.hotspot-active ? "Hotspot" : "Offline"));
-            color: net.uplink == "" && !net.hotspot-active ? Theme.error : Theme.title;
-            font-size: 18px;
+            color: net.uplink == "" && !net.hotspot-active ? Theme.error : Theme.text;
+            font-size: Theme.font-subtitle;
             vertical-alignment: center;
         }
     }
@@ -104,14 +104,15 @@ component NetworkRow inherits Rectangle {
     in property <bool> current;
     callback clicked();
 
-    height: 56px;
-    border-radius: 8px;
+    // 56 px when comfortable: follows density.
+    height: Theme.touch-height + Theme.space-s;
+    border-radius: Theme.radius-medium;
     background: touch.pressed ? Theme.surface-pressed : Theme.surface;
 
     HorizontalLayout {
-        padding-left: 14px;
-        padding-right: 14px;
-        spacing: 10px;
+        padding-left: Theme.space-xl;
+        padding-right: Theme.space-xl;
+        spacing: Theme.space-m;
         SignalBars {
             bars: network.bars;
             y: (parent.height - self.height) / 2;
@@ -120,14 +121,14 @@ component NetworkRow inherits Rectangle {
             alignment: center;
             Text {
                 text: network.ssid;
-                color: Theme.title;
-                font-size: 18px;
+                color: Theme.text;
+                font-size: Theme.font-subtitle;
                 overflow: elide;
             }
             Text {
                 text: current ? "Connected" : (network.saved ? "Saved" : (network.secure ? "Secured" : "Open network"));
-                color: current ? Theme.ok : Theme.muted;
-                font-size: 14px;
+                color: current ? Theme.ok : Theme.text-muted;
+                font-size: Theme.font-caption;
             }
         }
     }
@@ -161,8 +162,8 @@ export component NetworkPage inherits Rectangle {
     background: Theme.background;
 
     VerticalLayout {
-        padding: 12px;
-        spacing: 10px;
+        padding: Theme.space-l;
+        spacing: Theme.space-m;
 
         PageHeader {
             title: "Network";
@@ -174,29 +175,29 @@ export component NetworkPage inherits Rectangle {
         // Status card.
         Rectangle {
             background: Theme.surface;
-            border-radius: 8px;
+            border-radius: Theme.radius-medium;
             VerticalLayout {
-                padding: 12px;
-                spacing: 6px;
+                padding: Theme.space-l;
+                spacing: Theme.space-xs;
                 Text {
                     text: "Ethernet: " + (net.eth-connected ? ("connected  " + net.eth-ip) : "no cable");
-                    color: net.uplink == "ethernet" ? Theme.title : Theme.muted;
-                    font-size: 16px;
+                    color: net.uplink == "ethernet" ? Theme.text : Theme.text-muted;
+                    font-size: Theme.font-body;
                 }
                 Text {
                     text: !net.wifi-available ? "WiFi: not available"
                         : net.wifi-connected ? ("WiFi: " + net.wifi-ssid + "  " + net.wifi-ip)
                         : net.wifi-saved != "" ? ("WiFi: trying to join " + net.wifi-saved + "...")
                         : "WiFi: not set up";
-                    color: net.uplink == "wifi" ? Theme.title : Theme.muted;
-                    font-size: 16px;
+                    color: net.uplink == "wifi" ? Theme.text : Theme.text-muted;
+                    font-size: Theme.font-body;
                     overflow: elide;
                 }
                 Text {
                     text: net.uplink == "ethernet" ? "Internet via the cable" + (net.wifi-connected ? " (WiFi on standby)" : "")
                         : net.uplink == "wifi" ? "Internet via WiFi" : "Offline";
                     color: net.uplink == "" ? Theme.error : Theme.accent;
-                    font-size: 16px;
+                    font-size: Theme.font-body;
                 }
             }
         }
@@ -204,7 +205,7 @@ export component NetworkPage inherits Rectangle {
         if message != "": Text {
             text: message;
             color: message-is-error ? Theme.error : Theme.ok;
-            font-size: 16px;
+            font-size: Theme.font-body;
             wrap: word-wrap;
         }
 
@@ -212,37 +213,37 @@ export component NetworkPage inherits Rectangle {
         // to join it, and the page to open.
         if net.hotspot-active: Rectangle {
             background: Theme.surface;
-            border-radius: 8px;
+            border-radius: Theme.radius-medium;
             HorizontalLayout {
-                padding: 10px;
-                spacing: 10px;
+                padding: Theme.space-m;
+                spacing: Theme.space-m;
                 // Natural size (see main.rs's qr_image).
                 Image {
                     source: hotspot-qr;
                 }
                 VerticalLayout {
-                    spacing: 4px;
+                    spacing: Theme.space-xxs;
                     alignment: center;
                     Text {
                         text: net.hotspot-connecting ? "Setup hotspot: joining the chosen WiFi..." : "Setup hotspot is on";
                         color: Theme.accent;
-                        font-size: 16px;
+                        font-size: Theme.font-body;
                         wrap: word-wrap;
                     }
                     Text {
                         text: "Join " + net.hotspot-ssid;
-                        color: Theme.title;
-                        font-size: 16px;
+                        color: Theme.text;
+                        font-size: Theme.font-body;
                     }
                     Text {
                         text: "Password " + net.hotspot-password;
-                        color: Theme.title;
-                        font-size: 16px;
+                        color: Theme.text;
+                        font-size: Theme.font-body;
                     }
                     Text {
                         text: "then open " + net.hotspot-url;
-                        color: Theme.muted;
-                        font-size: 14px;
+                        color: Theme.text-muted;
+                        font-size: Theme.font-caption;
                     }
                 }
             }
@@ -251,20 +252,20 @@ export component NetworkPage inherits Rectangle {
         if net.hotspot-error != "": Text {
             text: net.hotspot-error;
             color: Theme.error;
-            font-size: 15px;
+            font-size: Theme.font-caption;
             wrap: word-wrap;
         }
 
         HorizontalLayout {
-            spacing: 10px;
+            spacing: Theme.space-m;
             Text {
                 text: "Nearby WiFi networks";
-                color: Theme.title;
-                font-size: 18px;
+                color: Theme.text;
+                font-size: Theme.font-subtitle;
                 vertical-alignment: center;
                 horizontal-stretch: 1;
             }
-            Button {
+            ActionButton {
                 text: scanning ? "Scanning..." : "Scan";
                 enabled: !scanning && net.wifi-available;
                 clicked => {
@@ -276,7 +277,7 @@ export component NetworkPage inherits Rectangle {
         ListView {
             vertical-stretch: 1;
             for n in networks: VerticalLayout {
-                padding-bottom: 6px;
+                padding-bottom: Theme.space-xs;
                 NetworkRow {
                     network: n;
                     current: net.wifi-connected && n.ssid == net.wifi-ssid;
@@ -288,21 +289,21 @@ export component NetworkPage inherits Rectangle {
         }
 
         HorizontalLayout {
-            spacing: 10px;
-            if net.wifi-saved != "": Button {
+            spacing: Theme.space-m;
+            if net.wifi-saved != "": ActionButton {
                 text: "Forget " + net.wifi-saved;
                 clicked => {
                     forget();
                 }
             }
-            Button {
+            ActionButton {
                 text: "Country: " + (net.wifi-country != "" ? net.wifi-country : "world");
                 enabled: net.wifi-available;
                 clicked => {
                     change-country();
                 }
             }
-            Button {
+            ActionButton {
                 text: net.hotspot-active ? "Stop hotspot" : "Setup hotspot";
                 enabled: net.wifi-available;
                 clicked => {
@@ -335,8 +336,8 @@ export component PasswordPage inherits Rectangle {
     background: Theme.background;
 
     VerticalLayout {
-        padding: 12px;
-        spacing: 10px;
+        padding: Theme.space-l;
+        spacing: Theme.space-m;
 
         PageHeader {
             title: "Join " + ssid;
@@ -347,18 +348,18 @@ export component PasswordPage inherits Rectangle {
 
         Text {
             text: "Password";
-            color: Theme.muted;
-            font-size: 16px;
+            color: Theme.text-muted;
+            font-size: Theme.font-body;
         }
 
         Rectangle {
             height: Theme.touch-height;
             background: Theme.surface;
-            border-radius: 8px;
+            border-radius: Theme.radius-medium;
             HorizontalLayout {
-                padding-left: 12px;
-                padding-right: 6px;
-                spacing: 8px;
+                padding-left: Theme.space-l;
+                padding-right: Theme.space-xs;
+                spacing: Theme.space-s;
                 Text {
                     // The "|" is a simple cursor at the end. While nothing is
                     // typed, a dimmed row of dots shows what the field is for.
@@ -371,13 +372,13 @@ export component PasswordPage inherits Rectangle {
                     // would be drawn as nothing at all -- found in a PC
                     // render of this page.
                     text: password == "" ? "\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}" : (show ? password : masked) + "|";
-                    color: password == "" ? Theme.dot-off : Theme.title;
-                    font-size: 20px;
+                    color: password == "" ? Theme.outline : Theme.text;
+                    font-size: Theme.font-heading;
                     vertical-alignment: center;
                     overflow: elide;
                     horizontal-stretch: 1;
                 }
-                Button {
+                ActionButton {
                     text: show ? "Hide" : "Show";
                     clicked => {
                         show = !show;
@@ -389,7 +390,7 @@ export component PasswordPage inherits Rectangle {
         if message != "": Text {
             text: message;
             color: Theme.error;
-            font-size: 16px;
+            font-size: Theme.font-body;
             wrap: word-wrap;
         }
 
@@ -400,7 +401,7 @@ export component PasswordPage inherits Rectangle {
         if busy: Text {
             text: "Connecting to " + ssid + "...";
             color: Theme.accent;
-            font-size: 18px;
+            font-size: Theme.font-subtitle;
             horizontal-alignment: center;
         }
 
@@ -428,8 +429,8 @@ export component CountryPage inherits Rectangle {
     background: Theme.background;
 
     VerticalLayout {
-        padding: 12px;
-        spacing: 10px;
+        padding: Theme.space-l;
+        spacing: Theme.space-m;
 
         PageHeader {
             title: "WiFi country";
@@ -440,33 +441,33 @@ export component CountryPage inherits Rectangle {
 
         Text {
             text: "WiFi channels differ by country. The hub picks the country its nearby routers announce; change it if that's wrong. Two letters, e.g. RO, DE, US.";
-            color: Theme.muted;
-            font-size: 16px;
+            color: Theme.text-muted;
+            font-size: Theme.font-body;
             wrap: word-wrap;
         }
 
         Text {
             text: "Now: " + (current != "" ? current : "world (legal everywhere)");
-            color: Theme.title;
-            font-size: 18px;
+            color: Theme.text;
+            font-size: Theme.font-subtitle;
         }
 
         Rectangle {
             height: Theme.touch-height;
             width: 120px;
             background: Theme.surface;
-            border-radius: 8px;
+            border-radius: Theme.radius-medium;
             Text {
                 text: code + "|";
-                color: Theme.title;
-                font-size: 24px;
+                color: Theme.text;
+                font-size: Theme.font-title;
             }
         }
 
         if message != "": Text {
             text: message;
             color: Theme.error;
-            font-size: 16px;
+            font-size: Theme.font-body;
             wrap: word-wrap;
         }
 

@@ -21,14 +21,14 @@ component Key inherits Rectangle {
     callback pressed();
 
     width: key-width;
-    height: 48px;
-    border-radius: 6px;
+    height: Theme.touch-height;
+    border-radius: Theme.radius-medium;
     background: touch.pressed ? Theme.surface-pressed : (highlighted ? Theme.accent : Theme.surface);
 
     Text {
         text: label;
-        color: highlighted ? Theme.background : Theme.title;
-        font-size: 20px;
+        color: highlighted ? Theme.on-accent : Theme.text;
+        font-size: Theme.font-heading;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
@@ -75,12 +75,12 @@ export component Keyboard inherits Rectangle {
     height: layout.preferred-height;
 
     layout := VerticalLayout {
-        padding: 6px;
-        spacing: 6px;
+        padding: Theme.space-xs;
+        spacing: Theme.space-xs;
 
         for row in (mode == 0 ? letters : symbols): HorizontalLayout {
             alignment: center;
-            spacing: 5px;
+            spacing: Theme.space-xxs;
             for k in row: Key {
                 // `to-uppercase()` only changes letters; digits and symbols
                 // stay as they are.
@@ -96,7 +96,7 @@ export component Keyboard inherits Rectangle {
 
         HorizontalLayout {
             alignment: center;
-            spacing: 5px;
+            spacing: Theme.space-xxs;
             Key {
                 label: "Shift";
                 key-width: 70px;

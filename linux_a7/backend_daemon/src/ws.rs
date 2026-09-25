@@ -34,6 +34,10 @@
  *        events_lost (too slow to keep up: list_devices again)
  *   get_network_status, wifi_scan, wifi_connect, wifi_forget,
  *   set_wifi_country                       -> see network.rs (#61)
+ *   get_settings                           -> settings {mode, accent, density, time_zone}
+ *   set_settings {mode?, accent?, density?, time_zone?}
+ *                                          -> settings {...} (see settings.rs, #39)
+ *        after subscribe also: settings_changed {mode, accent, density, time_zone}
  * On the LAN door (#35):
  *   pair {code, client_name}               -> paired {client_id, token, hub_fingerprint}
  *   auth {token}                           -> authenticated {client_id, name}
@@ -68,11 +72,12 @@ use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{broadcast, mpsc, oneshot};
+use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
 use crate::auth::{self, Auth};
 use crate::control::Control;
 use crate::hotspot::{self, Hotspot};
+use crate::settings::{self, HubSettings, Settings};
 use crate::device::{self, Device};
 use crate::network;
 use crate::state::{DeviceId, Event};
@@ -160,6 +165,19 @@ enum ClientRequest {
     SetWifiCountry {
         country: String,
     },
+    /* The hub's settings (issue #39, settings.rs): allowed for every
+     * client, they only change how things look. */
+    GetSettings,
+    SetSettings {
+        #[serde(default)]
+        mode: Option<String>,
+        #[serde(default)]
+        accent: Option<String>,
+        #[serde(default)]
+        density: Option<String>,
+        #[serde(default)]
+        time_zone: Option<String>,
+    },
 }
 
 impl ClientRequest {
@@ -244,6 +262,10 @@ enum ServerMessage {
     WifiNetworks {
         networks: Vec<network::Network>,
     },
+    Settings {
+        #[serde(flatten)]
+        settings: HubSettings,
+    },
     /* Events. */
     DeviceChanged {
         device: Device,
@@ -252,6 +274,10 @@ enum ServerMessage {
         id: DeviceId,
     },
     EventsLost,
+    SettingsChanged {
+        #[serde(flatten)]
+        settings: HubSettings,
+    },
     Error {
         message: String,
     },
@@ -273,6 +299,8 @@ struct AppState {
     /* How many clients are connected right now (issue #29) -- shared with
      * health.rs, which reports it to the cloud as "local_clients". */
     local_clients: Arc<AtomicUsize>,
+    /* The hub's settings (issue #39). */
+    settings: Arc<Settings>,
 }
 
 /* Counts one connected client for as long as it exists: +1 when created,
@@ -313,6 +341,7 @@ pub async fn run(
     network_tx: mpsc::Sender<network::Cmd>,
     events_tx: broadcast::Sender<Event>,
     local_clients: Arc<AtomicUsize>,
+    settings: Arc<Settings>,
 ) {
     let fingerprint = Arc::new(identity.as_ref().map(|i| i.fingerprint.clone()).unwrap_or_default());
     let state = AppState {
@@ -323,6 +352,7 @@ pub async fn run(
         network_tx,
         events_tx,
         local_clients,
+        settings,
     };
     /* The same routes behind both doors; `Extension(Door)` tells the
      * handler which one a connection used. */
@@ -448,6 +478,7 @@ async fn handle_socket(mut socket: WebSocket, app_state: AppState, door: Door, p
     };
     /* None until the client subscribes. */
     let mut events: Option<broadcast::Receiver<Event>> = None;
+    let mut settings_rx: Option<watch::Receiver<HubSettings>> = None;
     let mut revocations = app_state.auth.revocations();
     let deadline = tokio::time::sleep(AUTH_DEADLINE);
     tokio::pin!(deadline);
@@ -459,12 +490,16 @@ async fn handle_socket(mut socket: WebSocket, app_state: AppState, door: Door, p
                 let Some(Ok(msg)) = incoming else { break };
                 let Message::Text(text) = msg else { continue };
                 match serde_json::from_str::<ClientRequest>(&text) {
-                    Ok(req) => handle_message(req, &mut session, &mut events, &app_state).await,
+                    Ok(req) => handle_message(req, &mut session, &mut events, &mut settings_rx, &app_state).await,
                     Err(e) => Next::Send(ServerMessage::Error { message: e.to_string() }),
                 }
             }
             /* This branch only exists while subscribed (the `if`). */
             event = next_event(&mut events), if events.is_some() => Next::Send(event),
+            /* Settings changes (issue #39), also only while subscribed. */
+            Some(settings) = next_settings(&mut settings_rx), if settings_rx.is_some() => {
+                Next::Send(ServerMessage::SettingsChanged { settings })
+            }
             Ok(id) = revocations.recv() => {
                 if session.client.as_ref().is_some_and(|c| c.id == id) {
                     println!("ws.rs: {id} was removed on the hub, closing its connection");
@@ -502,6 +537,7 @@ async fn handle_message(
     req: ClientRequest,
     session: &mut Session,
     events: &mut Option<broadcast::Receiver<Event>>,
+    settings_rx: &mut Option<watch::Receiver<HubSettings>>,
     app_state: &AppState,
 ) -> Next {
     if req.local_only() && session.door != Door::Local {
@@ -525,6 +561,11 @@ async fn handle_message(
             /* Events from now on; the client lists the devices once to
              * know where to start. */
             *events = Some(app_state.events_tx.subscribe());
+            /* The settings too (issue #39) -- from now on: the current
+             * ones count as seen (the client asks get_settings once). */
+            let mut rx = app_state.settings.subscribe();
+            rx.mark_unchanged();
+            *settings_rx = Some(rx);
             Next::Send(ServerMessage::Ack)
         }
         ClientRequest::Pair { code, client_name } => match auth.pair(&code, &client_name) {
@@ -636,6 +677,18 @@ async fn next_event(events: &mut Option<broadcast::Receiver<Event>>) -> ServerMe
     }
 }
 
+/* The next settings change for a subscribed client (issue #39). None:
+ * settings.rs is gone (shutting down) -- then stop listening. */
+async fn next_settings(rx: &mut Option<watch::Receiver<HubSettings>>) -> Option<HubSettings> {
+    let receiver = rx.as_mut()?;
+    if receiver.changed().await.is_err() {
+        *rx = None;
+        return None;
+    }
+    let settings = receiver.borrow_and_update().clone();
+    Some(settings)
+}
+
 /* Carries out one request. Device requests go through control.rs;
  * network ones to network.rs. */
 async fn handle_request(req: ClientRequest, app_state: &AppState) -> ServerMessage {
@@ -657,6 +710,23 @@ async fn handle_request(req: ClientRequest, app_state: &AppState) -> ServerMessa
         ClientRequest::UpdateDeviceInfo { id, name, room } => device(control.update_info(&id, name, room).await),
         ClientRequest::RemoveDevice { id } => ack_or_error(control.remove(&id).await),
         ClientRequest::Command { id, capability, value } => device(control.command(&id, &capability, value).await),
+        ClientRequest::GetSettings => ServerMessage::Settings {
+            settings: app_state.settings.get(),
+        },
+        ClientRequest::SetSettings {
+            mode,
+            accent,
+            density,
+            time_zone,
+        } => match app_state.settings.update(settings::Change {
+            mode,
+            accent,
+            density,
+            time_zone,
+        }) {
+            Ok(settings) => ServerMessage::Settings { settings },
+            Err(message) => ServerMessage::Error { message },
+        },
         /* Handled in handle_message (they concern the session or auth.rs). */
         ClientRequest::Hello
         | ClientRequest::Subscribe

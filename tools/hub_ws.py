@@ -43,6 +43,16 @@ Network (issue #61):
     python3 tools/hub_ws.py <board> wifi-forget
     python3 tools/hub_ws.py <board> wifi-country <XX>
 
+Hub settings (issue #39): the screen's design preset and the time zone.
+Allowed for every paired client; the hub's screen follows at once.
+
+    python3 tools/hub_ws.py <board> settings
+    python3 tools/hub_ws.py <board> set-settings mode=light accent=violet
+    python3 tools/hub_ws.py <board> set-settings density=compact time_zone=Europe/Bucharest
+
+  mode: dark | light | auto, accent: sky | emerald | amber | violet | rose,
+  density: comfortable | compact, time_zone: an IANA name.
+
 Pairing management (normally done on the hub's screen), hub itself only:
 
     python3 tools/hub_ws.py localhost:18080 start-pairing    shows a code
@@ -126,6 +136,10 @@ def build_request(args):
             return {"action": "list_clients"}
         case ["revoke", client_id]:
             return {"action": "revoke_client", "id": client_id}
+        case ["settings"]:
+            return {"action": "get_settings"}
+        case ["set-settings", *pairs] if pairs and all("=" in p for p in pairs):
+            return {"action": "set_settings", **dict(p.split("=", 1) for p in pairs)}
     sys.exit(__doc__)
 
 

@@ -56,12 +56,16 @@ SRC_URI = " \
     file://ui/keyboard.slint \
     file://ui/network.slint \
     file://ui/settings.slint \
+    file://ui/appearance.slint \
+    file://ui/tokens.json \
     file://ui/images/welcome.png \
     file://ui/images/pointer.png \
     file://fonts/DejaVuSans.ttf \
     file://src/main.rs \
     file://src/display.rs \
     file://src/pointer.rs \
+    file://src/theme.rs \
+    file://src/zones.rs \
     file://src/ws_client.rs \
     file://ui-layer.service \
 "

@@ -1,7 +1,11 @@
 // ui-preview -- renders every page of the hub UI to PNG files, at the
 // screen sizes the hub runs at (issue #38), with made-up sample data.
 //
-//     cargo run --release --manifest-path tools/ui_preview/Cargo.toml -- <folder> [WxH ...]
+//     cargo run --release --manifest-path tools/ui_preview/Cargo.toml -- <folder> [WxH ...] [--preset mode,accent,density]
+//
+// --preset (issue #39): the design preset to render, e.g.
+// light,emerald,compact; default: tokens.json's defaults. The file names
+// then end in the preset, e.g. 1280x720-devices-light-emerald-compact.png.
 //
 // Default sizes: 480x800 (the DK2's touchscreen, portrait), 1280x720 (an
 // HDMI monitor) and 800x600 (a monitor's fallback mode). Files are named
@@ -17,6 +21,16 @@ use slint::{PhysicalSize, VecModel};
 use std::rc::Rc;
 
 slint::include_modules!();
+
+// The UI's own preset code, so the preview applies presets exactly as the
+// hub does.
+#[path = "../../../linux_a7/ui_layer/src/theme.rs"]
+mod theme;
+// The UI's time zone lists (issue #39). Their unit tests (and theme.rs's)
+// run here with `cargo test`: the UI crate itself can't link on the PC
+// without libinput's development files.
+#[path = "../../../linux_a7/ui_layer/src/zones.rs"]
+mod zones;
 
 thread_local! {
     /// The sample devices, kept to split them into rows for each size.
@@ -35,7 +49,7 @@ fn set_size_and_rows(ui: &AppWindow, window: &MinimalSoftwareWindow, width: u32,
 
 /// The pages worth looking at, with the number app.slint uses for each.
 /// None: the welcome screen (shown until the backend first answers).
-const PAGES: [(&str, Option<i32>); 8] = [
+const PAGES: [(&str, Option<i32>); 10] = [
     ("welcome", None),
     ("devices", Some(0)),
     ("network", Some(1)),
@@ -44,6 +58,8 @@ const PAGES: [(&str, Option<i32>); 8] = [
     ("settings", Some(4)),
     ("clients", Some(5)),
     ("pairing", Some(6)),
+    ("appearance", Some(7)),
+    ("timezone", Some(8)),
 ];
 
 /// Slint needs a Platform before any window exists; this one hands out the
@@ -57,7 +73,17 @@ impl Platform for PreviewPlatform {
 }
 
 fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let mut appearance = theme::Appearance::default();
+    let mut suffix = String::new();
+    if let Some(i) = args.iter().position(|a| a == "--preset") {
+        let spec = args.get(i + 1).expect("--preset needs mode,accent,density").clone();
+        let parts: Vec<&str> = spec.split(',').collect();
+        assert_eq!(parts.len(), 3, "--preset looks like light,emerald,compact");
+        appearance = theme::Appearance { mode: parts[0].into(), accent: parts[1].into(), density: parts[2].into() };
+        suffix = format!("-{}", parts.join("-"));
+        args.drain(i..i + 2);
+    }
     let Some(out_dir) = args.first() else {
         eprintln!("usage: ui-preview <folder> [WxH ...]");
         std::process::exit(2);
@@ -72,7 +98,9 @@ fn main() {
     let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
     slint::platform::set_platform(Box::new(PreviewPlatform(window.clone()))).unwrap();
     let ui = AppWindow::new().unwrap();
-    fill_sample_data(&ui);
+    // "auto" is rendered as it looks at noon.
+    theme::apply(&ui, &appearance, theme::is_dark(&appearance.mode, 12));
+    fill_sample_data(&ui, &appearance);
     ui.show().unwrap();
 
     for (width, height) in sizes {
@@ -80,7 +108,7 @@ fn main() {
         for (name, page) in PAGES {
             ui.set_ever_connected(page.is_some());
             ui.set_page(page.unwrap_or(0));
-            let path = format!("{out_dir}/{width}x{height}-{name}.png");
+            let path = format!("{out_dir}/{width}x{height}-{name}{suffix}.png");
             save_png(&window, width, height, &path);
             println!("{path}");
         }
@@ -111,7 +139,7 @@ fn save_png(window: &MinimalSoftwareWindow, width: u32, height: u32, path: &str)
 
 /// Believable content: a handful of devices in rooms, a WiFi list, two
 /// paired phones -- enough to see how each page fills up.
-fn fill_sample_data(ui: &AppWindow) {
+fn fill_sample_data(ui: &AppWindow, appearance: &theme::Appearance) {
     ui.set_connected(true);
     let device = |id: &str, name: &str, room: &str| DeviceItem {
         id: id.into(),
@@ -172,6 +200,28 @@ fn fill_sample_data(ui: &AppWindow) {
     ui.set_pairing_address("192.168.1.136".into());
     ui.set_pairing_qr(fake_qr(260));
     ui.set_hotspot_qr(fake_qr(150));
+
+    // Settings (issue #39): the preset being rendered, a time zone, and
+    // the places of its region on the time zone page.
+    ui.set_setting_mode(appearance.mode.clone().into());
+    ui.set_setting_accent(appearance.accent.clone().into());
+    ui.set_setting_density(appearance.density.clone().into());
+    ui.set_setting_time_zone("Europe/Bucharest".into());
+    ui.set_local_time("14:05".into());
+    let dark = theme::is_dark(&appearance.mode, 12);
+    let accents = theme::accents(dark);
+    let name = accents.iter().find(|(id, _, _)| *id == appearance.accent).map_or("", |(_, n, _)| n.as_str());
+    ui.set_setting_accent_name(name.into());
+    let rows: Vec<AccentItem> =
+        accents.into_iter().map(|(id, name, color)| AccentItem { id: id.into(), name: name.into(), color }).collect();
+    ui.set_accents(Rc::new(VecModel::from(rows)).into());
+    ui.set_zone_title("Europe".into());
+    ui.set_zone_hint("Choose the place whose time the hub should follow.".into());
+    let zones: Vec<ZoneItem> = zones::places("Europe/", "Europe/Bucharest")
+        .into_iter()
+        .map(|z| ZoneItem { label: z.label.into(), value: z.value.into(), marked: z.marked })
+        .collect();
+    ui.set_zone_items(Rc::new(VecModel::from(zones)).into());
 }
 
 /// A QR-code-sized checkerboard stand-in (the real code isn't the point of
