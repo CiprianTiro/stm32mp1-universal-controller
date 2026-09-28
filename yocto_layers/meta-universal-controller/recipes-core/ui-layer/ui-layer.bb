@@ -58,6 +58,7 @@ SRC_URI = " \
     file://ui/settings.slint \
     file://ui/appearance.slint \
     file://ui/wizard.slint \
+    file://ui/remote.slint \
     file://ui/tokens.json \
     file://ui/images/welcome.png \
     file://ui/images/pointer.png \

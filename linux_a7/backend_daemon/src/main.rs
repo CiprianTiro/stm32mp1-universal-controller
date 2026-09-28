@@ -125,6 +125,18 @@ async fn main() {
         println!("templates: skipped {problem}");
     }
     println!("templates: {} loaded", templates.len());
+    /* A device added before its template gained a capability (issue #44:
+     * TVs got `remote`) gets it now, with its starting value; its adapter
+     * reports the real one. */
+    for device in control.list().await.unwrap_or_default() {
+        if let Some(template) = templates.get(&device.template) {
+            match control.add_missing_capabilities(&device.id, template.capabilities.clone()).await {
+                Ok(added) if !added.is_empty() => println!("templates: {} gained {}", device.id, added.join(", ")),
+                Ok(_) => {}
+                Err(e) => println!("templates: {}: {e}", device.id),
+            }
+        }
+    }
     let templates = std::sync::Arc::new(templates);
 
     /* Finding devices on the LAN (issue #40): the templates say what to

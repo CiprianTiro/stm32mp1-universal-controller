@@ -206,6 +206,100 @@ fn main() {
     let (tx, w) = (request_tx.clone(), wizard.clone());
     ui.on_wizard_switch_variant(move |variant| w.borrow_mut().switch_variant(&tx, variant.to_string()));
 
+    // ---- A TV's remote (issue #44, remote.slint) --------------------------
+    // Every tap is a device_action for the device on show (remote-id); lists
+    // come back as Update::DeviceAction below. The apps / channels list is
+    // one model for the page's lifetime: a channel page is APPENDED to it
+    // ("Show more"), not rebuilt.
+    let remote_items = std::rc::Rc::new(slint::VecModel::<RemoteItem>::default());
+    ui.set_remote_items(remote_items.clone().into());
+    let (ui_weak, r) = (ui.as_weak(), rows.clone());
+    ui.on_open_remote(move |id| {
+        let ui = ui_weak.unwrap();
+        if let Some(device) = r.borrow().devices.get(id.as_str()) {
+            show_remote(&ui, device);
+            ui.set_remote_view(0);
+            ui.set_remote_message("".into());
+            ui.set_remote_text("".into());
+            ui.set_page(PAGE_REMOTE);
+        }
+    });
+    // Sends one action for the remote's device.
+    let remote_action = {
+        let tx = request_tx.clone();
+        let ui_weak = ui.as_weak();
+        move |capability: &str, name: &str, args: serde_json::Value| {
+            let ui = ui_weak.unwrap();
+            let _ = tx.send(ws_client::Request::DeviceAction {
+                id: ui.get_remote_id().to_string(),
+                capability: capability.into(),
+                name: name.into(),
+                args,
+            });
+        }
+    };
+    let act = remote_action.clone();
+    ui.on_remote_press(move |button| act("remote", "press", serde_json::json!({ "button": button.as_str() })));
+    let (act, ui_weak, items) = (remote_action.clone(), ui.as_weak(), remote_items.clone());
+    ui.on_remote_open_apps(move || {
+        let ui = ui_weak.unwrap();
+        ui.set_remote_view(1);
+        ui.set_remote_loading(true);
+        items.set_vec(Vec::new());
+        act("media", "apps", serde_json::json!({}));
+    });
+    let (act, ui_weak, items) = (remote_action.clone(), ui.as_weak(), remote_items.clone());
+    ui.on_remote_open_channels(move || {
+        let ui = ui_weak.unwrap();
+        // The search first, then the view: the page asks again whenever
+        // the search changes while channels show.
+        ui.set_remote_query("".into());
+        ui.set_remote_total(0);
+        ui.set_remote_view(2);
+        ui.set_remote_loading(true);
+        items.set_vec(Vec::new());
+        act("media", "channels", serde_json::json!({ "limit": CHANNEL_PAGE }));
+    });
+    // Every change of the search: its first page.
+    let (act, ui_weak) = (remote_action.clone(), ui.as_weak());
+    ui.on_remote_search(move |query| {
+        ui_weak.unwrap().set_remote_loading(true);
+        act("media", "channels", serde_json::json!({ "query": query.as_str(), "limit": CHANNEL_PAGE }));
+    });
+    // "Show more": the next page of the same search.
+    let (act, ui_weak, items) = (remote_action.clone(), ui.as_weak(), remote_items.clone());
+    ui.on_remote_more(move || {
+        use slint::Model;
+        let ui = ui_weak.unwrap();
+        act(
+            "media",
+            "channels",
+            serde_json::json!({ "query": ui.get_remote_query().as_str(), "offset": items.row_count(), "limit": CHANNEL_PAGE }),
+        );
+    });
+    let (act, ui_weak) = (remote_action.clone(), ui.as_weak());
+    ui.on_remote_pick(move |id| {
+        let ui = ui_weak.unwrap();
+        if ui.get_remote_view() == 1 {
+            act("media", "launch", serde_json::json!({ "app": id.as_str() }));
+        } else {
+            act("media", "tune", serde_json::json!({ "channel": id.as_str() }));
+        }
+        ui.set_remote_view(0);
+    });
+    let (act, ui_weak) = (remote_action.clone(), ui.as_weak());
+    ui.on_remote_send_text(move || {
+        let ui = ui_weak.unwrap();
+        let text = ui.get_remote_text().to_string();
+        if !text.is_empty() {
+            // Typed, then Enter: what a phone keyboard's "Done" does.
+            act("remote", "type", serde_json::json!({ "text": text }));
+            act("remote", "submit", serde_json::json!({}));
+        }
+        ui.set_remote_text("".into());
+        ui.set_remote_view(0);
+    });
+
     // A device's details page, and what can be done from it.
     let (ui_weak, r, w) = (ui.as_weak(), rows.clone(), wizard.clone());
     ui.on_open_device(move |id| {
@@ -397,6 +491,10 @@ fn main() {
                     if ui.get_page() == setup::PAGE_DEVICE && ui.get_dev_id() == device.id.as_str() {
                         show_device_page(&ui, &device, &wizard.borrow());
                     }
+                    // So does the remote ("now playing").
+                    if ui.get_page() == PAGE_REMOTE && ui.get_remote_id() == device.id.as_str() {
+                        show_remote(&ui, &device);
+                    }
                     rows.borrow_mut().changed(device);
                 }
                 ws_client::Update::DeviceRemoved(id) => rows.borrow_mut().removed(&id),
@@ -417,8 +515,8 @@ fn main() {
                     wizard.borrow_mut().found_changed(&ui, &request_tx);
                 }
                 ws_client::Update::WizardStep(step) => wizard.borrow_mut().show_step(&ui, &request_tx, &step),
-                ws_client::Update::WizardError { field, message, detail } => {
-                    wizard.borrow_mut().show_error(&ui, field.as_deref(), &message, &detail)
+                ws_client::Update::WizardError { session, field, message, detail } => {
+                    wizard.borrow_mut().show_error(&ui, &session, field.as_deref(), &message, &detail)
                 }
                 ws_client::Update::WizardDone(device) => {
                     wizard.borrow_mut().finished(&ui, &device.name);
@@ -431,6 +529,38 @@ fn main() {
                     device_message_until = Some(std::time::Instant::now() + DEVICE_MESSAGE_TIME);
                 }
                 ws_client::Update::Removed(Err(message)) => ui.set_dev_message(message.into()),
+                // A remote action's answer (issue #44): a list to show, or
+                // why it failed.
+                ws_client::Update::DeviceAction { name, args, result } => match result {
+                    Ok(result) => {
+                        ui.set_remote_message("".into());
+                        match name.as_str() {
+                            "apps" => {
+                                ui.set_remote_loading(false);
+                                remote_items.set_vec(list_items(&result["apps"], |a| (text_of(&a["label"]), String::new())));
+                            }
+                            // A page of a search: only if it's still the
+                            // search on screen (typing fast outruns them).
+                            "channels" if text_of(&args["query"]) == ui.get_remote_query().as_str() => {
+                                ui.set_remote_loading(false);
+                                let page = list_items(&result["channels"], |c| (text_of(&c["number"]), text_of(&c["name"])));
+                                if args["offset"].as_u64().unwrap_or(0) == 0 {
+                                    remote_items.set_vec(page);
+                                } else {
+                                    for item in page {
+                                        remote_items.push(item);
+                                    }
+                                }
+                                ui.set_remote_total(result["total"].as_i64().unwrap_or(0) as i32);
+                            }
+                            _ => {}
+                        }
+                    }
+                    Err(message) => {
+                        ui.set_remote_loading(false);
+                        ui.set_remote_message(message.into());
+                    }
+                },
                 ws_client::Update::Network(status) => {
                     ui.set_net(to_net_status(&status));
                     if let Some(password) = status.hotspot.password.as_ref().filter(|_| status.hotspot.active) {
@@ -781,6 +911,50 @@ impl DeviceRows {
     }
 }
 
+/// The remote page (issue #44). Not a setup page: its number lives here.
+const PAGE_REMOTE: i32 = 12;
+
+/// Channels per page of the remote's list (the hub caps it at 500).
+const CHANNEL_PAGE: u32 = 100;
+
+/// Fills the remote page for a device.
+fn show_remote(ui: &AppWindow, device: &ws_client::Device) {
+    ui.set_remote_id(device.id.clone().into());
+    ui.set_remote_name(device.name.clone().into());
+    ui.set_remote_playing(now_playing(device).into());
+    ui.set_remote_keyboard(device.capabilities.remote.as_ref().is_some_and(|r| r.keyboard));
+}
+
+/// What's on a TV's screen, in words: "Live TV \u{2022} 5 Pro TV",
+/// "Netflix", "" (not known, or off).
+fn now_playing(device: &ws_client::Device) -> String {
+    let Some(media) = &device.capabilities.media else { return String::new() };
+    let app = media.app.as_ref().map(|a| a.label.clone()).unwrap_or_default();
+    match &media.channel {
+        Some(c) => format!("{app} \u{2022} {} {}", c.number, c.name).trim().to_string(),
+        None => app,
+    }
+}
+
+/// A JSON list -> rows of the remote's list; `parts` gives (label, detail).
+fn list_items(list: &serde_json::Value, parts: impl Fn(&serde_json::Value) -> (String, String)) -> Vec<RemoteItem> {
+    list.as_array()
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| {
+                    let (label, detail) = parts(item);
+                    RemoteItem { id: text_of(&item["id"]).into(), label: label.into(), detail: detail.into() }
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn text_of(value: &serde_json::Value) -> String {
+    value.as_str().unwrap_or_default().to_string()
+}
+
 /// A device's reachability (issue #40) as the card and details page say
 /// it: "" when all is well (or not known).
 fn status_text(device: &ws_client::Device) -> &'static str {
@@ -846,6 +1020,8 @@ fn device_item(device: &ws_client::Device, templates: &[ws_client::Template]) ->
         volume: caps.media.as_ref().map_or(0, |m| m.volume.into()),
         muted: caps.media.as_ref().is_some_and(|m| m.muted),
         input: caps.media.as_ref().map_or(String::new(), |m| m.input.clone()).into(),
+        has_remote: caps.remote.is_some(),
+        now_playing: now_playing(device).into(),
         inputs: std::rc::Rc::new(slint::VecModel::from(
             caps.media
                 .as_ref()

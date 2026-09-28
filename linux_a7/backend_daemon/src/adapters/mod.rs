@@ -26,6 +26,7 @@
  * (templates::ErrorKind), which the wizard turns into a sentence a person
  * understands.
  */
+pub mod channels;
 pub mod lg_webos;
 pub mod m4_led;
 pub mod net;
@@ -48,15 +49,41 @@ use crate::secrets::DeviceSecrets;
 use crate::state::DeviceId;
 use crate::templates::ErrorKind;
 
-/* A command for one device's task. The reply comes AFTER the device
- * confirmed and the task reported the new state (Hub::report), so the
- * caller can read the device back and see the result. */
+/* What a device's task is asked to do. */
 pub enum DeviceCmd {
+    /* Set a capability's state. The reply comes AFTER the device
+     * confirmed and the task reported the new state (Hub::report), so the
+     * caller can read the device back and see the result. */
     Command {
         capability: String,
         value: Value,
         reply: oneshot::Sender<Result<(), String>>,
     },
+    /* A one-off action (issue #44, device::check_action): press a button,
+     * list the channels. Its reply carries the action's result (the list),
+     * `{}` if it has none. */
+    Action {
+        capability: String,
+        name: String,
+        args: Value,
+        reply: oneshot::Sender<Result<Value, String>>,
+    },
+}
+
+impl DeviceCmd {
+    /* Answers with an error, whatever the request was (a device that
+     * can't do it now, or a task that has no actions at all). */
+    pub fn refuse(self, why: impl Into<String>) {
+        let why = why.into();
+        match self {
+            DeviceCmd::Command { reply, .. } => {
+                let _ = reply.send(Err(why));
+            }
+            DeviceCmd::Action { reply, .. } => {
+                let _ = reply.send(Err(why));
+            }
+        }
+    }
 }
 
 /* How to reach a running device task. */
@@ -245,6 +272,36 @@ impl Registry {
 
     /* A command for a hardware device (already checked by control.rs). */
     pub async fn command(&self, id: &str, capability: &str, value: Value) -> Result<(), String> {
+        let (reply, reply_rx) = oneshot::channel();
+        self.send(
+            id,
+            DeviceCmd::Command {
+                capability: capability.to_string(),
+                value,
+                reply,
+            },
+        )
+        .await?;
+        reply_rx.await.map_err(|_| format!("{id}'s adapter dropped the command"))?
+    }
+
+    /* An action for a hardware device (already checked by control.rs). */
+    pub async fn action(&self, id: &str, capability: &str, name: &str, args: Value) -> Result<Value, String> {
+        let (reply, reply_rx) = oneshot::channel();
+        self.send(
+            id,
+            DeviceCmd::Action {
+                capability: capability.to_string(),
+                name: name.to_string(),
+                args,
+                reply,
+            },
+        )
+        .await?;
+        reply_rx.await.map_err(|_| format!("{id}'s adapter dropped the action"))?
+    }
+
+    async fn send(&self, id: &str, cmd: DeviceCmd) -> Result<(), String> {
         let commands = self
             .running
             .lock()
@@ -252,15 +309,6 @@ impl Registry {
             .get(id)
             .cloned()
             .ok_or_else(|| format!("{id}'s adapter isn't running"))?;
-        let (reply, reply_rx) = oneshot::channel();
-        commands
-            .send(DeviceCmd::Command {
-                capability: capability.to_string(),
-                value,
-                reply,
-            })
-            .await
-            .map_err(|_| format!("{id}'s adapter has stopped"))?;
-        reply_rx.await.map_err(|_| format!("{id}'s adapter dropped the command"))?
+        commands.send(cmd).await.map_err(|_| format!("{id}'s adapter has stopped"))
     }
 }

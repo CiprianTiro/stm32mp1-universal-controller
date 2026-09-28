@@ -66,7 +66,38 @@ const PAGES: [(&str, Option<i32>); 12] = [
 
 /// The wizard page (10) in each kind of step (issue #40): the step's
 /// sample data is set just before its render.
-const WIZARD_STEPS: [(&str, fn(&AppWindow)); 6] = [
+const WIZARD_STEPS: [(&str, fn(&AppWindow)); 10] = [
+    // The remote (issue #44), page 12, in its views.
+    ("remote", |ui| {
+        ui.set_page(12);
+        ui.set_remote_view(0);
+    }),
+    ("remote-channels", |ui| {
+        ui.set_page(12);
+        ui.set_remote_view(2);
+        let items: Vec<RemoteItem> = [("1", "TVR 1"), ("2", "TVR 2"), ("5", "Pro TV"), ("7", "Antena 1"), ("12", "Digi 24")]
+            .iter()
+            .map(|&(n, name)| RemoteItem { id: n.into(), label: n.into(), detail: name.into() })
+            .collect();
+        ui.set_remote_items(Rc::new(VecModel::from(items)).into());
+        ui.set_remote_total(412);
+    }),
+    ("remote-search", |ui| {
+        ui.set_page(12);
+        ui.set_remote_view(2);
+        ui.set_remote_query("pro".into());
+        let items: Vec<RemoteItem> = [("8", "Pro TV"), ("70", "Pro Cinema"), ("71", "Pro Arena")]
+            .iter()
+            .map(|&(n, name)| RemoteItem { id: n.into(), label: n.into(), detail: name.into() })
+            .collect();
+        ui.set_remote_items(Rc::new(VecModel::from(items)).into());
+        ui.set_remote_total(3);
+    }),
+    ("remote-keyboard", |ui| {
+        ui.set_page(12);
+        ui.set_remote_view(3);
+        ui.set_remote_text("stranger thi".into());
+    }),
     ("wizard-discover", |ui| {
         wizard(ui, "Add: WLED light", "discover", 1, "", false);
         ui.set_wizard_found(Rc::new(VecModel::from(vec![
@@ -198,6 +229,7 @@ fn main() {
         ui.set_ever_connected(true);
         ui.set_page(10);
         for (name, setup) in WIZARD_STEPS {
+            ui.set_page(10);
             setup(&ui);
             let path = format!("{out_dir}/{width}x{height}-{name}{suffix}.png");
             save_png(&window, width, height, &path);
@@ -251,6 +283,7 @@ fn fill_sample_data(ui: &AppWindow, appearance: &theme::Appearance) {
                          MediaInputItem { id: "HDMI_2".into(), label: "HDMI 2".into() },
                          MediaInputItem { id: "HDMI_3".into(), label: "HDMI 3".into() },
                      ])).into(),
+                     has_remote: true, now_playing: "Live TV \u{2022} 5 Pro TV".into(),
                      ..device("tv", "Living room TV", "Living room") },
         DeviceItem { has_switch: true, on: false, has_dimmer: true, level: 100, has_color: true,
                      color: slint::Color::from_rgb_u8(255, 64, 194), color_text: "#FF40C2".into(),
@@ -336,6 +369,10 @@ fn fill_sample_data(ui: &AppWindow, appearance: &theme::Appearance) {
                        description: "LG smart TVs with webOS (2014 and later).".into() },
     ];
     ui.set_templates(Rc::new(VecModel::from(templates)).into());
+    ui.set_remote_id("tv".into());
+    ui.set_remote_name("Living room TV".into());
+    ui.set_remote_playing("Live TV \u{2022} 5 Pro TV".into());
+    ui.set_remote_keyboard(true);
     ui.set_dev_id("tv".into());
     ui.set_dev_name("Living room TV".into());
     ui.set_dev_room("Living room".into());

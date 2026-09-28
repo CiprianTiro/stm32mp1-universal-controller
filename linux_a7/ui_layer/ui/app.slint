@@ -23,6 +23,7 @@ import { Theme, Splash, Glyphs } from "theme.slint";
 import { HeaderButton } from "common.slint";
 import { DeviceItem, MediaInputItem, DeviceList } from "devices.slint";
 import { TemplateItem, FoundItem, FieldItem, ChoiceItem, VariantItem, AddDevicePage, WizardPage, DevicePage } from "wizard.slint";
+import { RemoteItem, RemotePage } from "remote.slint";
 import { ClientItem, SettingsPage, ClientsPage, PairingPage } from "settings.slint";
 import { NetStatus, WifiNetwork, NetIndicator, NetworkPage, PasswordPage, CountryPage } from "network.slint";
 import { AccentItem, ZoneItem, AppearancePage, TimeZonePage } from "appearance.slint";
@@ -30,7 +31,7 @@ import { AccentItem, ZoneItem, AppearancePage, TimeZonePage } from "appearance.s
 // Re-exported so main.rs can use these types (the Rust side only sees what
 // the main file exports).
 export { NetStatus, WifiNetwork, DeviceItem, MediaInputItem, ClientItem, AccentItem, ZoneItem }
-export { TemplateItem, FoundItem, FieldItem, ChoiceItem, VariantItem }
+export { TemplateItem, FoundItem, FieldItem, ChoiceItem, VariantItem, RemoteItem }
 // The design tokens (issue #39): main.rs's theme.rs sets them.
 export { Theme }
 
@@ -142,7 +143,7 @@ export component AppWindow inherits Window {
     // 3 = WiFi country, 4 = settings, 5 = paired devices, 6 = pairing,
     // 7 = appearance, 8 = time zone (issue #39),
     // 9 = add a device, 10 = the wizard's step, 11 = a device's details
-    // (issue #40).
+    // (issue #40), 12 = a TV's remote (issue #44).
     in-out property <int> page: 0;
     // Where the network page's Back goes (main screen or settings).
     property <int> network-back: 0;
@@ -276,6 +277,26 @@ export component AppWindow inherits Window {
     in property <bool> dev-can-reconfigure;
     in property <bool> dev-can-remove;
     in property <string> dev-message;
+    // A TV's remote (issue #44, remote.slint).
+    in property <string> remote-id;
+    in property <string> remote-name;
+    in property <string> remote-playing;
+    in property <bool> remote-keyboard;
+    in-out property <int> remote-view: 0;
+    in property <[RemoteItem]> remote-items;
+    in property <bool> remote-loading;
+    in-out property <string> remote-text;
+    in property <string> remote-message;
+    in property <int> remote-total;
+    in-out property <string> remote-query;
+    callback remote-search(string);
+    callback remote-more();
+    callback open-remote(string);
+    callback remote-press(string);
+    callback remote-open-apps();
+    callback remote-open-channels();
+    callback remote-pick(string);
+    callback remote-send-text();
     callback open-device(string);
     callback device-reauth(string);
     callback device-reconfigure(string);
@@ -403,6 +424,57 @@ export component AppWindow inherits Window {
             }
             reauth(id) => {
                 root.device-reauth(id);
+            }
+            open-remote(id) => {
+                root.open-remote(id);
+            }
+        }
+    }
+
+    if page == 12: RemotePage {
+        width: min(parent.width, Theme.content-max-width);
+        x: (parent.width - self.width) / 2;
+        height: parent.height;
+        tv-name: root.remote-name;
+        now-playing: root.remote-playing;
+        keyboard: root.remote-keyboard;
+        view <=> root.remote-view;
+        items: root.remote-items;
+        loading: root.remote-loading;
+        text <=> root.remote-text;
+        message: root.remote-message;
+        total: root.remote-total;
+        query <=> root.remote-query;
+        search(q) => {
+            root.remote-search(q);
+        }
+        more => {
+            root.remote-more();
+        }
+        back => {
+            page = 0;
+        }
+        press(button) => {
+            root.remote-press(button);
+        }
+        open-apps => {
+            root.remote-open-apps();
+        }
+        open-channels => {
+            root.remote-open-channels();
+        }
+        pick(id) => {
+            root.remote-pick(id);
+        }
+        send-text => {
+            root.remote-send-text();
+        }
+        backspace => {
+            // The keyboard is either the TV text (view 3) or the search.
+            if (root.remote-view == 2) {
+                root.remote-query = drop-last(root.remote-query);
+            } else {
+                root.remote-text = drop-last(root.remote-text);
             }
         }
     }

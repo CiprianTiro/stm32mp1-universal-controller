@@ -46,6 +46,10 @@ export struct DeviceItem {
     muted: bool,
     input: string,
     inputs: [MediaInputItem],
+    // Issue #44: a remote (opens the Remote page), and what's on screen
+    // ("Live TV \u{2022} 5 Pro TV", "Netflix").
+    has-remote: bool,
+    now-playing: string,
 }
 
 // On/off, big enough for a finger.
@@ -184,6 +188,7 @@ component DeviceRow inherits Rectangle {
     callback set-media(string, int, bool, string);
     callback open(string);
     callback reauth(string);
+    callback open-remote(string);
 
     border-radius: Theme.radius-medium;
     background: Theme.surface;
@@ -329,6 +334,26 @@ component DeviceRow inherits Rectangle {
             }
         }
 
+        // What's on screen, and the Remote page (issue #44).
+        if item.has-remote || (item.has-media && item.now-playing != ""): HorizontalLayout {
+            spacing: Theme.space-l;
+            Text {
+                text: item.on ? item.now-playing : "";
+                color: Theme.text-muted;
+                font-size: Theme.font-body;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+                overflow: elide;
+            }
+            if item.has-remote: ActionButton {
+                text: "Remote";
+                enabled: item.on;
+                clicked => {
+                    root.open-remote(item.id);
+                }
+            }
+        }
+
         if item.sensor-text != "": Text {
             text: item.sensor-text;
             color: Theme.text;
@@ -354,6 +379,7 @@ export component DeviceList inherits Rectangle {
     callback set-media(string, int, bool, string);
     callback open(string);
     callback reauth(string);
+    callback open-remote(string);
 
     if rows.length == 0: Text {
         text: "No devices yet";
@@ -387,6 +413,9 @@ export component DeviceList inherits Rectangle {
                 }
                 reauth(id) => {
                     root.reauth(id);
+                }
+                open-remote(id) => {
+                    root.open-remote(id);
                 }
             }
             // The last row may have fewer cards: empty places keep them at

@@ -39,6 +39,16 @@
  *     "Mobile TV On" enabled on the TV.
  *   - switch off = "ssap://system/turnOff"; the connection then drops.
  *
+ * THE REMOTE (issue #44), as `device_action`s (device::check_action):
+ *   press    a button, sent over the TV's second WebSocket, the "pointer
+ *            input socket" (its address comes from
+ *            networkinput/getPointerInputSocket): "type:button\nname:UP"
+ *   type / delete / submit   the TV's on-screen keyboard (ime/...)
+ *   apps / launch            the TV's apps (listLaunchPoints, launcher)
+ *   channels / tune          the channel list, a channel (tv/...)
+ * The app on screen and, while watching TV, the channel are reported in
+ * `media` (app, channel).
+ *
  * REVOKED ACCESS. If the TV no longer accepts our key (someone removed the
  * hub from its list, a factory reset) or shows a different certificate,
  * the device becomes "unauthorized": the task stops connecting -- each
@@ -52,9 +62,10 @@ use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::tungstenite::Message;
 
+use super::channels;
 use super::net::{self, AnyWebSocket, NetError, Transport};
 use super::{Adapter, BoxFuture, DeviceCmd, DeviceHandle, Hub, Probe, SetupError, SetupValues};
-use crate::device::{Device, Health, Media, MediaInput, Switch};
+use crate::device::{Channel, Device, Health, Media, MediaInput, Remote, Switch, REMOTE_BUTTONS};
 use crate::secrets::Secret;
 use crate::templates::ErrorKind;
 
@@ -91,30 +102,76 @@ const LIVE_TV: &str = "TV";
 const LIVE_TV_LABEL: &str = "Live TV";
 const LIVE_TV_APP: &str = "com.webos.app.livetv";
 
+/* The button socket is opened when first needed, and again after it's
+ * been idle this long: the TV may drop an idle one without telling, and a
+ * press into a dead socket would be lost silently. */
+const POINTER_IDLE: Duration = Duration::from_secs(30);
+
+/* The hub's button names (device::REMOTE_BUTTONS) -> webOS's. */
+fn webos_button(button: &str) -> &str {
+    match button {
+        "OK" => "ENTER",
+        "VOLUME_UP" => "VOLUMEUP",
+        "VOLUME_DOWN" => "VOLUMEDOWN",
+        "CHANNEL_UP" => "CHANNELUP",
+        "CHANNEL_DOWN" => "CHANNELDOWN",
+        "FAST_FORWARD" => "FASTFORWARD",
+        other => other,
+    }
+}
+
 /* Secret and config names (the template's inputs + what pairing adds). */
 const KEY: &str = "client_key";
 const CERT: &str = "cert_sha256";
 
-/* The permissions the hub asks for when pairing (the TV lists them in its
- * prompt). Home Assistant's list: unsigned manifests are accepted by
- * current webOS. */
+/* The permissions the hub asks for when pairing. The TV approves exactly
+ * this list at the prompt -- and refuses anything outside it with "401
+ * insufficient permissions" (seen on the real TV: #40's trimmed list
+ * lacked the buttons, the keyboard and the channel list). A TV paired
+ * with a shorter list must be paired again to get more.
+ *
+ * So: Home Assistant's list (aiowebostv's handshake.py), tested on many
+ * TVs, rather than a hand-picked one that fails a feature at a time. The
+ * pairing key it earns never leaves the hub (secrets.rs). Unsigned
+ * manifests are accepted by current webOS. */
 const PERMISSIONS: &[&str] = &[
+    "APP_TO_APP",
+    "CLOSE",
     "CONTROL_AUDIO",
     "CONTROL_DISPLAY",
+    "CONTROL_INPUT_JOYSTICK",
     "CONTROL_INPUT_MEDIA_PLAYBACK",
+    "CONTROL_INPUT_MEDIA_RECORDING",
+    "CONTROL_INPUT_TEXT",
     "CONTROL_INPUT_TV",
+    "CONTROL_MOUSE_AND_KEYBOARD",
     "CONTROL_POWER",
     "CONTROL_TV_SCREEN",
     "LAUNCH",
+    "LAUNCH_WEBAPP",
     "READ_APP_STATUS",
+    "READ_COUNTRY_INFO",
     "READ_CURRENT_CHANNEL",
     "READ_INPUT_DEVICE_LIST",
     "READ_INSTALLED_APPS",
+    "READ_LGE_SDX",
+    "READ_LGE_TV_INPUT_EVENTS",
     "READ_NETWORK_STATE",
+    "READ_NOTIFICATIONS",
     "READ_POWER_STATE",
     "READ_RUNNING_APPS",
+    "READ_SETTINGS",
+    "READ_TV_CHANNEL_LIST",
     "READ_TV_CURRENT_TIME",
+    "READ_UPDATE_INFO",
+    "SEARCH",
+    "TEST_OPEN",
+    "TEST_PROTECTED",
+    "TEST_SECURE",
+    "UPDATE_FROM_REMOTE_APP",
+    "WRITE_NOTIFICATION_ALERT",
     "WRITE_NOTIFICATION_TOAST",
+    "WRITE_SETTINGS",
 ];
 
 pub struct LgWebos;
@@ -129,6 +186,7 @@ impl Adapter for LgWebos {
         let config = |key: &str| device.config.get(key).filter(|v| !v.is_empty()).cloned();
         let task = Task {
             id: device.id.clone(),
+            has_remote: device.capabilities.remote.is_some(),
             host: config("host"),
             mac: config("mac"),
             cert: config(CERT),
@@ -159,6 +217,8 @@ impl Adapter for LgWebos {
 
 struct Conn {
     ws: AnyWebSocket,
+    /* The button socket (see POINTER_IDLE), and when it was last used. */
+    pointer: Option<(AnyWebSocket, Instant)>,
     next_id: u64,
     /* Messages that arrived while waiting for a request's answer
      * (subscription pushes): handled next. */
@@ -186,16 +246,19 @@ impl Conn {
      * Also returns the certificate's fingerprint (None: plain). */
     async fn open(host: &str, cert: Option<&str>, first_contact: bool) -> Result<(Conn, Option<String>), NetError> {
         let (name, port) = split_host(host);
-        let tls = net::ws_open(name, port.unwrap_or(PORT_TLS), "/", Transport::Pinned(cert)).await;
+        /* The main connection carries the channel list: large messages. */
+        let big = net::LARGE_WS_MESSAGE;
+        let tls = net::ws_open_sized(name, port.unwrap_or(PORT_TLS), "/", Transport::Pinned(cert), big).await;
         let (ws, fingerprint) = match tls {
             Ok(opened) => opened,
             /* A TV paired over TLS stays on TLS: no quiet downgrade. (A
              * given port -- the tests' sim -- is TLS only too.) */
             Err(e) if cert.is_some() || !first_contact || port.is_some() => return Err(e),
-            Err(_) => net::ws_open(name, PORT_PLAIN, "/", Transport::Plain).await?,
+            Err(_) => net::ws_open_sized(name, PORT_PLAIN, "/", Transport::Plain, big).await?,
         };
         let conn = Conn {
             ws,
+            pointer: None,
             next_id: 0,
             backlog: VecDeque::new(),
             heard: Instant::now(),
@@ -304,6 +367,14 @@ impl Conn {
                 .as_str()
                 .or(answer["payload"]["errorText"].as_str())
                 .unwrap_or("refused");
+            /* The TV didn't approve this at pairing (see PERMISSIONS):
+             * only pairing again fixes it -- say so. */
+            if why.starts_with("401") || why.contains("insufficient permissions") {
+                return Err(NetError::new(
+                    ErrorKind::Refused,
+                    "The TV didn't allow this when it was paired. Pair it again (tap its name, then Pair again) and accept on the TV.".into(),
+                ));
+            }
             return Err(NetError::new(ErrorKind::Unsupported, format!("{uri}: {why}")));
         }
         Ok(answer)
@@ -324,6 +395,20 @@ fn split_host(host: &str) -> (&str, Option<u16>) {
         },
         _ => (host, None),
     }
+}
+
+/* A channel from webOS ({"channelId", "channelNumber", "channelName"}). */
+fn channel_of(value: &Value) -> Option<Channel> {
+    let text = |key: &str| value[key].as_str().unwrap_or_default().chars().take(64).collect::<String>();
+    let id = text("channelId");
+    if id.is_empty() {
+        return None;
+    }
+    Some(Channel {
+        id,
+        number: text("channelNumber"),
+        name: text("channelName"),
+    })
 }
 
 fn closed() -> NetError {
@@ -431,9 +516,35 @@ struct TvState {
     input_apps: HashMap<String, String>,
     /* The app on screen. */
     app: String,
+    /* App id -> its name, from the TV's list of apps (for media.app). */
+    app_labels: HashMap<String, String>,
+    /* Following the channel on screen (see follow_channel). */
+    channel_follow: ChannelFollow,
+    /* The TV's whole channel list, for searching and paging it
+     * (adapters/channels.rs); fetched when the list is opened. */
+    channel_list: Option<Vec<Channel>>,
 }
 
+/* The channel subscription only works while Live TV is on screen -- and
+ * not even then right after the TV woke up: its Live TV app isn't ready
+ * yet and refuses it (seen on the real TV: the channel never showed after
+ * "switch on"). So it's asked for again, every CHANNEL_RETRY, until a
+ * channel comes (at most CHANNEL_ATTEMPTS times); and afresh on every new
+ * connection and every time Live TV comes back. */
+#[derive(Default)]
+struct ChannelFollow {
+    subscribed: bool,
+    attempts: u32,
+    last: Option<Instant>,
+}
+#[cfg(not(test))]
+const CHANNEL_RETRY: Duration = Duration::from_secs(5);
+#[cfg(test)]
+const CHANNEL_RETRY: Duration = Duration::from_millis(200);
+const CHANNEL_ATTEMPTS: u32 = 12;
+
 /* The subscriptions (their fixed ids). */
+const CHANNEL_SUBSCRIPTION: (&str, &str) = ("channel", "tv/getCurrentChannel");
 const SUBSCRIPTIONS: [(&str, &str); 5] = [
     ("power", "com.webos.service.tvpower/power/getPowerState"),
     ("volume", "audio/getVolume"),
@@ -444,6 +555,9 @@ const SUBSCRIPTIONS: [(&str, &str); 5] = [
 
 struct Task {
     id: String,
+    /* The device has the `remote` capability (TVs added before #44 get
+     * it at start, see main.rs). */
+    has_remote: bool,
     host: Option<String>,
     mac: Option<String>,
     cert: Option<String>,
@@ -593,8 +707,11 @@ impl Task {
             }
         }
         /* Connected: it's on, unless the power subscription says it's
-         * only in standby (older TVs don't have it). */
+         * only in standby (older TVs don't have it). A new connection has
+         * no subscriptions yet -- the channel's included (forgetting that
+         * froze the channel after a reconnect, seen on the real TV). */
         self.tv.on = true;
+        self.tv.channel_follow = ChannelFollow::default();
         for (id, uri) in SUBSCRIPTIONS {
             match conn.call("subscribe", Some(id), uri, json!({})).await {
                 Ok(first) => self.apply(&first),
@@ -603,8 +720,165 @@ impl Task {
                 Err(_) => return Err(End::Lost),
             }
         }
+        /* The apps' names, for media.app ("Netflix", not its id). */
+        if let Ok(apps) = self.list_apps(&mut conn).await {
+            self.tv.app_labels = apps.into_iter().map(|a| (a.id, a.label)).collect();
+            self.update_input();
+        }
+        self.follow_channel(&mut conn).await;
+        if self.has_remote {
+            let remote = Remote {
+                buttons: REMOTE_BUTTONS.iter().map(|b| b.to_string()).collect(),
+                keyboard: true,
+            };
+            if let Err(e) = self.hub.report(&self.id, "remote", json!(remote)).await {
+                println!("lg-webos: {}: {e}", self.id);
+            }
+        }
         self.report().await;
         Ok(conn)
+    }
+
+    /* Whether the channel should be asked for (again) now or soon: Live
+     * TV on screen, no channel known yet, attempts left. */
+    fn channel_wanted(&self) -> bool {
+        let follow = &self.tv.channel_follow;
+        self.tv.app == LIVE_TV_APP
+            && (!follow.subscribed || self.tv.media.channel.is_none())
+            && follow.attempts < CHANNEL_ATTEMPTS
+    }
+
+    /* The channel subscription (see ChannelFollow), if wanted and its
+     * time has come. True if a channel came in (the caller reports it). */
+    async fn follow_channel(&mut self, conn: &mut Conn) -> bool {
+        let due = self.tv.channel_follow.last.is_none_or(|t| t.elapsed() >= CHANNEL_RETRY);
+        if !self.channel_wanted() || !due {
+            return false;
+        }
+        let follow = &mut self.tv.channel_follow;
+        follow.attempts += 1;
+        follow.last = Some(Instant::now());
+        let (id, uri) = CHANNEL_SUBSCRIPTION;
+        match conn.call("subscribe", Some(id), uri, json!({})).await {
+            Ok(first) => {
+                self.tv.channel_follow.subscribed = true;
+                self.apply(&first);
+                self.tv.media.channel.is_some()
+            }
+            Err(_) => false,
+        }
+    }
+
+    /* The TV's apps (launch points), as {id, label}. */
+    async fn list_apps(&mut self, conn: &mut Conn) -> Result<Vec<MediaInput>, NetError> {
+        let answer = conn.request("com.webos.applicationManager/listLaunchPoints", json!({})).await?;
+        Ok(answer["launchPoints"]
+            .as_array()
+            .map(|list| {
+                list.iter()
+                    .filter_map(|a| {
+                        let id = a["id"].as_str()?.chars().take(64).collect::<String>();
+                        let label = a["title"].as_str().unwrap_or(&id).chars().take(64).collect();
+                        Some(MediaInput { id, label })
+                    })
+                    .take(200)
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    /* A remote or media action (issue #44), while connected. The rules
+     * (which actions, which arguments) were checked by control.rs. */
+    async fn action(&mut self, conn: &mut Conn, capability: &str, name: &str, args: &Value) -> Result<Value, NetError> {
+        let text = |key: &str| args[key].as_str().unwrap_or_default().to_string();
+        match (capability, name) {
+            ("remote", "press") => {
+                self.press(conn, webos_button(&text("button"))).await?;
+                Ok(json!({}))
+            }
+            ("remote", "type") => {
+                conn.request("com.webos.service.ime/insertText", json!({ "text": text("text"), "replace": 0 }))
+                    .await?;
+                Ok(json!({}))
+            }
+            ("remote", "delete") => {
+                let count = args["count"].as_u64().unwrap_or(1);
+                conn.request("com.webos.service.ime/deleteCharacters", json!({ "count": count })).await?;
+                Ok(json!({}))
+            }
+            ("remote", "submit") => {
+                conn.request("com.webos.service.ime/sendEnterKey", json!({})).await?;
+                Ok(json!({}))
+            }
+            ("media", "apps") => {
+                let apps = self.list_apps(conn).await?;
+                self.tv.app_labels = apps.iter().map(|a| (a.id.clone(), a.label.clone())).collect();
+                Ok(json!({ "apps": apps }))
+            }
+            ("media", "launch") => {
+                conn.request("system.launcher/launch", json!({ "id": text("app") })).await?;
+                Ok(json!({}))
+            }
+            ("media", "channels") => {
+                /* Fetched from the TV when the list is opened (it may have
+                 * changed: a channel scan); searches and further pages
+                 * use what we have. */
+                let query = channels::Query::from_args(args);
+                if query.is_fresh_look() || self.tv.channel_list.is_none() {
+                    let answer = conn.request("tv/getChannelList", json!({})).await?;
+                    let list = answer["channelList"]
+                        .as_array()
+                        .map(|list| list.iter().filter_map(channel_of).take(20_000).collect())
+                        .unwrap_or_default();
+                    self.tv.channel_list = Some(list);
+                }
+                Ok(channels::page(self.tv.channel_list.as_deref().unwrap_or_default(), &query))
+            }
+            ("media", "tune") => {
+                conn.request("tv/openChannel", json!({ "channelId": text("channel") })).await?;
+                Ok(json!({}))
+            }
+            _ => Err(NetError::new(ErrorKind::Unsupported, format!("a TV can't {capability} {name}"))),
+        }
+    }
+
+    /* One button over the pointer socket, opened (again) when needed. */
+    async fn press(&mut self, conn: &mut Conn, button: &str) -> Result<(), NetError> {
+        let fresh = matches!(&conn.pointer, Some((_, used)) if used.elapsed() < POINTER_IDLE);
+        if !fresh {
+            conn.pointer = None;
+            let answer = conn.request("com.webos.service.networkinput/getPointerInputSocket", json!({})).await?;
+            let url = answer["socketPath"].as_str().unwrap_or_default();
+            /* Refused, not Unreachable: the TV itself still answers (see
+             * session's `lost`). */
+            let socket = self
+                .open_pointer(url)
+                .await
+                .map_err(|e| NetError::new(ErrorKind::Refused, format!("the button socket: {e}")))?;
+            conn.pointer = Some((socket, Instant::now()));
+        }
+        let message = format!("type:button\nname:{button}\n\n");
+        let (socket, used) = conn.pointer.as_mut().expect("opened above");
+        if let Err(e) = socket.send(Message::Text(message)).await {
+            conn.pointer = None;
+            return Err(NetError::new(ErrorKind::Refused, format!("the button couldn't be sent, try again: {e}")));
+        }
+        *used = Instant::now();
+        Ok(())
+    }
+
+    /* The pointer socket's URL ("wss://192.168.1.40:3001/resources/…/
+     * netinput.pointer.sock") -> a connection, with the same certificate
+     * pinning as the main one. The TV's own address is used, not the one
+     * in the URL (a TV with two network interfaces may name the other). */
+    async fn open_pointer(&self, url: &str) -> Result<AnyWebSocket, NetError> {
+        let bad = || NetError::new(ErrorKind::Unsupported, format!("unexpected button socket address {url:?}"));
+        let (scheme, rest) = url.split_once("://").ok_or_else(bad)?;
+        let (authority, path) = rest.split_at(rest.find('/').ok_or_else(bad)?);
+        let port: u16 = authority.rsplit_once(':').and_then(|(_, p)| p.parse().ok()).ok_or_else(bad)?;
+        let host = split_host(self.host.as_deref().unwrap_or_default()).0;
+        let transport = if scheme == "wss" { Transport::Pinned(self.cert.as_deref()) } else { Transport::Plain };
+        Ok(net::ws_open(host, port, path, transport).await?.0)
     }
 
     async fn session(&mut self, mut conn: Conn, commands: &mut mpsc::Receiver<DeviceCmd>, waking: &mut Option<Waking>) -> End {
@@ -614,6 +888,10 @@ impl Task {
             /* Pushes that arrived while a request waited. */
             while let Some(message) = conn.backlog.pop_front() {
                 self.apply(&message);
+                self.report().await;
+            }
+            /* Live TV came on screen: follow its channel (and show it). */
+            if self.follow_channel(&mut conn).await {
                 self.report().await;
             }
             /* A pending "on": answered once the TV says it's on. */
@@ -645,6 +923,17 @@ impl Task {
                             let _ = old.reply.send(Ok(()));
                         }
                     }
+                    Some(DeviceCmd::Action { capability, name, args, reply }) => {
+                        let result = self.action(&mut conn, &capability, &name, &args).await;
+                        /* Only the MAIN connection failing means the TV is gone
+                         * (a broken button socket is just opened again, see
+                         * press). */
+                        let lost = matches!(&result, Err(e) if e.kind == ErrorKind::Unreachable);
+                        let _ = reply.send(result.map_err(|e| e.message));
+                        if lost {
+                            return End::Lost;
+                        }
+                    }
                     Some(DeviceCmd::Command { capability, value, reply }) => {
                         let switched_off = capability == "switch" && value["on"] == false && self.tv.on;
                         let result = self.command(&mut conn, &capability, &value).await;
@@ -663,6 +952,9 @@ impl Task {
                         }
                     }
                 },
+                /* Only while the channel is still wanted: wakes the loop so
+                 * follow_channel (at its top) asks again. */
+                _ = tokio::time::sleep(CHANNEL_RETRY), if self.channel_wanted() => {}
                 _ = tick.tick() => {
                     if waking.as_ref().is_some_and(|w| Instant::now() > w.until) {
                         if let Some(w) = waking.take() {
@@ -735,7 +1027,10 @@ impl Task {
      * "switch on" was started: the caller retries quickly and answers it
      * when the TV is up. */
     async fn command_while_off(&mut self, host: &str, cmd: DeviceCmd) -> Option<Waking> {
-        let DeviceCmd::Command { capability, value, reply } = cmd;
+        let DeviceCmd::Command { capability, value, reply } = cmd else {
+            cmd.refuse("The TV is off. Switch it on first.");
+            return None;
+        };
         if capability != "switch" {
             let _ = reply.send(Err("The TV is off. Switch it on first.".into()));
             return None;
@@ -815,8 +1110,15 @@ impl Task {
             Some("app") => {
                 if let Some(app) = payload["appId"].as_str() {
                     self.tv.app = app.to_string();
+                    if app != LIVE_TV_APP {
+                        /* Followed afresh when Live TV comes back. */
+                        self.tv.channel_follow = ChannelFollow::default();
+                    }
                     self.update_input();
                 }
+            }
+            Some("channel") => {
+                self.tv.media.channel = channel_of(payload);
             }
             _ => {}
         }
@@ -825,6 +1127,22 @@ impl Task {
     /* The input on screen: the input whose app is in the foreground. */
     fn update_input(&mut self) {
         self.tv.media.input = self.tv.input_apps.get(&self.tv.app).cloned().unwrap_or_default();
+        /* The app on screen, by name: an input's label, the TV's own name
+         * for the app, else its id. */
+        self.tv.media.app = (!self.tv.app.is_empty()).then(|| {
+            let from_input = self.tv.media.inputs.iter().find(|i| i.id == self.tv.media.input).map(|i| i.label.clone());
+            let label = from_input
+                .or_else(|| self.tv.app_labels.get(&self.tv.app).cloned())
+                .unwrap_or_else(|| self.tv.app.clone());
+            MediaInput {
+                id: self.tv.app.chars().take(64).collect(),
+                label: label.chars().take(64).collect(),
+            }
+        });
+        /* Only while watching TV. */
+        if self.tv.app != LIVE_TV_APP {
+            self.tv.media.channel = None;
+        }
     }
 
     /* Media before power before online: a screen that sees "on" never
@@ -853,8 +1171,8 @@ impl Task {
      * removed: answer commands with why. */
     async fn park(&mut self, health: Health, commands: &mut mpsc::Receiver<DeviceCmd>, why: &str) {
         self.hub.set_online(&self.id, health).await;
-        while let Some(DeviceCmd::Command { reply, .. }) = commands.recv().await {
-            let _ = reply.send(Err(format!("The TV can't be controlled: {why}.")));
+        while let Some(cmd) = commands.recv().await {
+            cmd.refuse(format!("The TV can't be controlled: {why}."));
         }
     }
 }
@@ -941,7 +1259,7 @@ mod tests {
             .into(),
             identity: String::new(),
             online: None,
-            capabilities: Capabilities::with_defaults(&["switch".into(), "media".into()]).unwrap(),
+            capabilities: Capabilities::with_defaults(&["switch".into(), "media".into(), "remote".into()]).unwrap(),
         };
         let (state_tx, state_rx) = mpsc::channel(8);
         let (events_tx, events) = broadcast::channel(256);
@@ -1056,6 +1374,117 @@ mod tests {
         println!("certificate: {fingerprint:?}");
         conn.send(json!({"type": "hello", "id": "hello", "payload": {}})).await.unwrap();
         println!("{}", conn.recv().await.unwrap());
+    }
+
+    /* Issue #44: the remote (buttons over the pointer socket), the
+     * keyboard, apps and channels -- and the rules checked before any of
+     * it reaches the TV. */
+    #[tokio::test]
+    async fn remote_keyboard_apps_and_channels() {
+        let sim = TvSim::start().await;
+        let mut hub = hub_with_tv(&sim, TvSim::KEY).await;
+        let d = until(&mut hub, |d| {
+            d.online == Some(Health::Online) && d.capabilities.remote.as_ref().is_some_and(|r| !r.buttons.is_empty())
+        })
+        .await;
+        assert!(d.capabilities.remote.unwrap().keyboard);
+        let control = hub.control.clone();
+        let act = |capability: &'static str, name: &'static str, args: Value| {
+            let control = control.clone();
+            async move { control.action("tv", capability, name, args).await }
+        };
+
+        /* Buttons, in the hub's names, arrive in webOS's. */
+        act("remote", "press", json!({"button": "UP"})).await.unwrap();
+        act("remote", "press", json!({"button": "OK"})).await.unwrap();
+        act("remote", "press", json!({"button": "CHANNEL_UP"})).await.unwrap();
+        /* Sent is not yet received: the sim reads them on its own task. */
+        for _ in 0..50 {
+            if sim.presses().len() == 3 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(sim.presses(), ["UP", "ENTER", "CHANNELUP"]);
+        /* Refused before the TV sees it. */
+        assert!(act("remote", "press", json!({"button": "SELF_DESTRUCT"})).await.is_err());
+        assert!(act("remote", "fly", json!({})).await.is_err());
+
+        /* The keyboard. */
+        act("remote", "type", json!({"text": "netflixx"})).await.unwrap();
+        act("remote", "delete", json!({"count": 1})).await.unwrap();
+        act("remote", "submit", json!({})).await.unwrap();
+        assert_eq!(sim.typed(), ("netflix".to_string(), 1));
+
+        /* Apps: listed, launched, shown by name. */
+        let apps = act("media", "apps", json!({})).await.unwrap();
+        assert_eq!(apps["apps"][0], json!({"id": "netflix", "label": "Netflix"}));
+        act("media", "launch", json!({"app": "netflix"})).await.unwrap();
+        until(&mut hub, |d| d.capabilities.media.as_ref().and_then(|m| m.app.as_ref()).is_some_and(|a| a.label == "Netflix")).await;
+
+        /* Channels: only while Live TV is on; listed, tuned, followed. */
+        hub.control.command("tv", "media", json!({"volume": 12, "muted": false, "input": "TV"})).await.unwrap();
+        let d = until(&mut hub, |d| d.capabilities.media.as_ref().is_some_and(|m| m.channel.is_some())).await;
+        assert_eq!(d.capabilities.media.unwrap().channel.unwrap().name, "TVR 1");
+        /* A list bigger than 256 KB (seen on the real TV): it arrives, and
+         * the connection survives it. The screen gets one page of it, and
+         * how many there are. */
+        let channels = act("media", "channels", json!({})).await.unwrap();
+        assert_eq!(channels["channels"][1], json!({"id": "ch-5", "number": "5", "name": "Pro TV"}));
+        assert_eq!(channels["channels"].as_array().unwrap().len(), 100);
+        assert_eq!(channels["total"], 3003);
+        assert_eq!(sim.connections(), (2, 0), "main + button socket, none dropped");
+        /* Search and further pages, from the list the hub keeps. */
+        let found = act("media", "channels", json!({"query": "antena"})).await.unwrap();
+        assert_eq!(found["channels"], json!([{"id": "ch-7", "number": "7", "name": "Antena 1"}]));
+        let page = act("media", "channels", json!({"offset": 3000, "limit": 100})).await.unwrap();
+        assert_eq!(page["channels"].as_array().unwrap().len(), 3);
+        assert!(act("media", "channels", json!({"limit": 0})).await.is_err());
+        act("media", "tune", json!({"channel": "ch-5"})).await.unwrap();
+        until(&mut hub, |d| {
+            d.capabilities.media.as_ref().and_then(|m| m.channel.as_ref()).is_some_and(|c| c.number == "5")
+        })
+        .await;
+        /* Leaving Live TV: no channel any more. */
+        hub.control.command("tv", "media", json!({"volume": 12, "muted": false, "input": "HDMI_2"})).await.unwrap();
+        until(&mut hub, |d| d.capabilities.media.as_ref().is_some_and(|m| m.channel.is_none())).await;
+
+        /* Off: actions are refused with the reason. */
+        hub.control.command("tv", "switch", json!({"on": false})).await.unwrap();
+        until(&mut hub, |d| d.capabilities.switch.as_ref().is_some_and(|s| !s.on)).await;
+        let err = act("remote", "press", json!({"button": "UP"})).await.unwrap_err();
+        assert!(err.contains("off"), "{err}");
+    }
+
+    /* After a reconnect (here: off, then on) the channel is still followed.
+     * Regressions, both seen on the real TV: the "already subscribed" mark
+     * outlived the connection (the channel froze); and right after waking
+     * the TV refuses the channel, which was never asked for again. */
+    #[tokio::test]
+    async fn channel_is_followed_after_a_reconnect() {
+        let sim = TvSim::start().await;
+        let mut hub = hub_with_tv(&sim, TvSim::KEY).await;
+        until(&mut hub, |d| d.online == Some(Health::Online)).await;
+        hub.control.command("tv", "media", json!({"volume": 12, "muted": false, "input": "TV"})).await.unwrap();
+        until(&mut hub, |d| d.capabilities.media.as_ref().is_some_and(|m| m.channel.is_some())).await;
+
+        hub.control.command("tv", "switch", json!({"on": false})).await.unwrap();
+        until(&mut hub, |d| d.capabilities.switch.as_ref().is_some_and(|s| !s.on)).await;
+        sim.wake_in(Duration::from_millis(100));
+        hub.control.command("tv", "switch", json!({"on": true})).await.unwrap();
+
+        /* Still on Live TV after waking. The TV refused the channel while
+         * waking up (the sim too): it comes once it's ready -- by itself. */
+        until(&mut hub, |d| {
+            d.capabilities.media.as_ref().and_then(|m| m.channel.as_ref()).is_some_and(|c| c.name == "TVR 1")
+        })
+        .await;
+        /* And changing the channel shows. */
+        hub.control.action("tv", "media", "tune", json!({"channel": "ch-7"})).await.unwrap();
+        until(&mut hub, |d| {
+            d.capabilities.media.as_ref().and_then(|m| m.channel.as_ref()).is_some_and(|c| c.name == "Antena 1")
+        })
+        .await;
     }
 
     /* A quiet TV (nothing changes, so it sends nothing) still answers the

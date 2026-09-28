@@ -54,8 +54,14 @@ pub const HTTP_TIMEOUT: Duration = Duration::from_secs(5);
  * device, and the hub has little RAM to spare. */
 const MAX_REPLY: usize = 256 * 1024;
 
-/* The same limit for one WebSocket message. */
+/* The same limit for one WebSocket message... */
 const MAX_WS_MESSAGE: usize = 256 * 1024;
+/* ...except where a device sends big lists by design: an LG TV sends its
+ * whole channel list in ONE message -- 365 KB for ~400 channels on a real
+ * TV, so several MB for a satellite TV's thousands. Going over the limit
+ * doesn't just fail the one message: the WebSocket library then drops the
+ * whole connection. */
+pub const LARGE_WS_MESSAGE: usize = 16 * 1024 * 1024;
 
 /* A failed request: what kind of failure, and the sentence. Converts to
  * a String (so `?` works in the adapters' Result<_, String> code) and to
@@ -212,13 +218,30 @@ pub enum Transport<'a> {
  * certificate's fingerprint. A certificate that doesn't match the pinned
  * one fails with ErrorKind::Refused -- "not the device we paired with". */
 pub async fn ws_open(host: &str, port: u16, path: &str, transport: Transport<'_>) -> Result<(AnyWebSocket, Option<String>), NetError> {
-    match tokio::time::timeout(HTTP_TIMEOUT, ws_open_inner(host, port, path, transport)).await {
+    ws_open_sized(host, port, path, transport, MAX_WS_MESSAGE).await
+}
+
+/* ws_open with another message size limit (LARGE_WS_MESSAGE). */
+pub async fn ws_open_sized(
+    host: &str,
+    port: u16,
+    path: &str,
+    transport: Transport<'_>,
+    max_message: usize,
+) -> Result<(AnyWebSocket, Option<String>), NetError> {
+    match tokio::time::timeout(HTTP_TIMEOUT, ws_open_inner(host, port, path, transport, max_message)).await {
         Ok(result) => result,
         Err(_) => Err(NetError::new(ErrorKind::Timeout, format!("{host}:{port} isn't answering"))),
     }
 }
 
-async fn ws_open_inner(host: &str, port: u16, path: &str, transport: Transport<'_>) -> Result<(AnyWebSocket, Option<String>), NetError> {
+async fn ws_open_inner(
+    host: &str,
+    port: u16,
+    path: &str,
+    transport: Transport<'_>,
+    max_message: usize,
+) -> Result<(AnyWebSocket, Option<String>), NetError> {
     let unreachable = |e: String| NetError::new(ErrorKind::Unreachable, e);
     let tcp = TcpStream::connect((host, port))
         .await
@@ -251,8 +274,8 @@ async fn ws_open_inner(host: &str, port: u16, path: &str, transport: Transport<'
     };
     let url = format!("{scheme}://{}{path}", with_port(host, port));
     let config = WebSocketConfig {
-        max_message_size: Some(MAX_WS_MESSAGE),
-        max_frame_size: Some(MAX_WS_MESSAGE),
+        max_message_size: Some(max_message),
+        max_frame_size: Some(max_message),
         ..Default::default()
     };
     let (socket, _response) = tokio_tungstenite::client_async_with_config(url, stream, Some(config))

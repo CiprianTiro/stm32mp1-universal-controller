@@ -49,6 +49,7 @@ SRC_URI = " \
     file://Cargo.toml \
     file://Cargo.lock \
     file://src/adapters/mod.rs \
+    file://src/adapters/channels.rs \
     file://src/adapters/lg_webos.rs \
     file://src/adapters/m4_led.rs \
     file://src/adapters/net.rs \

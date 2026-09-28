@@ -657,7 +657,9 @@ impl Templates {
 mod tests {
     use super::*;
 
-    const ALL_CAPS: [&str; 5] = ["switch", "dimmer", "color", "sensor", "media"];
+    /* The hub's own list: a template using a new capability is checked
+     * against what device.rs really has. */
+    const ALL_CAPS: [&str; crate::device::CAPABILITY_NAMES.len()] = crate::device::CAPABILITY_NAMES;
     const ADAPTERS: [&str; 3] = ["m4-led", "wled", "lg-webos"];
 
     fn known() -> Known<'static> {

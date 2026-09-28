@@ -336,10 +336,17 @@ async fn handle_event(id: DeviceId, event: shadow::Event, payload: &[u8], contro
     match desired {
         Ok(Some(desired)) => {
             println!("mqtt: applying desired state for {id}");
-            apply_desired(&id, &desired, control).await;
-            /* Report and clear "desired" even if the command was refused:
-             * otherwise AWS would re-send the same refused command forever. */
-            let _ = sync_tx.try_send(Sync::CommandDone(id));
+            /* In its own task: a device can take long to answer (an
+             * unplugged WLED 5 s, waking a TV up to 30 s), and this runs in
+             * the loop that keeps the MQTT connection alive. */
+            let (control, sync_tx) = (control.clone(), sync_tx.clone());
+            tokio::spawn(async move {
+                apply_desired(&id, &desired, &control).await;
+                /* Report and clear "desired" even if the command was
+                 * refused: otherwise AWS would re-send the same refused
+                 * command forever. */
+                let _ = sync_tx.try_send(Sync::CommandDone(id));
+            });
         }
         Ok(None) => {} /* nothing pending */
         Err(e) => println!("mqtt: ignoring malformed message for {id}: {e}"),
@@ -352,10 +359,8 @@ async fn handle_event(id: DeviceId, event: shadow::Event, payload: &[u8], contro
  * Only capabilities can be changed from the cloud; anything else -- e.g.
  * a pre-#34 command like {"on": false} -- is reported and ignored.
  *
- * This runs inside run()'s loop, which also keeps the MQTT connection
- * going, so it must be quick: a virtual device is a message to state.rs,
- * the LED a round trip to the M4 (normally under a millisecond, at most
- * control.rs's 2 s timeout). */
+ * Runs in its own task (see handle_event): a hardware device may take
+ * seconds to answer, and nothing else must wait for it. */
 async fn apply_desired(id: &DeviceId, desired: &Value, control: &Control) {
     let Some(fields) = desired.as_object() else {
         println!("mqtt: {id}: the cloud command isn't a JSON object, ignored");

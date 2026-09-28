@@ -95,6 +95,14 @@ pub enum Msg {
         id: DeviceId,
         reply: oneshot::Sender<Result<(), String>>,
     },
+    /* Adds these capabilities (with their neutral starting values) where
+     * the device lacks them; replies with the ones added. See
+     * Control::add_missing_capabilities. */
+    AddMissingCapabilities {
+        id: DeviceId,
+        names: Vec<String>,
+        reply: oneshot::Sender<Result<Vec<String>, String>>,
+    },
     /* A hardware device became reachable or not (issue #40), reported by
      * its adapter. Screens and the cloud hear about it; the flash doesn't
      * (it only describes this run of the hub, see Device::online). */
@@ -160,6 +168,16 @@ pub async fn run(mut rx: mpsc::Receiver<Msg>, mut devices: HashMap<DeviceId, Dev
                     changed(&out, &devices, Event::Changed(device.clone()), true);
                 }
                 let _ = reply.send(result.map(|(device, _)| device));
+            }
+            Msg::AddMissingCapabilities { id, names, reply } => {
+                let result = add_missing(&mut devices, &id, &names);
+                if let Ok(added) = &result {
+                    if !added.is_empty() {
+                        let device = devices[&id].clone();
+                        changed(&out, &devices, Event::Changed(device), true);
+                    }
+                }
+                let _ = reply.send(result);
             }
             Msg::SetOnline { id, online, reply } => {
                 let result = set_online(&mut devices, &id, online);
@@ -263,6 +281,22 @@ fn set(
     new.capabilities = capabilities;
     devices.insert(id.to_string(), new.clone());
     Ok((new, true))
+}
+
+fn add_missing(devices: &mut HashMap<DeviceId, Device>, id: &str, names: &[String]) -> Result<Vec<String>, String> {
+    let device = devices.get(id).ok_or_else(|| format!("unknown device {id:?}"))?;
+    let mut capabilities = device.capabilities.clone();
+    let mut added = Vec::new();
+    for name in names {
+        if capabilities.add_default(name)? {
+            added.push(name.clone());
+        }
+    }
+    if !added.is_empty() {
+        capabilities.check()?;
+        devices.get_mut(id).expect("checked above").capabilities = capabilities;
+    }
+    Ok(added)
 }
 
 fn set_online(devices: &mut HashMap<DeviceId, Device>, id: &str, online: Health) -> Result<(Device, bool), String> {
@@ -488,6 +522,24 @@ mod tests {
         set_cap(&a.tx, "lamp-1", "dimmer", json!({"level": 10}), Origin::Client).await.unwrap();
         let saved = a.saves.borrow_and_update().clone();
         assert!(!String::from_utf8(saved).unwrap().contains("online"));
+    }
+
+    /* Issue #44: a device gains the capabilities its template got since;
+     * existing ones are left as they are. */
+    #[tokio::test]
+    async fn missing_capabilities_are_added_once() {
+        let mut a = spawn(vec![lamp("lamp-1")]);
+        let names = vec!["switch".to_string(), "dimmer".to_string(), "color".to_string()];
+        let added = ask(&a.tx, |reply| Msg::AddMissingCapabilities { id: "lamp-1".into(), names: names.clone(), reply })
+            .await
+            .unwrap();
+        assert_eq!(added, ["color"]);
+        let Event::Changed(d) = a.events.recv().await.unwrap() else { panic!() };
+        assert_eq!(d.capabilities.dimmer, Some(Dimmer { level: 50 }), "kept, not reset");
+        assert!(d.capabilities.color.is_some());
+        let again = ask(&a.tx, |reply| Msg::AddMissingCapabilities { id: "lamp-1".into(), names, reply }).await.unwrap();
+        assert!(again.is_empty());
+        assert!(a.events.try_recv().is_err());
     }
 
     #[tokio::test]

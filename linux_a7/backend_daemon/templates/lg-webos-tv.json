@@ -7,7 +7,7 @@
   "category": "media",
   "description": "LG smart TVs with webOS (2014 and later).",
   "adapter": "lg-webos",
-  "capabilities": ["switch", "media"],
+  "capabilities": ["switch", "media", "remote"],
   "inputs": [
     { "id": "host", "type": "text", "label": "TV address", "hint": "Settings > Network on the TV shows it, e.g. 192.168.1.40", "validate": { "pattern": "host" } },
     { "id": "mac", "type": "text", "label": "TV MAC address", "hint": "Needed to switch the TV on; read from the TV after pairing if left empty", "required": false, "validate": { "pattern": "mac" } }

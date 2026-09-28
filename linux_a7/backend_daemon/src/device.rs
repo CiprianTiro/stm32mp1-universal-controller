@@ -169,10 +169,12 @@ pub struct Capabilities {
     pub sensor: Option<Sensor>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub media: Option<Media>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote: Option<Remote>,
 }
 
 /* The names, e.g. for error messages and the protocol's "hello". */
-pub const CAPABILITY_NAMES: [&str; 5] = ["switch", "dimmer", "color", "sensor", "media"];
+pub const CAPABILITY_NAMES: [&str; 6] = ["switch", "dimmer", "color", "sensor", "media", "remote"];
 
 /* On/off: lamps, plugs, relays, a TV's power. */
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -223,7 +225,15 @@ pub struct Reading {
  * Power is the device's `switch`. `input` is "" while no input is shown
  * (an app, e.g. Netflix). `inputs` is what the device offers -- it only
  * comes FROM the device: in a command it's ignored (and may be left out),
- * a client sends volume, muted and input. */
+ * a client sends volume, muted and input.
+ *
+ * Issue #44, also only FROM the device (ignored in commands): `app`, what's
+ * on screen ({"id": "netflix", "label": "Netflix"}), and `channel`, the
+ * channel while watching TV. The LISTS of apps and channels can be long
+ * (hundreds of channels): not part of the state -- which is sent on every
+ * change and kept in the cloud shadow -- but asked for with the actions
+ * "apps" / "channels" (see check_action), and chosen with "launch" /
+ * "tune". */
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 #[serde(deny_unknown_fields)]
 pub struct Media {
@@ -233,7 +243,45 @@ pub struct Media {
     pub input: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inputs: Vec<MediaInput>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app: Option<MediaInput>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<Channel>,
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Channel {
+    /* The device's own id for it (what "tune" takes). */
+    pub id: String,
+    /* As the remote shows it: "5", "7-1". */
+    pub number: String,
+    pub name: String,
+}
+
+/* A remote control's buttons (issue #44): TVs now, the IR blaster (#42)
+ * later. There's no state to set -- a button is PRESSED, an action (see
+ * check_action) -- so the state only says which buttons this device has,
+ * and only the device reports it. Names are the hub's own, the same for
+ * every brand (REMOTE_BUTTONS); an adapter translates them. */
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct Remote {
+    pub buttons: Vec<String>,
+    /* Text can be typed into the device (a TV's on-screen keyboard). */
+    #[serde(default)]
+    pub keyboard: bool,
+}
+
+/* Every button name a remote may have. The first rows are what a screen
+ * lays out as the remote itself; the digits and colours are extras. */
+pub const REMOTE_BUTTONS: [&str; 34] = [
+    "UP", "DOWN", "LEFT", "RIGHT", "OK", "BACK", "HOME", "MENU", "EXIT", "INFO",
+    "VOLUME_UP", "VOLUME_DOWN", "MUTE", "CHANNEL_UP", "CHANNEL_DOWN",
+    "PLAY", "PAUSE", "STOP", "REWIND", "FAST_FORWARD",
+    "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
+    "RED", "GREEN", "YELLOW", "BLUE",
+];
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -311,6 +359,30 @@ impl Capability for Media {
         if self.inputs.len() > 32 || !self.inputs.iter().all(|i| text_ok(&i.id) && text_ok(&i.label)) {
             return Err("media inputs: at most 32, each id and label at most 64 characters".into());
         }
+        if let Some(app) = &self.app {
+            if !text_ok(&app.id) || !text_ok(&app.label) {
+                return Err("media app: id and label at most 64 characters".into());
+            }
+        }
+        if let Some(c) = &self.channel {
+            if !text_ok(&c.id) || !text_ok(&c.number) || !text_ok(&c.name) {
+                return Err("media channel: id, number and name at most 64 characters".into());
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Capability for Remote {
+    const NAME: &'static str = "remote";
+    /* Buttons are pressed (an action), not set. */
+    const SETTABLE: bool = false;
+    fn check(&self) -> Result<(), String> {
+        for button in &self.buttons {
+            if !REMOTE_BUTTONS.contains(&button.as_str()) {
+                return Err(format!("unknown remote button {button:?}"));
+            }
+        }
         Ok(())
     }
 }
@@ -361,6 +433,7 @@ pub fn set_capability(
         "color" => replace(&mut caps.color, id, value, origin)?,
         "sensor" => replace(&mut caps.sensor, id, value, origin)?,
         "media" => replace(&mut caps.media, id, value, origin)?,
+        "remote" => replace(&mut caps.remote, id, value, origin)?,
         other => {
             return Err(format!(
                 "unknown capability {other:?} (known: {})",
@@ -390,6 +463,97 @@ fn replace<T: Capability>(
     Ok(())
 }
 
+/* ------------------------------------------------------------------ */
+/* Actions (issue #44)                                                 */
+/* ------------------------------------------------------------------ */
+
+/* An ACTION is a one-off request that changes no state by itself (it may
+ * lead to a state change the device then reports): press a remote's
+ * button, type text, list a TV's channels, launch an app. Later also a
+ * vacuum's "dock", a blind's "stop". Like set_capability for commands,
+ * this is the one place that says which actions exist and what their
+ * arguments must look like -- control.rs checks every action here before
+ * the device's adapter sees it, whoever sent it.
+ *
+ *   remote  press {"button": "UP"}          one of the device's buttons
+ *           type {"text": "netflix"}        into the active text field
+ *           delete {"count": 1}             characters before the cursor
+ *           submit {}                       the keyboard's Enter
+ *   media   apps {}      -> {"apps": [{"id", "label"}]}
+ *           launch {"app": "<id>"}
+ *           channels {"query"?, "offset"?, "limit"?}
+ *                -> {"channels": [{"id", "number", "name"}], "total": N}
+ *                   one page of the matching channels (adapters/channels.rs)
+ *           tune {"channel": "<id>"}                                    */
+pub fn check_action(device: &Device, capability: &str, name: &str, args: &serde_json::Value) -> Result<(), String> {
+    let id = &device.id;
+    let caps = &device.capabilities;
+    let no_args = || match args {
+        serde_json::Value::Null => Ok(()),
+        serde_json::Value::Object(o) if o.is_empty() => Ok(()),
+        _ => Err(format!("{capability} {name} takes no arguments")),
+    };
+    let text_arg = |key: &str, max: usize| -> Result<(), String> {
+        let text = args[key].as_str().ok_or_else(|| format!("{capability} {name} needs {{\"{key}\": \"...\"}}"))?;
+        if text.is_empty() || text.chars().count() > max || text.chars().any(char::is_control) {
+            return Err(format!("{capability} {name}: {key} must be 1-{max} characters, no control characters"));
+        }
+        Ok(())
+    };
+    match capability {
+        "remote" => {
+            let remote = caps.remote.as_ref().ok_or_else(|| format!("{id} has no capability \"remote\""))?;
+            match name {
+                "press" => {
+                    let button = args["button"].as_str().ok_or("remote press needs {\"button\": \"UP\"}")?;
+                    if !remote.buttons.iter().any(|b| b == button) {
+                        return Err(format!("{id} has no button {button:?}"));
+                    }
+                    Ok(())
+                }
+                "type" | "delete" | "submit" if !remote.keyboard => Err(format!("{id} can't take typed text")),
+                "type" => text_arg("text", 256),
+                "delete" => match args["count"].as_u64() {
+                    Some(1..=256) => Ok(()),
+                    _ => Err("remote delete needs {\"count\": 1-256}".into()),
+                },
+                "submit" => no_args(),
+                other => Err(format!("remote has no action {other:?} (press, type, delete, submit)")),
+            }
+        }
+        "media" => {
+            if caps.media.is_none() {
+                return Err(format!("{id} has no capability \"media\""));
+            }
+            match name {
+                "apps" => no_args(),
+                "channels" => {
+                    if let Some(query) = args.get("query") {
+                        let query = query.as_str().ok_or("media channels: query must be text")?;
+                        if query.chars().count() > 64 || query.chars().any(char::is_control) {
+                            return Err("media channels: query at most 64 characters".into());
+                        }
+                    }
+                    for key in ["offset", "limit"] {
+                        if args.get(key).is_some_and(|v| v.as_u64().is_none()) {
+                            return Err(format!("media channels: {key} must be a whole number"));
+                        }
+                    }
+                    if args.get("limit").and_then(|v| v.as_u64()) == Some(0) {
+                        return Err("media channels: limit must be at least 1".into());
+                    }
+                    Ok(())
+                }
+                "launch" => text_arg("app", 128),
+                "tune" => text_arg("channel", 128),
+                other => Err(format!("media has no action {other:?} (apps, launch, channels, tune)")),
+            }
+        }
+        other if CAPABILITY_NAMES.contains(&other) => Err(format!("{other} has no actions")),
+        other => Err(format!("unknown capability {other:?}")),
+    }
+}
+
 impl Capabilities {
     /* A new device's capabilities, from its template's list of names:
      * each with a neutral starting value (off, full brightness, white).
@@ -397,22 +561,39 @@ impl Capabilities {
     pub fn with_defaults(names: &[String]) -> Result<Capabilities, String> {
         let mut caps = Capabilities::default();
         for name in names {
-            match name.as_str() {
-                "switch" => caps.switch = Some(Switch { on: false }),
-                "dimmer" => caps.dimmer = Some(Dimmer { level: 100 }),
-                "color" => {
-                    caps.color = Some(Color {
-                        hex: Some("#FFFFFF".into()),
-                        kelvin: None,
-                    })
-                }
-                "sensor" => caps.sensor = Some(Sensor::default()),
-                "media" => caps.media = Some(Media::default()),
-                other => return Err(format!("unknown capability {other:?}")),
-            }
+            caps.add_default(name)?;
         }
         caps.check()?;
         Ok(caps)
+    }
+
+    /* Adds one capability with its neutral starting value, if missing;
+     * true if it was added. Also for devices created before their
+     * template gained a capability (issue #44: TVs added in #40 get
+     * `remote`, see state::Msg::AddMissingCapabilities). */
+    pub fn add_default(&mut self, name: &str) -> Result<bool, String> {
+        fn fill<T>(slot: &mut Option<T>, value: T) -> bool {
+            if slot.is_some() {
+                return false;
+            }
+            *slot = Some(value);
+            true
+        }
+        Ok(match name {
+            "switch" => fill(&mut self.switch, Switch { on: false }),
+            "dimmer" => fill(&mut self.dimmer, Dimmer { level: 100 }),
+            "color" => fill(
+                &mut self.color,
+                Color {
+                    hex: Some("#FFFFFF".into()),
+                    kelvin: None,
+                },
+            ),
+            "sensor" => fill(&mut self.sensor, Sensor::default()),
+            "media" => fill(&mut self.media, Media::default()),
+            "remote" => fill(&mut self.remote, Remote::default()),
+            other => return Err(format!("unknown capability {other:?}")),
+        })
     }
 
     /* Checks every capability that's present, and that there is at least
@@ -436,6 +617,10 @@ impl Capabilities {
             any = true;
         }
         if let Some(c) = &self.media {
+            c.check()?;
+            any = true;
+        }
+        if let Some(c) = &self.remote {
             c.check()?;
             any = true;
         }
@@ -537,6 +722,47 @@ pub fn migrate_v1(id: &str, properties: &HashMap<String, serde_json::Value>) -> 
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /* Issue #44: which actions exist, and their arguments. */
+    #[test]
+    fn actions_are_checked() {
+        let mut tv = lamp();
+        tv.capabilities = Capabilities::with_defaults(&["switch".into(), "media".into(), "remote".into()]).unwrap();
+        tv.capabilities.remote = Some(Remote {
+            buttons: vec!["UP".into(), "OK".into()],
+            keyboard: true,
+        });
+        let ok = |cap: &str, name: &str, args: serde_json::Value| check_action(&tv, cap, name, &args);
+        assert_eq!(ok("remote", "press", json!({"button": "UP"})), Ok(()));
+        assert!(ok("remote", "press", json!({"button": "HOME"})).unwrap_err().contains("no button"));
+        assert!(ok("remote", "press", json!({})).is_err());
+        assert_eq!(ok("remote", "type", json!({"text": "netflix"})), Ok(()));
+        assert!(ok("remote", "type", json!({"text": "line\nbreak"})).is_err());
+        assert!(ok("remote", "delete", json!({"count": 0})).is_err());
+        assert_eq!(ok("remote", "submit", json!({})), Ok(()));
+        assert!(ok("remote", "submit", json!({"x": 1})).is_err());
+        assert_eq!(ok("media", "channels", serde_json::Value::Null), Ok(()));
+        assert_eq!(ok("media", "tune", json!({"channel": "ch-5"})), Ok(()));
+        assert!(ok("media", "tune", json!({})).is_err());
+        assert!(ok("switch", "press", json!({})).unwrap_err().contains("no actions"));
+        assert!(ok("toaster", "pop", json!({})).is_err());
+        /* No keyboard: no typing. */
+        tv.capabilities.remote.as_mut().unwrap().keyboard = false;
+        assert!(check_action(&tv, "remote", "type", &json!({"text": "a"})).is_err());
+        /* A lamp has no remote. */
+        assert!(check_action(&lamp(), "remote", "press", &json!({"button": "UP"})).is_err());
+    }
+
+    /* A remote's buttons come from the device; clients can't set them. */
+    #[test]
+    fn remote_is_read_only_and_checked() {
+        let mut tv = lamp();
+        tv.capabilities.remote = Some(Remote::default());
+        let err = set_capability(&tv, "remote", json!({"buttons": ["UP"]}), Origin::Client).unwrap_err();
+        assert!(err.contains("read-only"), "{err}");
+        assert!(set_capability(&tv, "remote", json!({"buttons": ["UP"], "keyboard": true}), Origin::Device).is_ok());
+        assert!(set_capability(&tv, "remote", json!({"buttons": ["WARP"]}), Origin::Device).is_err());
+    }
 
     fn lamp() -> Device {
         Device {

@@ -89,6 +89,14 @@ pub enum Request {
     WizardReauth { device: String },
     WizardReconfigure { device: String },
     RemoveDevice { id: String },
+    /// A one-off action (issue #44): a remote's button, typed text, a TV's
+    /// app or channel list.
+    DeviceAction {
+        id: String,
+        capability: String,
+        name: String,
+        args: serde_json::Value,
+    },
 }
 
 /// The hub's settings (issue #39), as backend_daemon's settings.rs sends
@@ -145,6 +153,16 @@ pub struct Capabilities {
     pub sensor: Option<Sensor>,
     /* A TV's volume, mute and input (issue #40). */
     pub media: Option<Media>,
+    /* A remote control's buttons (issue #44). */
+    pub remote: Option<Remote>,
+}
+
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct Remote {
+    #[serde(default)]
+    pub buttons: Vec<String>,
+    #[serde(default)]
+    pub keyboard: bool,
 }
 
 #[derive(Deserialize, Clone, Debug, PartialEq)]
@@ -155,6 +173,20 @@ pub struct Media {
     pub input: String,
     #[serde(default)]
     pub inputs: Vec<MediaInput>,
+    /* What's on screen, and the channel while watching TV (issue #44). */
+    #[serde(default)]
+    pub app: Option<MediaInput>,
+    #[serde(default)]
+    pub channel: Option<Channel>,
+}
+
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct Channel {
+    pub id: String,
+    #[serde(default)]
+    pub number: String,
+    #[serde(default)]
+    pub name: String,
 }
 
 #[derive(Deserialize, Clone, Debug, PartialEq)]
@@ -310,11 +342,15 @@ enum ServerMessage {
         device: Option<Device>,
     },
     Templates { templates: Vec<Template> },
+    /* The reply to DeviceAction (issue #44). */
+    ActionResult { result: serde_json::Value },
     Found { devices: Vec<Found> },
     /* The wizard's current step: kept as JSON, main.rs reads it (its
      * fields depend on the step's kind). */
     WizardStep(serde_json::Map<String, serde_json::Value>),
     WizardError {
+        #[serde(default)]
+        session: String,
         #[serde(default)]
         field: Option<String>,
         message: String,
@@ -380,11 +416,14 @@ pub enum Update {
     Templates(Vec<Template>),
     Found(Vec<Found>),
     WizardStep(serde_json::Map<String, serde_json::Value>),
-    WizardError { field: Option<String>, message: String, detail: String },
+    WizardError { session: String, field: Option<String>, message: String, detail: String },
     /// The wizard finished: the device added (or updated).
     WizardDone(Device),
     /// A device was removed on request.
     Removed(Result<(), String>),
+    /// An action's answer (issue #44): `name` is the action ("apps",
+    /// "press"...), the result its data (a list) or why it failed.
+    DeviceAction { name: String, args: serde_json::Value, result: Result<serde_json::Value, String> },
 }
 
 const BACKEND_URL: &str = "ws://127.0.0.1:8080/ws";
@@ -573,8 +612,16 @@ fn to_update(request: &Request, reply: ServerMessage) -> Option<Update> {
         (_, ServerMessage::Templates { templates }) => Some(Update::Templates(templates)),
         (_, ServerMessage::Found { devices }) => Some(Update::Found(devices)),
         (_, ServerMessage::WizardStep(step)) => Some(Update::WizardStep(step)),
-        (_, ServerMessage::WizardError { field, message, detail }) => Some(Update::WizardError { field, message, detail }),
+        (_, ServerMessage::WizardError { session, field, message, detail }) => {
+            Some(Update::WizardError { session, field, message, detail })
+        }
         (Request::WizardFinish { .. }, ServerMessage::Device { device: Some(device) }) => Some(Update::WizardDone(device)),
+        (Request::DeviceAction { name, args, .. }, ServerMessage::ActionResult { result }) => {
+            Some(Update::DeviceAction { name: name.clone(), args: args.clone(), result: Ok(result) })
+        }
+        (Request::DeviceAction { name, args, .. }, ServerMessage::Error { message }) => {
+            Some(Update::DeviceAction { name: name.clone(), args: args.clone(), result: Err(message) })
+        }
         (Request::RemoveDevice { .. }, ServerMessage::Ack) => Some(Update::Removed(Ok(()))),
         (Request::RemoveDevice { .. }, ServerMessage::Error { message }) => Some(Update::Removed(Err(message))),
         (Request::WifiScan, ServerMessage::Error { message }) => Some(Update::ScanFailed(message)),
