@@ -53,6 +53,19 @@ Allowed for every paired client; the hub's screen follows at once.
   mode: dark | light | auto, accent: sky | emerald | amber | violet | rose,
   density: comfortable | compact, time_zone: an IANA name.
 
+Remote control and other actions (issue #44): one-off requests that
+change no state by themselves -- a remote's button, typed text, a TV's
+channel list:
+
+    python3 tools/hub_ws.py <board> press <id> <BUTTON>       UP DOWN LEFT RIGHT OK BACK HOME
+                                                              MENU VOLUME_UP CHANNEL_UP PLAY ...
+    python3 tools/hub_ws.py <board> type <id> '<text>'        into the TV's text field (+ Enter)
+    python3 tools/hub_ws.py <board> action <id> media apps
+    python3 tools/hub_ws.py <board> action <id> media launch '{"app": "netflix"}'
+    python3 tools/hub_ws.py <board> action <id> media channels                 first 100, and "total"
+    python3 tools/hub_ws.py <board> action <id> media channels '{"query": "pro", "offset": 0, "limit": 100}'
+    python3 tools/hub_ws.py <board> action <id> media tune '{"channel": "<id from the list>"}'
+
 Adding real devices (issue #40): the hub's setup wizard, step by step in
 the terminal. `found` lists what the hub sees on the network; pick one with
 found=<address>, or start from a device type (and optionally its way in):
@@ -153,6 +166,15 @@ def build_request(args):
             return {"action": "get_settings"}
         case ["set-settings", *pairs] if pairs and all("=" in p for p in pairs):
             return {"action": "set_settings", **dict(p.split("=", 1) for p in pairs)}
+        case ["press", device_id, button]:
+            return {"action": "device_action", "id": device_id, "capability": "remote",
+                    "name": "press", "args": {"button": button}}
+        case ["type", device_id, text]:
+            return {"action": "device_action", "id": device_id, "capability": "remote",
+                    "name": "type", "args": {"text": text}}
+        case ["action", device_id, capability, name, *args] if len(args) <= 1:
+            return {"action": "device_action", "id": device_id, "capability": capability,
+                    "name": name, "args": json.loads(args[0]) if args else {}}
         case ["found"]:
             return {"action": "list_found"}
         case ["discover"]:
@@ -375,6 +397,10 @@ async def main():
             return
         await ws.send(json.dumps(request))
         print(json.dumps(json.loads(await ws.recv()), indent=2))
+        # "type" means typing AND sending it, as on a phone keyboard.
+        if request["action"] == "device_action" and request["name"] == "type":
+            await ws.send(json.dumps({**request, "name": "submit", "args": {}}))
+            print(json.dumps(json.loads(await ws.recv()), indent=2))
         if request["action"] == "subscribe":
             # Print every event until Ctrl+C.
             async for message in ws:

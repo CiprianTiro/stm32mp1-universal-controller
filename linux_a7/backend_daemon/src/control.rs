@@ -154,6 +154,31 @@ impl Control {
         self.get(id).await?.ok_or_else(|| format!("{id} disappeared"))
     }
 
+    /* A one-off action (issue #44): checked by device.rs's rules like a
+     * command, then carried out by the device's adapter. Virtual devices
+     * have nothing that could carry one out. Returns the action's result
+     * (e.g. a TV's channel list; `{}` for a button press). */
+    pub async fn action(&self, id: &str, capability: &str, name: &str, args: serde_json::Value) -> Result<serde_json::Value, String> {
+        let device = self.get(id).await?.ok_or_else(|| format!("unknown device {id:?}"))?;
+        device::check_action(&device, capability, name, &args)?;
+        if device.source.is_virtual() {
+            return Err(format!("{id} is a virtual device: it has nothing to carry out actions"));
+        }
+        self.adapters.action(id, capability, name, args).await
+    }
+
+    /* Adds the capabilities a device's template lists but the device
+     * lacks (a template that gained one after the device was added, e.g.
+     * #44's `remote` for TVs added in #40). Returns the ones added. */
+    pub async fn add_missing_capabilities(&self, id: &str, names: Vec<String>) -> Result<Vec<String>, String> {
+        self.ask(|reply| Msg::AddMissingCapabilities {
+            id: id.to_string(),
+            names,
+            reply,
+        })
+        .await?
+    }
+
     /* Changes some of a device's adapter settings (the given keys only),
      * and restarts its adapter task so it uses them (issue #40: a device
      * found at a new address). */

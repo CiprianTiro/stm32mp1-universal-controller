@@ -56,6 +56,9 @@ pub struct Setup {
     back_page: i32,
     /// Waiting for backend_daemon's answer: taps are ignored meanwhile.
     busy: bool,
+    /// A session left with Back while one of its steps was still running
+    /// (a test, the TV's prompt): that step's late answer is ignored.
+    cancelled: String,
 }
 
 fn model<T: Clone + 'static>(items: Vec<T>) -> ModelRc<T> {
@@ -146,6 +149,9 @@ impl Setup {
     /// the page shows "Testing..." or the countdown until the next message.
     pub fn show_step(&mut self, ui: &AppWindow, tx: &Sender<Request>, step: &Map<String, Value>) {
         let get = |key: &str| step.get(key).cloned().unwrap_or(Value::Null);
+        if !self.cancelled.is_empty() && text(&get("session")) == self.cancelled {
+            return;
+        }
         let kind = text(&get("step"));
         self.session = text(&get("session"));
         self.template = text(&get("template"));
@@ -264,7 +270,10 @@ impl Setup {
 
     /// A refused answer: the step stays, with the reason. If it's about
     /// one field (a mistyped address), the keyboard opens on it.
-    pub fn show_error(&mut self, ui: &AppWindow, field: Option<&str>, message: &str, detail: &str) {
+    pub fn show_error(&mut self, ui: &AppWindow, session: &str, field: Option<&str>, message: &str, detail: &str) {
+        if !self.cancelled.is_empty() && session == self.cancelled {
+            return;
+        }
         self.busy = false;
         ui.set_wizard_busy(false);
         if let Some(index) = field.and_then(|f| self.fields.iter().position(|x| x.id == f)) {
@@ -394,6 +403,9 @@ impl Setup {
             return;
         }
         if self.number <= 1 || self.busy {
+            if self.busy {
+                self.cancelled = self.session.clone();
+            }
             let _ = tx.send(Request::WizardCancel { session: self.session.clone() });
             self.busy = false;
             ui.set_wizard_busy(false);
@@ -407,6 +419,7 @@ impl Setup {
 
     /// Another way in (e.g. "Enter the address" instead of searching).
     pub fn switch_variant(&mut self, tx: &Sender<Request>, variant: String) {
+        self.cancelled = self.session.clone();
         let _ = tx.send(Request::WizardCancel { session: self.session.clone() });
         self.busy = true;
         let _ = tx.send(Request::WizardStart { template: self.template.clone(), variant: Some(variant), found: None });

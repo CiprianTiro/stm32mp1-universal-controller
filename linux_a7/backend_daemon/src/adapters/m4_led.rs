@@ -123,7 +123,11 @@ async fn run(
 }
 
 async fn handle(cmd: DeviceCmd, id: &str, hub: &Hub, rpmsg_tx: &mpsc::Sender<rpmsg::Cmd>) {
-    let DeviceCmd::Command { capability, value, reply } = cmd;
+    let DeviceCmd::Command { capability, value, reply } = cmd else {
+        /* control.rs only sends actions a capability has; the LED's
+         * switch has none. */
+        return cmd.refuse(format!("{id} has no actions"));
+    };
     let result = async {
         /* Its only capability is switch (control.rs checked the command
          * against it), so the value is {"on": true|false}. */

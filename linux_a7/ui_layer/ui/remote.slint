@@ -1,0 +1,329 @@
+// remote.slint -- a TV's remote control on the touchscreen (issue #44).
+//
+// Everything here is an ACTION sent to backend_daemon (device_action):
+// "press UP", "type netflix", "list the channels". Like the rest of
+// ui_layer it only reports taps; main.rs sends them, and the TV's answer
+// (the channel on screen, a list) comes back through backend_daemon. The
+// buttons use the hub's own names (device.rs REMOTE_BUTTONS), the same for
+// every brand, so this page also fits a future IR remote (#42).
+//
+// Four views on one page (`view`): the remote itself, the TV's apps, its
+// channels, and a keyboard for the TV's text fields.
+
+import { ListView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { PageHeader, ActionButton } from "common.slint";
+import { Keyboard } from "keyboard.slint";
+
+// One row of the apps or channels list.
+export struct RemoteItem {
+    id: string,
+    label: string,
+    // "Pro TV" under "5", or "" for an app.
+    detail: string,
+}
+
+// A remote key: square-ish, big enough for a thumb.
+component RemoteKey inherits Rectangle {
+    in property <string> text;
+    in property <bool> accent: false;
+    callback clicked();
+
+    height: 64px;
+    horizontal-stretch: 1;
+    border-radius: Theme.radius-medium;
+    background: accent
+        ? (touch.pressed ? Theme.accent.darker(0.2) : Theme.accent)
+        : (touch.pressed ? Theme.surface-pressed : Theme.surface);
+    Text {
+        text: root.text;
+        color: accent ? Theme.on-accent : Theme.text;
+        font-size: Theme.font-heading;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// An empty place in a row of keys (keeps the D-pad a cross).
+component Gap inherits Rectangle {
+    height: 64px;
+    horizontal-stretch: 1;
+}
+
+export component RemotePage inherits Rectangle {
+    in property <string> tv-name;
+    // "Live TV \u{2022} 5 Pro TV", "Netflix", "" -- what's on screen.
+    in property <string> now-playing;
+    in property <bool> keyboard;
+    // 0 = remote, 1 = apps, 2 = channels, 3 = keyboard.
+    in-out property <int> view: 0;
+    in property <[RemoteItem]> items;
+    in property <bool> loading;
+    // Channels (issue #44): how many match the search (items holds the
+    // pages loaded so far), and the search itself.
+    in property <int> total;
+    in-out property <string> query;
+    callback search(string);
+    callback more();
+    in-out property <string> text;
+    in property <string> message;
+    callback back();
+    callback press(string);
+    callback open-apps();
+    callback open-channels();
+    callback pick(string);
+    callback send-text();
+    callback backspace();
+
+    // The keyboard is open over the channel list.
+    property <bool> searching: false;
+    // Every change of the search (typed or deleted) asks the hub again.
+    changed query => {
+        if (view == 2) {
+            root.search(query);
+        }
+    }
+    changed view => {
+        searching = false;
+    }
+
+    background: Theme.background;
+
+    VerticalLayout {
+        padding: Theme.space-l;
+        spacing: Theme.space-s;
+
+        PageHeader {
+            title: view == 1 ? "Apps" : view == 2 ? "Channels" : view == 3 ? "Type on the TV" : root.tv-name;
+            back => {
+                if (view != 0) {
+                    view = 0;
+                } else {
+                    root.back();
+                }
+            }
+        }
+        if now-playing != "": Text {
+            text: now-playing;
+            color: Theme.text-muted;
+            font-size: Theme.font-body;
+            overflow: elide;
+        }
+        if message != "": Text {
+            text: message;
+            color: Theme.error;
+            font-size: Theme.font-body;
+            wrap: word-wrap;
+        }
+
+        // ---- the remote ----
+        if view == 0: VerticalLayout {
+            spacing: Theme.space-s;
+            alignment: start;
+            vertical-stretch: 1;
+            HorizontalLayout {
+                spacing: Theme.space-s;
+                RemoteKey { text: "Home"; clicked => { root.press("HOME"); } }
+                RemoteKey { text: "Back"; clicked => { root.press("BACK"); } }
+                RemoteKey { text: "Menu"; clicked => { root.press("MENU"); } }
+            }
+            // The D-pad: a cross around OK.
+            HorizontalLayout {
+                spacing: Theme.space-s;
+                Gap { }
+                RemoteKey { text: "\u{25B2}"; clicked => { root.press("UP"); } }
+                Gap { }
+            }
+            HorizontalLayout {
+                spacing: Theme.space-s;
+                RemoteKey { text: "\u{25C0}"; clicked => { root.press("LEFT"); } }
+                RemoteKey { text: "OK"; accent: true; clicked => { root.press("OK"); } }
+                RemoteKey { text: "\u{25B6}"; clicked => { root.press("RIGHT"); } }
+            }
+            HorizontalLayout {
+                spacing: Theme.space-s;
+                Gap { }
+                RemoteKey { text: "\u{25BC}"; clicked => { root.press("DOWN"); } }
+                Gap { }
+            }
+            HorizontalLayout {
+                spacing: Theme.space-s;
+                RemoteKey { text: "Vol \u{2212}"; clicked => { root.press("VOLUME_DOWN"); } }
+                RemoteKey { text: "Mute"; clicked => { root.press("MUTE"); } }
+                RemoteKey { text: "Vol +"; clicked => { root.press("VOLUME_UP"); } }
+            }
+            HorizontalLayout {
+                spacing: Theme.space-s;
+                RemoteKey { text: "Ch \u{2212}"; clicked => { root.press("CHANNEL_DOWN"); } }
+                RemoteKey { text: "Ch +"; clicked => { root.press("CHANNEL_UP"); } }
+            }
+            HorizontalLayout {
+                spacing: Theme.space-s;
+                RemoteKey { text: "\u{25C0}\u{25C0}"; clicked => { root.press("REWIND"); } }
+                RemoteKey { text: "Play"; clicked => { root.press("PLAY"); } }
+                RemoteKey { text: "Pause"; clicked => { root.press("PAUSE"); } }
+                RemoteKey { text: "\u{25B6}\u{25B6}"; clicked => { root.press("FAST_FORWARD"); } }
+            }
+            HorizontalLayout {
+                spacing: Theme.space-s;
+                ActionButton {
+                    text: "Apps";
+                    horizontal-stretch: 1;
+                    clicked => { root.open-apps(); }
+                }
+                ActionButton {
+                    text: "Channels";
+                    horizontal-stretch: 1;
+                    clicked => { root.open-channels(); }
+                }
+                if keyboard: ActionButton {
+                    text: "Keyboard";
+                    horizontal-stretch: 1;
+                    clicked => {
+                        root.text = "";
+                        view = 3;
+                    }
+                }
+            }
+        }
+
+        // ---- apps / channels: one list, tap to switch ----
+        // A ListView only creates the rows on screen: a TV can list
+        // thousands of channels, too many to build all at once on the
+        // board. (It takes nothing but the one `for`; the "Asking the TV"
+        // line sits above it.)
+        // The channel search: a field that opens the keyboard; results
+        // follow every key (the hub searches its copy of the list).
+        if view == 2: Rectangle {
+            height: Theme.touch-height;
+            border-radius: Theme.radius-medium;
+            background: Theme.surface;
+            border-width: searching ? 2px : 1px;
+            border-color: searching ? Theme.accent : Theme.outline;
+            Text {
+                x: Theme.space-l;
+                width: parent.width - 2 * Theme.space-l;
+                text: root.query == "" && !searching ? "Search: name or number" : root.query + (searching ? "|" : "");
+                color: root.query == "" && !searching ? Theme.text-muted : Theme.text;
+                font-size: Theme.font-subtitle;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            TouchArea {
+                clicked => {
+                    searching = true;
+                }
+            }
+        }
+        if view == 2 && !loading: Text {
+            text: total == 0 ? "No channel matches." : total == 1 ? "1 channel" : total + " channels";
+            color: Theme.text-muted;
+            font-size: Theme.font-caption;
+        }
+        if (view == 1 || view == 2) && loading: Text {
+            text: "Asking the TV\u{2026}";
+            color: Theme.text-muted;
+            font-size: Theme.font-body;
+        }
+        if view == 1 || view == 2: ListView {
+            vertical-stretch: 1;
+            for item in items: Rectangle {
+                height: Theme.touch-height + Theme.space-s + Theme.space-s;
+                Rectangle {
+                    y: Theme.space-s / 2;
+                    height: parent.height - Theme.space-s;
+                    border-radius: Theme.radius-medium;
+                    background: row-touch.pressed ? Theme.surface-pressed : Theme.surface;
+                    HorizontalLayout {
+                        padding-left: Theme.space-xl;
+                        padding-right: Theme.space-xl;
+                        spacing: Theme.space-l;
+                        Text {
+                            text: item.label;
+                            color: Theme.text;
+                            font-size: Theme.font-subtitle;
+                            vertical-alignment: center;
+                            min-width: view == 2 ? 48px : 0;
+                        }
+                        Text {
+                            text: item.detail;
+                            color: Theme.text;
+                            font-size: Theme.font-subtitle;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                            overflow: elide;
+                        }
+                    }
+                    row-touch := TouchArea {
+                        clicked => {
+                            root.pick(item.id);
+                        }
+                    }
+                }
+            }
+        }
+        // The next page (outside the ListView, which takes only its `for`).
+        if view == 2 && !searching && items.length < total: ActionButton {
+            text: "Show more (" + (total - items.length) + " more)";
+            clicked => {
+                root.more();
+            }
+        }
+        if view == 2 && searching: Keyboard {
+            text <=> root.query;
+            max-length: 64;
+            backspace => {
+                root.backspace();
+            }
+            done => {
+                searching = false;
+            }
+        }
+
+        // ---- keyboard: typed here, sent with Done ----
+        if view == 3: VerticalLayout {
+            spacing: Theme.space-m;
+            vertical-stretch: 1;
+            Text {
+                text: "Open a search or text field on the TV first, then type here. Done sends it.";
+                color: Theme.text-muted;
+                font-size: Theme.font-caption;
+                wrap: word-wrap;
+            }
+            Rectangle {
+                height: Theme.touch-height;
+                border-radius: Theme.radius-medium;
+                background: Theme.surface;
+                border-width: 2px;
+                border-color: Theme.accent;
+                Text {
+                    x: Theme.space-l;
+                    width: parent.width - 2 * Theme.space-l;
+                    text: root.text + "|";
+                    color: Theme.text;
+                    font-size: Theme.font-heading;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+            }
+            Rectangle {
+                vertical-stretch: 1;
+            }
+            Keyboard {
+                text <=> root.text;
+                max-length: 256;
+                backspace => {
+                    root.backspace();
+                }
+                done => {
+                    root.send-text();
+                }
+            }
+        }
+    }
+}

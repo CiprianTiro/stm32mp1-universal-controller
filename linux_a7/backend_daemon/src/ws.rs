@@ -27,6 +27,9 @@
  *   update_device_info {id, name?, room?}  -> device {device}
  *   remove_device {id}                     -> ack
  *   command {id, capability, value}        -> device {device}
+ *   device_action {id, capability, name, args?}
+ *                                          -> action_result {result} (issue #44:
+ *                                             press a remote button, list channels...)
  *        e.g. {"action":"command","id":"lamp-1","capability":"dimmer",
  *              "value":{"level":30}}
  *   subscribe                              -> ack, then events:
@@ -93,6 +96,7 @@ use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use futures_util::stream::{FuturesOrdered, StreamExt};
 use std::time::Duration;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
@@ -158,6 +162,14 @@ enum ClientRequest {
         id: DeviceId,
         capability: String,
         value: serde_json::Value,
+    },
+    /* Issue #44: a one-off action (device::check_action). */
+    DeviceAction {
+        id: DeviceId,
+        capability: String,
+        name: String,
+        #[serde(default)]
+        args: serde_json::Value,
     },
     Subscribe,
     /* Issue #35: pairing and logging in (LAN door). */
@@ -314,6 +326,9 @@ enum ServerMessage {
     },
     Device {
         device: Option<Device>,
+    },
+    ActionResult {
+        result: serde_json::Value,
     },
     Ack,
     NetworkStatus {
@@ -550,9 +565,67 @@ impl Session {
 }
 
 /* What handle_socket should do after a message. */
+// Wizard carries a whole session, the others a message: moved once per
+// request, not worth boxing (clippy::large_enum_variant, as elsewhere).
+#[allow(clippy::large_enum_variant)]
 enum Next {
     Send(ServerMessage),
     SendAndClose(ServerMessage),
+    /* Nothing to send now: the request became background work (see
+     * Background), its reply comes when that's done. */
+    Queued,
+    /* A wizard step done in the background: its session goes back to the
+     * connection, then the reply is sent. */
+    Wizard(Option<wizard::Session>, ServerMessage),
+}
+
+/* Requests whose answer can take seconds -- a device's command or action
+ * (an unplugged WLED: 5 s until "can't reach"; waking a TV: up to 30 s),
+ * a wizard's test or pairing step (up to a minute) -- run in the
+ * BACKGROUND, so they hold up nothing else of this connection: other
+ * requests (the LED, while the WLED times out -- seen on the DK2), events,
+ * the keep-alive. Their replies still go out in the order the requests
+ * came (FuturesOrdered): clients match replies to requests by order. */
+type Work = std::pin::Pin<Box<dyn std::future::Future<Output = Next> + Send>>;
+
+/* At most this many requests of one connection in the background; more
+ * wait until one is done (a client can't make the hub pile up work). */
+const MAX_BACKGROUND: usize = 32;
+
+/* `req` as background work, if it's one of the slow kinds and this
+ * session may send it; else it's handed back to be handled at once. (The
+ * request itself is the "error" handed back: large, once per request.) */
+#[allow(clippy::result_large_err)]
+fn background(
+    req: ClientRequest,
+    session: &Session,
+    wizard: &mut Option<wizard::Session>,
+    app_state: &AppState,
+) -> Result<Work, ClientRequest> {
+    if !session.trusted() {
+        return Err(req);
+    }
+    let app = app_state.clone();
+    match req {
+        ClientRequest::Command { .. } | ClientRequest::DeviceAction { .. } => {
+            Ok(Box::pin(async move { Next::Send(handle_request(req, &app).await) }))
+        }
+        ClientRequest::WizardStart { .. }
+        | ClientRequest::WizardAnswer { .. }
+        | ClientRequest::WizardBack { .. }
+        | ClientRequest::WizardFinish { .. }
+        | ClientRequest::WizardReauth { .. }
+        | ClientRequest::WizardReconfigure { .. } => {
+            /* The session travels with the work and comes back with its
+             * reply (Next::Wizard). */
+            let mut session = wizard.take();
+            Ok(Box::pin(async move {
+                let reply = handle_wizard(req, &mut session, &app).await;
+                Next::Wizard(session, reply)
+            }))
+        }
+        other => Err(other),
+    }
 }
 
 /* One of these runs per connected client, for as long as it's connected.
@@ -573,26 +646,56 @@ async fn handle_socket(mut socket: WebSocket, app_state: AppState, door: Door, p
     let mut events: Option<broadcast::Receiver<Event>> = None;
     let mut settings_rx: Option<watch::Receiver<HubSettings>> = None;
     let mut found_rx: Option<watch::Receiver<u64>> = None;
-    /* The device this client is adding, if any (wizard.rs). */
+    /* The device this client is adding, if any (wizard.rs). While one of
+     * its steps runs in the background, the session is with that work. */
     let mut wizard: Option<wizard::Session> = None;
+    /* A wizard cancelled while one of its steps was still running: that
+     * step's session isn't taken back when it's done. */
+    let mut cancelled: Option<String> = None;
+    /* Requests being carried out in the background, in arrival order. */
+    let mut background_work: FuturesOrdered<Work> = FuturesOrdered::new();
     let mut revocations = app_state.auth.revocations();
     let deadline = tokio::time::sleep(AUTH_DEADLINE);
     tokio::pin!(deadline);
 
     loop {
         let next = tokio::select! {
-            incoming = socket.recv() => {
+            /* Not while MAX_BACKGROUND requests are running (see there). */
+            incoming = socket.recv(), if background_work.len() < MAX_BACKGROUND => {
                 /* None / Err: the client is gone. */
                 let Some(Ok(msg)) = incoming else { break };
                 let Message::Text(text) = msg else { continue };
-                match serde_json::from_str::<ClientRequest>(&text) {
-                    Ok(req) => {
-                        let subscriptions = Subscriptions { events: &mut events, settings: &mut settings_rx, found: &mut found_rx };
-                        handle_message(req, &mut session, subscriptions, &mut wizard, &app_state).await
+                let next = match serde_json::from_str::<ClientRequest>(&text) {
+                    Ok(ClientRequest::WizardCancel { session: id }) if wizard.is_none() => {
+                        /* Its step is running in the background: forget the
+                         * session when that's done. */
+                        cancelled = Some(id);
+                        Next::Send(ServerMessage::Ack)
                     }
+                    Ok(req) => match background(req, &session, &mut wizard, &app_state) {
+                        Ok(work) => {
+                            background_work.push_back(work);
+                            Next::Queued
+                        }
+                        Err(req) => {
+                            let subscriptions = Subscriptions { events: &mut events, settings: &mut settings_rx, found: &mut found_rx };
+                            handle_message(req, &mut session, subscriptions, &mut wizard, &app_state).await
+                        }
+                    },
                     Err(e) => Next::Send(ServerMessage::Error { message: e.to_string() }),
+                };
+                /* A quick reply must not overtake the slower replies before
+                 * it: while work is running, it queues up behind them. */
+                match next {
+                    Next::Send(message) if !background_work.is_empty() => {
+                        background_work.push_back(Box::pin(async move { Next::Send(message) }));
+                        Next::Queued
+                    }
+                    other => other,
                 }
             }
+            /* Background work done: its reply, in order. */
+            Some(next) = background_work.next(), if !background_work.is_empty() => next,
             /* This branch only exists while subscribed (the `if`). */
             event = next_event(&mut events), if events.is_some() => Next::Send(event),
             /* Settings changes (issue #39), also only while subscribed. */
@@ -617,6 +720,19 @@ async fn handle_socket(mut socket: WebSocket, app_state: AppState, door: Door, p
         let (message, close) = match next {
             Next::Send(m) => (m, false),
             Next::SendAndClose(m) => (m, true),
+            Next::Queued => continue,
+            Next::Wizard(session, m) => {
+                let dropped = match (&session, &cancelled) {
+                    (Some(s), Some(id)) => s.id() == id,
+                    _ => false,
+                };
+                if dropped {
+                    cancelled = None;
+                } else if session.is_some() || wizard.is_none() {
+                    wizard = session;
+                }
+                (m, false)
+            }
         };
         let payload = serde_json::to_string(&message).expect("ServerMessage is always valid JSON");
         if socket.send(Message::Text(payload)).await.is_err() {
@@ -941,6 +1057,12 @@ async fn handle_request(req: ClientRequest, app_state: &AppState) -> ServerMessa
         ClientRequest::UpdateDeviceInfo { id, name, room } => device(control.update_info(&id, name, room).await),
         ClientRequest::RemoveDevice { id } => ack_or_error(control.remove(&id).await),
         ClientRequest::Command { id, capability, value } => device(control.command(&id, &capability, value).await),
+        ClientRequest::DeviceAction { id, capability, name, args } => {
+            match control.action(&id, &capability, &name, args).await {
+                Ok(result) => ServerMessage::ActionResult { result },
+                Err(message) => ServerMessage::Error { message },
+            }
+        }
         ClientRequest::ListFound => ServerMessage::Found {
             devices: app_state.discovery.inbox(control).await,
         },
@@ -1034,5 +1156,131 @@ fn ack_or_error(answer: Result<(), String>) -> ServerMessage {
     match answer {
         Ok(()) => ServerMessage::Ack,
         Err(message) => ServerMessage::Error { message },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::adapters::{Adapter, DeviceCmd, DeviceHandle, Hub, Registry};
+    use crate::device::{Capabilities, Source, Switch};
+    use crate::secrets::Secrets;
+    use crate::state::{self, Outputs};
+    use futures_util::SinkExt;
+    use serde_json::{json, Value};
+    use tokio_tungstenite::tungstenite::Message as WsMessage;
+
+    /* An adapter whose device takes 2 s to answer anything: an unplugged
+     * WLED waiting for its timeout. */
+    struct Slow;
+    impl Adapter for Slow {
+        fn id(&self) -> &'static str {
+            "slow"
+        }
+        fn start(&self, _device: &Device, _hub: Hub) -> DeviceHandle {
+            let (commands, mut rx) = mpsc::channel::<DeviceCmd>(8);
+            tokio::spawn(async move {
+                while let Some(cmd) = rx.recv().await {
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    cmd.refuse("can't reach 192.168.1.139: timed out");
+                }
+            });
+            DeviceHandle { commands }
+        }
+    }
+
+    fn switch_device(id: &str, source: &str) -> Device {
+        Device {
+            id: id.into(),
+            name: id.into(),
+            room: String::new(),
+            template: String::new(),
+            source: Source::new(source),
+            config: Default::default(),
+            identity: String::new(),
+            online: None,
+            capabilities: Capabilities {
+                switch: Some(Switch { on: false }),
+                ..Default::default()
+            },
+        }
+    }
+
+    /* The hub's own door on a free port, with a slow device and a lamp. */
+    async fn serve() -> String {
+        let devices = [switch_device("strip", "slow"), switch_device("lamp", "virtual")];
+        let (state_tx, state_rx) = mpsc::channel(8);
+        let (events_tx, _) = broadcast::channel(64);
+        let outputs = Outputs {
+            changed_tx: watch::channel(()).0,
+            events_tx: events_tx.clone(),
+            save_tx: watch::channel(Vec::new()).0,
+        };
+        tokio::spawn(state::run(state_rx, devices.into_iter().map(|d| (d.id.clone(), d)).collect(), outputs));
+        let registry = Arc::new(Registry::new(vec![Box::new(Slow)]));
+        let secrets = Arc::new(Secrets::new(Default::default(), watch::channel(Vec::new()).0));
+        let control = Control::new(state_tx, registry.clone(), secrets);
+        registry.start_all(&control).await;
+        let state = AppState {
+            control,
+            auth: Arc::new(Auth::new(Vec::new(), watch::channel(Vec::new()).0)),
+            hotspot: Hotspot::new(mpsc::channel(1).0),
+            fingerprint: Arc::new(String::new()),
+            network_tx: mpsc::channel(1).0,
+            events_tx,
+            local_clients: Arc::new(AtomicUsize::new(0)),
+            settings: Arc::new(Settings::new(HubSettings::default(), watch::channel(Vec::new()).0)),
+            discovery: Arc::new(Discovery::new()),
+            templates: Arc::new(Templates::default()),
+        };
+        let router = Router::new()
+            .route("/ws", get(ws_handler))
+            .layer(Extension(Door::Local))
+            .with_state(state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>()).await;
+        });
+        format!("ws://{addr}/ws")
+    }
+
+    /* The next message from the hub, as JSON. */
+    async fn next<S>(ws: &mut tokio_tungstenite::WebSocketStream<S>) -> Value
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+    {
+        let text = ws.next().await.unwrap().unwrap().into_text().unwrap();
+        serde_json::from_str(&text).unwrap()
+    }
+
+    /* A slow device doesn't hold up the others (seen on the DK2: the LED
+     * didn't react while an unplugged WLED timed out). Its reply still
+     * comes first: replies keep the order of the requests. */
+    #[tokio::test]
+    async fn a_slow_device_holds_up_nothing_else() {
+        let url = serve().await;
+        let (mut ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
+        for request in [
+            json!({"action": "subscribe"}),
+            json!({"action": "command", "id": "strip", "capability": "switch", "value": {"on": true}}),
+            json!({"action": "command", "id": "lamp", "capability": "switch", "value": {"on": true}}),
+        ] {
+            ws.send(WsMessage::Text(request.to_string())).await.unwrap();
+        }
+        assert_eq!(next(&mut ws).await["type"], "ack", "subscribe");
+
+        /* The lamp changes at once -- while the strip is still waiting. */
+        let started = std::time::Instant::now();
+        let event = next(&mut ws).await;
+        assert_eq!((event["type"].as_str(), event["device"]["id"].as_str()), (Some("device_changed"), Some("lamp")));
+        assert!(started.elapsed() < Duration::from_secs(1), "the lamp waited {:?}", started.elapsed());
+
+        /* Then the replies, in the order of the requests. */
+        let strip = next(&mut ws).await;
+        assert_eq!(strip["type"], "error");
+        assert!(strip["message"].as_str().unwrap().contains("can't reach"));
+        let lamp = next(&mut ws).await;
+        assert_eq!((lamp["type"].as_str(), lamp["device"]["id"].as_str()), (Some("device"), Some("lamp")));
     }
 }

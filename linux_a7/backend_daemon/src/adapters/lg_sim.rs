@@ -9,6 +9,11 @@
  * turnOff closing the connection. What it understands is only what the
  * adapter sends.
  *
+ * Issue #44: the "pointer input socket" (buttons arrive as
+ * "type:button\nname:UP" on a second WebSocket -- any path on the same
+ * port here), the on-screen keyboard (ime), apps and channels. Pressed
+ * buttons and typed text are recorded for the tests.
+ *
  * The test drives it: set_volume_from_remote() plays the TV's own remote;
  * after turnOff it refuses connections until wake_in() (a real TV needs
  * Wake-on-LAN for that; the sim can't receive the magic packet).
@@ -43,6 +48,14 @@ struct Tv {
     /* WebSocket connections accepted so far, and ended so far. */
     connections: u32,
     closed: u32,
+    /* Issue #44: buttons received (webOS names), the keyboard's text,
+     * Enter presses, the channel on (while Live TV is). */
+    presses: Vec<String>,
+    typed: String,
+    enters: u32,
+    channel: usize,
+    /* The port, for the pointer socket's address. */
+    port: u16,
 }
 
 struct Shared {
@@ -55,6 +68,10 @@ const VOLUME: &str = "ssap://audio/getVolume";
 const AUDIO: &str = "ssap://audio/getStatus";
 const APP: &str = "ssap://com.webos.applicationManager/getForegroundAppInfo";
 const POWER: &str = "ssap://com.webos.service.tvpower/power/getPowerState";
+const CHANNEL: &str = "ssap://tv/getCurrentChannel";
+
+/* The sim's channels: (id, number, name). */
+const CHANNELS: [(&str, &str, &str); 3] = [("ch-1", "1", "TVR 1"), ("ch-5", "5", "Pro TV"), ("ch-7", "7", "Antena 1")];
 
 impl TvSim {
     /* The key the sim hands out when a pairing is accepted. */
@@ -93,11 +110,17 @@ impl TvSim {
                 booting: false,
                 connections: 0,
                 closed: 0,
+                presses: Vec::new(),
+                typed: String::new(),
+                enters: 0,
+                channel: 0,
+                port: 0,
             }),
             changed: broadcast::channel(16).0,
         });
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
+        shared.tv.lock().unwrap().port = addr.port();
         let for_server = shared.clone();
         let server = tokio::spawn(async move {
             while let Ok((tcp, _)) = listener.accept().await {
@@ -134,6 +157,16 @@ impl TvSim {
     }
 
     /* (accepted, ended) WebSocket connections. */
+    pub fn presses(&self) -> Vec<String> {
+        self.shared.tv.lock().unwrap().presses.clone()
+    }
+
+    /* (the keyboard's text, how often Enter was sent) */
+    pub fn typed(&self) -> (String, u32) {
+        let tv = self.shared.tv.lock().unwrap();
+        (tv.typed.clone(), tv.enters)
+    }
+
     pub fn connections(&self) -> (u32, u32) {
         let tv = self.shared.tv.lock().unwrap();
         (tv.connections, tv.closed)
@@ -201,6 +234,13 @@ async fn serve(mut ws: Ws, shared: Arc<Shared>) {
         tokio::select! {
             incoming = ws.next() => {
                 let text = match incoming {
+                    /* A button, on the pointer socket (not JSON). */
+                    Some(Ok(Message::Text(text))) if text.starts_with("type:button") => {
+                        if let Some(name) = text.lines().find_map(|l| l.strip_prefix("name:")) {
+                            shared.tv.lock().unwrap().presses.push(name.to_string());
+                        }
+                        continue;
+                    }
                     Some(Ok(Message::Text(text))) => text,
                     /* Pings are answered by tungstenite itself. */
                     Some(Ok(Message::Ping(_) | Message::Pong(_))) => continue,
@@ -219,7 +259,13 @@ async fn serve(mut ws: Ws, shared: Arc<Shared>) {
                             shared.tv.lock().unwrap().off = true;
                             return; /* the TV goes: connection closed */
                         }
-                        vec![request(&shared, &uri, &message["payload"], &id)]
+                        let answer = request(&shared, &uri, &message["payload"], &id);
+                        /* Like the real TV: the channel is only there while
+                         * Live TV is on screen. */
+                        if kind == "subscribe" && answer["type"] == "error" {
+                            subscriptions.retain(|(_, i)| *i != id);
+                        }
+                        vec![answer]
                     }
                     _ => vec![],
                 };
@@ -301,6 +347,63 @@ fn request(shared: &Shared, uri: &str, payload: &Value, id: &str) -> Value {
             json!({})
         }
         "com.webos.service.tvpower/power/turnOnScreen" => json!({}),
+        "com.webos.service.networkinput/getPointerInputSocket" => {
+            json!({"socketPath": format!("wss://127.0.0.1:{}/resources/sim/netinput.pointer.sock", tv.port)})
+        }
+        "com.webos.service.ime/insertText" => {
+            let text = payload["text"].as_str().unwrap_or_default().to_string();
+            tv.typed.push_str(&text);
+            json!({})
+        }
+        "com.webos.service.ime/deleteCharacters" => {
+            for _ in 0..payload["count"].as_u64().unwrap_or(0) {
+                tv.typed.pop();
+            }
+            json!({})
+        }
+        "com.webos.service.ime/sendEnterKey" => {
+            tv.enters += 1;
+            json!({})
+        }
+        "com.webos.applicationManager/listLaunchPoints" => json!({"launchPoints": [
+            {"id": "netflix", "title": "Netflix"},
+            {"id": "youtube.leanback.v4", "title": "YouTube"},
+            {"id": "com.webos.app.livetv", "title": "Live TV"}
+        ]}),
+        /* Big, like a real one (365 KB on the real TV; each channel comes
+         * with many more fields than these): the three real channels,
+         * then 3000 more with a long made-up field -- over the 256 KB a
+         * device message may normally have (net.rs). */
+        "tv/getChannelList" => {
+            let filler = "x".repeat(100);
+            let mut list: Vec<Value> = CHANNELS
+                .iter()
+                .map(|(id, number, name)| json!({"channelId": id, "channelNumber": number, "channelName": name}))
+                .collect();
+            list.extend((100..3100).map(|n| {
+                json!({"channelId": format!("ch-{n}"), "channelNumber": n.to_string(),
+                       "channelName": format!("Channel {n}"), "programId": filler})
+            }));
+            json!({"channelList": list})
+        }
+        "tv/getCurrentChannel" => {
+            /* Like the real TV: not while Live TV isn't on screen -- nor
+             * while it's still waking up. */
+            if tv.app != "com.webos.app.livetv" || tv.booting {
+                return json!({"type": "error", "id": id, "error": "500 Application error", "payload": {}});
+            }
+            let (cid, number, name) = CHANNELS[tv.channel];
+            json!({"channelId": cid, "channelNumber": number, "channelName": name})
+        }
+        "tv/openChannel" => {
+            let wanted = payload["channelId"].as_str().unwrap_or_default();
+            let Some(i) = CHANNELS.iter().position(|c| c.0 == wanted) else {
+                return json!({"type": "error", "id": id, "error": "no such channel", "payload": {}});
+            };
+            tv.channel = i;
+            let _ = shared.changed.send(CHANNEL);
+            json!({})
+        }
         "system.launcher/launch" => {
             tv.app = payload["id"].as_str().unwrap_or_default().to_string();
             let _ = shared.changed.send(APP);

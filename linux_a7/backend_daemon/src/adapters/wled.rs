@@ -131,8 +131,8 @@ impl Task {
              * a hand-edited registry could. Stay put and say why. */
             println!("wled: {} has no address (config \"host\")", self.id);
             self.hub.set_online(&self.id, Health::Offline).await;
-            while let Some(DeviceCmd::Command { reply, .. }) = commands.recv().await {
-                let _ = reply.send(Err(format!("{} has no address set", self.id)));
+            while let Some(cmd) = commands.recv().await {
+                cmd.refuse(format!("{} has no address set", self.id));
             }
             return;
         };
@@ -258,7 +258,11 @@ impl Task {
 
     /* Carries out one command and answers it; true if WLED confirmed. */
     async fn handle(&mut self, host: &str, cmd: DeviceCmd) -> bool {
-        let DeviceCmd::Command { capability, value, reply } = cmd;
+        let DeviceCmd::Command { capability, value, reply } = cmd else {
+            /* Its capabilities (switch, dimmer, color) have no actions. */
+            cmd.refuse(format!("{} has no actions", self.id));
+            return false;
+        };
         let result = self.command(host, &capability, &value).await;
         let confirmed = result.is_ok();
         let _ = reply.send(result);
