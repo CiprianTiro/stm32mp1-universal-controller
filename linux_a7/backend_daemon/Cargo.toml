@@ -46,13 +46,24 @@ base64 = "0.22"
 # Already in the build through axum: serving axum's router over our own TLS
 # connections (axum::serve only does plain TCP). The exact features axum
 # already enables, so nothing new is compiled.
-hyper = { version = "1", features = ["http1", "server"] }
+hyper = { version = "1", features = ["http1", "server", "client"] }
 hyper-util = { version = "0.1", features = ["tokio", "server", "service"] }
 # The `Service` trait axum's router implements (already in the build).
 tower-service = "0.3"
 bluer = { version = "0.17.4", features = ["bluetoothd"] }
 spake2 = "0.4.0"
 dbus = { version = "0.9", features = ["vendored"] }
+mdns-sd = "0.21"
+# Issue #40, the adapters' toolkit (adapters/net.rs): talking to devices.
+# All already in the build through axum/hyper -- only hyper's small
+# "client" half above is new code. HTTP: hyper's client + http-body-util
+# (read a whole reply body, with a size limit) + bytes (the body type).
+# WebSocket client: the same tokio-tungstenite axum's server uses (plain
+# ws:// only for now; wss:// for the LG TV comes with its adapter).
+http-body-util = "0.1"
+bytes = "1"
+tokio-tungstenite = "0.24"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 
 # Issue #37: rumqttc 0.25.1 (its latest release) still depends on
 # rustls-webpki 0.102, which has known vulnerabilities. This local copy

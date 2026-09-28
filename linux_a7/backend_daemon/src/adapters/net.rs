@@ -1,0 +1,444 @@
+/*
+ * net.rs -- the adapters' toolkit (issue #40): the network building blocks
+ * adapters share, so an adapter is mostly its protocol's logic.
+ *
+ *   http_json  one HTTP request with a JSON reply (WLED's /json/state,
+ *              later Shelly, Tasmota, ...)
+ *   ws_connect a WebSocket to a device (WLED's /ws push channel)
+ *   ws_open    a WebSocket on any port, plain or TLS with a PINNED
+ *              certificate (the LG TV: its certificate is self-signed, so
+ *              the hub trusts the one it saw at pairing -- "trust on first
+ *              use" -- and refuses any other afterwards)
+ *   wake_on_lan  the "magic packet" that switches on a device whose
+ *              network is asleep (the TV in standby)
+ *
+ * Every call has a timeout: a device that stops answering mid-request
+ * (unplugged, out of WiFi range) must never leave a task waiting forever.
+ * Errors are plain sentences ("192.168.1.50 isn't answering"), because
+ * they end up in front of a person (a failed command), plus a KIND the
+ * wizard's test step turns into its own sentence (NetError).
+ *
+ * Addresses ("host") are what setup stored in the device's config: an IP
+ * address or a name, optionally with a port -- "192.168.1.50",
+ * "wled-kitchen.local", "127.0.0.1:8080" (the tests' simulated devices),
+ * "[fe80::1]:80".
+ */
+use bytes::Bytes;
+use http_body_util::{BodyExt, Full, Limited};
+use hyper::header::{CONTENT_TYPE, HOST};
+use hyper::{Method, Request};
+use hyper_util::rt::TokioIo;
+use serde_json::Value;
+use std::net::Ipv4Addr;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::net::{TcpStream, UdpSocket};
+use tokio_rustls::rustls;
+use tokio_rustls::rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
+use tokio_rustls::rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+use tokio_rustls::rustls::{DigitallySignedStruct, SignatureScheme};
+use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
+
+use super::SetupError;
+use crate::templates::ErrorKind;
+
+/* A whole request -- connect, send, read the reply -- takes at most this.
+ * Devices on the LAN answer in milliseconds; an ESP busy with a WiFi
+ * reconnect can take a second or two. */
+pub const HTTP_TIMEOUT: Duration = Duration::from_secs(5);
+
+/* Replies bigger than this are refused: a device's JSON is a few KB (a
+ * full WLED /json about 20 KB); anything huge is a broken or hostile
+ * device, and the hub has little RAM to spare. */
+const MAX_REPLY: usize = 256 * 1024;
+
+/* The same limit for one WebSocket message. */
+const MAX_WS_MESSAGE: usize = 256 * 1024;
+
+/* A failed request: what kind of failure, and the sentence. Converts to
+ * a String (so `?` works in the adapters' Result<_, String> code) and to
+ * a SetupError (the wizard). */
+#[derive(Debug)]
+pub struct NetError {
+    pub kind: ErrorKind,
+    pub message: String,
+}
+
+impl NetError {
+    pub fn new(kind: ErrorKind, message: String) -> Self {
+        NetError { kind, message }
+    }
+}
+
+impl std::fmt::Display for NetError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl From<NetError> for String {
+    fn from(e: NetError) -> String {
+        e.message
+    }
+}
+
+impl From<NetError> for SetupError {
+    fn from(e: NetError) -> SetupError {
+        SetupError::new(e.kind, e.message)
+    }
+}
+
+/* A WebSocket connection to a device. `MaybeTlsStream`: ws:// today,
+ * wss:// (the TV) later, same type. */
+pub type WebSocket = WebSocketStream<MaybeTlsStream<TcpStream>>;
+
+/* "host" or "host:port" -> "host:port" to connect to. An IPv6 address
+ * needs brackets when a port follows ("[fe80::1]:80"); a bare one gets
+ * them added. */
+pub fn with_port(host: &str, default_port: u16) -> String {
+    if host.parse::<std::net::Ipv6Addr>().is_ok() {
+        return format!("[{host}]:{default_port}");
+    }
+    let has_port = match host.rsplit_once(':') {
+        /* "[v6]:port" or "name:port" -- but not a bare "[v6]" */
+        Some((_, port)) => port.parse::<u16>().is_ok(),
+        None => false,
+    };
+    if has_port {
+        host.to_string()
+    } else {
+        format!("{host}:{default_port}")
+    }
+}
+
+/* One HTTP/1.1 request to http://{host}{path}, with an optional JSON body;
+ * returns the reply's JSON. Anything but 2xx is an error. A new
+ * connection each time: devices like the ESP close it after every reply
+ * anyway ("Connection: close"), and it's one request per command. */
+pub async fn http_json(method: Method, host: &str, path: &str, body: Option<&Value>) -> Result<Value, NetError> {
+    match tokio::time::timeout(HTTP_TIMEOUT, http_json_inner(method, host, path, body)).await {
+        Ok(result) => result,
+        Err(_) => Err(NetError::new(
+            ErrorKind::Timeout,
+            format!("{host} isn't answering (no reply within {} s)", HTTP_TIMEOUT.as_secs()),
+        )),
+    }
+}
+
+async fn http_json_inner(method: Method, host: &str, path: &str, body: Option<&Value>) -> Result<Value, NetError> {
+    let unreachable = |e: String| NetError::new(ErrorKind::Unreachable, e);
+    /* Answered, but not what an adapter of this kind expects. */
+    let unsupported = |e: String| NetError::new(ErrorKind::Unsupported, e);
+    let stream = TcpStream::connect(with_port(host, 80))
+        .await
+        .map_err(|e| unreachable(format!("can't reach {host}: {e}")))?;
+    /* hyper's low-level client: a handshake gives a sender (to send
+     * requests) and the connection itself, a future that must run for the
+     * requests to move -- spawned; it ends when the exchange is done. */
+    let (mut sender, connection) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
+        .await
+        .map_err(|e| unreachable(format!("{host}: {e}")))?;
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+
+    let body = match body {
+        Some(json) => Bytes::from(json.to_string()),
+        None => Bytes::new(),
+    };
+    let request = Request::builder()
+        .method(method)
+        .uri(path)
+        .header(HOST, host)
+        .header(CONTENT_TYPE, "application/json")
+        .body(Full::new(body))
+        .map_err(|e| unsupported(format!("invalid request for {host}{path}: {e}")))?;
+    let reply = sender
+        .send_request(request)
+        .await
+        .map_err(|e| unreachable(format!("{host} broke off the reply: {e}")))?;
+    let status = reply.status();
+    /* Limited: reading stops with an error past MAX_REPLY bytes. */
+    let bytes = Limited::new(reply.into_body(), MAX_REPLY)
+        .collect()
+        .await
+        .map_err(|e| unsupported(format!("{host}: bad reply: {e}")))?
+        .to_bytes();
+    if !status.is_success() {
+        return Err(unsupported(format!("{host} answered {path} with HTTP {status}")));
+    }
+    serde_json::from_slice(&bytes).map_err(|e| unsupported(format!("{host} didn't answer with JSON: {e}")))
+}
+
+/* Opens ws://{host}{path}. Within HTTP_TIMEOUT, like a request. */
+pub async fn ws_connect(host: &str, path: &str) -> Result<WebSocket, String> {
+    let url = format!("ws://{}{path}", with_port(host, 80));
+    let config = WebSocketConfig {
+        max_message_size: Some(MAX_WS_MESSAGE),
+        max_frame_size: Some(MAX_WS_MESSAGE),
+        ..Default::default()
+    };
+    let connect = tokio_tungstenite::connect_async_with_config(url, Some(config), false);
+    match tokio::time::timeout(HTTP_TIMEOUT, connect).await {
+        Ok(Ok((socket, _response))) => Ok(socket),
+        Ok(Err(e)) => Err(format!("{host}: WebSocket refused: {e}")),
+        Err(_) => Err(format!("{host} isn't answering (WebSocket)")),
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* WebSockets on any port, with a pinned TLS certificate               */
+/* ------------------------------------------------------------------ */
+
+/* Any byte stream a WebSocket can run over: plain TCP or TLS. Boxed, so
+ * ws:// and wss:// connections are one type (AnyWebSocket). */
+pub trait Io: AsyncRead + AsyncWrite + Unpin + Send {}
+impl<T: AsyncRead + AsyncWrite + Unpin + Send> Io for T {}
+
+pub type AnyWebSocket = WebSocketStream<Box<dyn Io>>;
+
+/* How to connect. */
+pub enum Transport<'a> {
+    Plain,
+    /* TLS, trusting only the certificate with this SHA-256 fingerprint
+     * (hex); None = any certificate (the first contact: pairing), whose
+     * fingerprint is then returned for pinning. */
+    Pinned(Option<&'a str>),
+}
+
+/* Opens ws(s)://{host}:{port}{path}. With TLS, also returns the
+ * certificate's fingerprint. A certificate that doesn't match the pinned
+ * one fails with ErrorKind::Refused -- "not the device we paired with". */
+pub async fn ws_open(host: &str, port: u16, path: &str, transport: Transport<'_>) -> Result<(AnyWebSocket, Option<String>), NetError> {
+    match tokio::time::timeout(HTTP_TIMEOUT, ws_open_inner(host, port, path, transport)).await {
+        Ok(result) => result,
+        Err(_) => Err(NetError::new(ErrorKind::Timeout, format!("{host}:{port} isn't answering"))),
+    }
+}
+
+async fn ws_open_inner(host: &str, port: u16, path: &str, transport: Transport<'_>) -> Result<(AnyWebSocket, Option<String>), NetError> {
+    let unreachable = |e: String| NetError::new(ErrorKind::Unreachable, e);
+    let tcp = TcpStream::connect((host, port))
+        .await
+        .map_err(|e| unreachable(format!("can't reach {host}:{port}: {e}")))?;
+    let (stream, scheme, fingerprint): (Box<dyn Io>, &str, Option<String>) = match transport {
+        Transport::Plain => (Box::new(tcp), "ws", None),
+        Transport::Pinned(expected) => {
+            let verifier = Arc::new(PinnedCert::new(expected.map(str::to_string)));
+            let provider = Arc::new(rustls::crypto::ring::default_provider());
+            let config = rustls::ClientConfig::builder_with_provider(provider)
+                .with_safe_default_protocol_versions()
+                .map_err(|e| unreachable(format!("TLS setup: {e}")))?
+                .dangerous()
+                .with_custom_certificate_verifier(verifier.clone())
+                .with_no_client_auth();
+            let name = ServerName::try_from(host.to_string()).map_err(|e| unreachable(format!("{host}: {e}")))?;
+            let tls = tokio_rustls::TlsConnector::from(Arc::new(config)).connect(name, tcp).await;
+            let seen = verifier.seen.lock().unwrap().clone();
+            match tls {
+                Ok(tls) => (Box::new(tls), "wss", seen),
+                Err(_) if expected.is_some() && seen.is_some() && seen.as_deref() != expected => {
+                    return Err(NetError::new(
+                        ErrorKind::Refused,
+                        format!("{host} presented a different certificate than at pairing"),
+                    ));
+                }
+                Err(e) => return Err(unreachable(format!("{host}:{port}: TLS failed: {e}"))),
+            }
+        }
+    };
+    let url = format!("{scheme}://{}{path}", with_port(host, port));
+    let config = WebSocketConfig {
+        max_message_size: Some(MAX_WS_MESSAGE),
+        max_frame_size: Some(MAX_WS_MESSAGE),
+        ..Default::default()
+    };
+    let (socket, _response) = tokio_tungstenite::client_async_with_config(url, stream, Some(config))
+        .await
+        .map_err(|e| NetError::new(ErrorKind::Unsupported, format!("{host}:{port}: WebSocket refused: {e}")))?;
+    Ok((socket, fingerprint))
+}
+
+/* rustls's check of the server's certificate, replaced by pinning: the
+ * usual check (signed by a known authority, for this name) can't work for
+ * a self-signed certificate. What still IS checked, as normal: that the
+ * server owns the certificate's key (the handshake signatures below) --
+ * so a fingerprint match really means "the same device". */
+#[derive(Debug)]
+struct PinnedCert {
+    expected: Option<String>,
+    /* The fingerprint seen in the handshake, for the caller. */
+    seen: Mutex<Option<String>>,
+    algorithms: rustls::crypto::WebPkiSupportedAlgorithms,
+}
+
+impl PinnedCert {
+    fn new(expected: Option<String>) -> Self {
+        PinnedCert {
+            expected,
+            seen: Mutex::new(None),
+            algorithms: rustls::crypto::ring::default_provider().signature_verification_algorithms,
+        }
+    }
+}
+
+impl ServerCertVerifier for PinnedCert {
+    fn verify_server_cert(
+        &self,
+        end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: UnixTime,
+    ) -> Result<ServerCertVerified, rustls::Error> {
+        let fingerprint = sha256_hex(end_entity.as_ref());
+        *self.seen.lock().unwrap() = Some(fingerprint.clone());
+        match &self.expected {
+            Some(expected) if *expected != fingerprint => Err(rustls::Error::General("certificate changed".into())),
+            _ => Ok(ServerCertVerified::assertion()),
+        }
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(message, cert, dss, &self.algorithms)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(message, cert, dss, &self.algorithms)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.algorithms.supported_schemes()
+    }
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    ring::digest::digest(&ring::digest::SHA256, bytes)
+        .as_ref()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/* ------------------------------------------------------------------ */
+/* Wake-on-LAN                                                         */
+/* ------------------------------------------------------------------ */
+
+/* Sends the "magic packet" for `mac` (aa:bb:cc:dd:ee:ff): 6 x 0xFF, then
+ * the MAC 16 times, to UDP port 9. A sleeping device's network chip
+ * watches for exactly that and wakes the device. Sent three ways -- to the
+ * device's last address, its network's broadcast (assuming the usual /24
+ * home network) and the general broadcast -- three times each, since UDP
+ * can get lost and nothing answers. */
+pub async fn wake_on_lan(mac: &str, last_address: Option<&str>) -> Result<(), String> {
+    let bytes = parse_mac(mac).ok_or_else(|| format!("invalid MAC address {mac:?}"))?;
+    let mut packet = vec![0xFF; 6];
+    for _ in 0..16 {
+        packet.extend_from_slice(&bytes);
+    }
+    let socket = UdpSocket::bind("0.0.0.0:0").await.map_err(|e| format!("wake-on-LAN: {e}"))?;
+    socket.set_broadcast(true).map_err(|e| format!("wake-on-LAN: {e}"))?;
+    let mut targets = vec![Ipv4Addr::BROADCAST];
+    if let Some(ip) = last_address.and_then(|a| a.parse::<Ipv4Addr>().ok()) {
+        let [a, b, c, _] = ip.octets();
+        targets.push(ip);
+        targets.push(Ipv4Addr::new(a, b, c, 255));
+    }
+    let mut sent = false;
+    for _ in 0..3 {
+        for target in &targets {
+            sent |= socket.send_to(&packet, (*target, 9)).await.is_ok();
+        }
+    }
+    if sent {
+        Ok(())
+    } else {
+        Err("wake-on-LAN: the packet couldn't be sent (no network?)".into())
+    }
+}
+
+/* The MAC of `ip` from the kernel's neighbour (ARP) table -- known once
+ * the hub has talked to it. For devices that don't say their MAC
+ * themselves; Wake-on-LAN needs it. Lines of /proc/net/arp:
+ *   IP address  HW type  Flags  HW address         Mask  Device
+ *   192.168.1.40 0x1     0x2    64:cb:e9:8c:b0:94  *     eth0
+ * (flags 0x2 = complete; an incomplete entry has 00:00:00:00:00:00). */
+pub fn mac_from_arp(ip: &str) -> Option<String> {
+    let table = std::fs::read_to_string("/proc/net/arp").ok()?;
+    mac_in_arp_table(&table, ip)
+}
+
+fn mac_in_arp_table(table: &str, ip: &str) -> Option<String> {
+    table.lines().skip(1).find_map(|line| {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        let (address, flags, mac) = (fields.first()?, fields.get(2)?, fields.get(3)?);
+        let complete = u32::from_str_radix(flags.trim_start_matches("0x"), 16).is_ok_and(|f| f & 0x2 != 0);
+        (*address == ip && complete && *mac != "00:00:00:00:00:00" && parse_mac(mac).is_some())
+            .then(|| mac.to_lowercase())
+    })
+}
+
+/* "aa:bb:cc:dd:ee:ff" / "aa-bb-..." / "aabbccddeeff" -> 6 bytes. */
+fn parse_mac(mac: &str) -> Option<[u8; 6]> {
+    let digits: String = mac.chars().filter(|c| !matches!(c, ':' | '-')).collect();
+    if digits.len() != 12 {
+        return None;
+    }
+    let mut bytes = [0u8; 6];
+    for (i, byte) in bytes.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(digits.get(i * 2..i * 2 + 2)?, 16).ok()?;
+    }
+    Some(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ports_are_added_only_when_missing() {
+        assert_eq!(with_port("192.168.1.50", 80), "192.168.1.50:80");
+        assert_eq!(with_port("127.0.0.1:8080", 80), "127.0.0.1:8080");
+        assert_eq!(with_port("wled.local", 80), "wled.local:80");
+        assert_eq!(with_port("fe80::1", 80), "[fe80::1]:80");
+        assert_eq!(with_port("[fe80::1]:81", 80), "[fe80::1]:81");
+    }
+
+    #[test]
+    fn arp_table_lookup() {
+        let table = "IP address       HW type     Flags       HW address            Mask     Device\n\
+                     192.168.1.140    0x1         0x2         64:CB:E9:8C:B0:94     *        eth0\n\
+                     192.168.1.9      0x1         0x0         00:00:00:00:00:00     *        eth0\n";
+        assert_eq!(mac_in_arp_table(table, "192.168.1.140").as_deref(), Some("64:cb:e9:8c:b0:94"));
+        assert_eq!(mac_in_arp_table(table, "192.168.1.9"), None);
+        assert_eq!(mac_in_arp_table(table, "192.168.1.1"), None);
+    }
+
+    #[test]
+    fn macs_parse() {
+        assert_eq!(parse_mac("aa:bb:cc:dd:ee:0f"), Some([0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x0f]));
+        assert_eq!(parse_mac("AABBCCDDEE0F"), Some([0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x0f]));
+        assert_eq!(parse_mac("aa:bb"), None);
+        assert_eq!(parse_mac("zz:bb:cc:dd:ee:ff"), None);
+    }
+
+    #[tokio::test]
+    async fn unreachable_hosts_fail_with_a_readable_error() {
+        /* Port 9 on localhost: nothing listens there, refused at once. */
+        let err = http_json(Method::GET, "127.0.0.1:9", "/json", None).await.unwrap_err();
+        assert_eq!(err.kind, ErrorKind::Unreachable);
+        assert!(err.message.starts_with("can't reach 127.0.0.1:9"), "{err}");
+    }
+}

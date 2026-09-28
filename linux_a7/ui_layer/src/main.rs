@@ -15,6 +15,7 @@
 
 mod display;
 mod pointer;
+mod setup;
 mod theme;
 mod ws_client;
 mod zones;
@@ -99,8 +100,12 @@ fn main() {
     let (request_tx, update_rx) = ws_client::start();
 
     // The device list (issue #34): what backend_daemon last reported,
-    // turned into the rows app.slint shows. See DeviceRows.
-    let mut rows = DeviceRows::new(&ui);
+    // turned into the rows app.slint shows. See DeviceRows. Shared (Rc +
+    // RefCell) with the device details page's callbacks (issue #40).
+    let rows = std::rc::Rc::new(std::cell::RefCell::new(DeviceRows::new(&ui)));
+    // Adding and setting up devices (issue #40): the wizard pages' state,
+    // see setup.rs.
+    let wizard = std::rc::Rc::new(std::cell::RefCell::new(setup::Setup::default()));
     // When the current error message under the list goes away again.
     let mut device_message_until: Option<std::time::Instant> = None;
     // Pairing screen (issue #35): the last network status (to put the
@@ -135,6 +140,98 @@ fn main() {
             capability: "dimmer".into(),
             value: serde_json::json!({ "level": level }),
         });
+    });
+
+    // A TV's volume/mute/input (issue #40): the media capability, set as a
+    // whole.
+    let tx = request_tx.clone();
+    ui.on_set_media(move |id, volume, muted, input| {
+        let _ = tx.send(ws_client::Request::Command {
+            id: id.to_string(),
+            capability: "media".into(),
+            value: serde_json::json!({ "volume": volume, "muted": muted, "input": input.as_str() }),
+        });
+    });
+
+    // ---- Adding and setting up devices (issue #40) ----------------------
+    // Each callback hands the tap to setup.rs (which sends the request);
+    // backend_daemon's answer arrives as an Update in the loop below.
+    let tx = request_tx.clone();
+    let ui_weak = ui.as_weak();
+    ui.on_open_add_device(move || {
+        let ui = ui_weak.unwrap();
+        ui.set_add_message("".into());
+        ui.set_page(setup::PAGE_ADD);
+        // Fresh lists, and a search round now: what's shown is current.
+        let _ = tx.send(ws_client::Request::ListTemplates);
+        let _ = tx.send(ws_client::Request::DiscoverNow);
+        let _ = tx.send(ws_client::Request::ListFound);
+    });
+    let tx = request_tx.clone();
+    ui.on_search_devices(move || {
+        let _ = tx.send(ws_client::Request::DiscoverNow);
+    });
+    let (tx, ui_weak, w) = (request_tx.clone(), ui.as_weak(), wizard.clone());
+    ui.on_pick_template(move |id| {
+        ui_weak.unwrap().set_add_message("".into());
+        w.borrow_mut().start_new(&id);
+        let _ = tx.send(ws_client::Request::WizardStart { template: id.to_string(), variant: None, found: None });
+    });
+    let (tx, ui_weak, w) = (request_tx.clone(), ui.as_weak(), wizard.clone());
+    ui.on_add_found(move |template, address| {
+        ui_weak.unwrap().set_add_message("".into());
+        w.borrow_mut().start_new(&template);
+        let _ = tx.send(ws_client::Request::WizardStart {
+            template: template.to_string(),
+            variant: None,
+            found: Some(address.to_string()),
+        });
+    });
+    let (tx, ui_weak, w) = (request_tx.clone(), ui.as_weak(), wizard.clone());
+    ui.on_wizard_next(move || w.borrow_mut().next(&ui_weak.unwrap(), &tx));
+    let (tx, ui_weak, w) = (request_tx.clone(), ui.as_weak(), wizard.clone());
+    ui.on_wizard_retry(move || w.borrow_mut().retry(&ui_weak.unwrap(), &tx));
+    let (tx, ui_weak, w) = (request_tx.clone(), ui.as_weak(), wizard.clone());
+    ui.on_wizard_back(move || w.borrow_mut().back(&ui_weak.unwrap(), &tx));
+    let (tx, ui_weak, w) = (request_tx.clone(), ui.as_weak(), wizard.clone());
+    ui.on_wizard_pick_found(move |address| w.borrow_mut().pick_found(&ui_weak.unwrap(), &tx, Some(address.to_string())));
+    let (tx, ui_weak, w) = (request_tx.clone(), ui.as_weak(), wizard.clone());
+    ui.on_wizard_search(move || w.borrow_mut().pick_found(&ui_weak.unwrap(), &tx, None));
+    let (ui_weak, w) = (ui.as_weak(), wizard.clone());
+    ui.on_wizard_edit(move |i| w.borrow_mut().edit(&ui_weak.unwrap(), i.max(0) as usize));
+    let (ui_weak, w) = (ui.as_weak(), wizard.clone());
+    ui.on_wizard_edit_done(move || w.borrow_mut().edit_done(&ui_weak.unwrap()));
+    let (tx, ui_weak, w) = (request_tx.clone(), ui.as_weak(), wizard.clone());
+    ui.on_wizard_pick(move |i, value| w.borrow_mut().pick(&ui_weak.unwrap(), &tx, i.max(0) as usize, value.to_string()));
+    let (tx, w) = (request_tx.clone(), wizard.clone());
+    ui.on_wizard_switch_variant(move |variant| w.borrow_mut().switch_variant(&tx, variant.to_string()));
+
+    // A device's details page, and what can be done from it.
+    let (ui_weak, r, w) = (ui.as_weak(), rows.clone(), wizard.clone());
+    ui.on_open_device(move |id| {
+        let ui = ui_weak.unwrap();
+        if let Some(device) = r.borrow().devices.get(id.as_str()) {
+            show_device_page(&ui, device, &w.borrow());
+            ui.set_page(setup::PAGE_DEVICE);
+        }
+    });
+    let (tx, ui_weak, r, w) = (request_tx.clone(), ui.as_weak(), rows.clone(), wizard.clone());
+    ui.on_device_reauth(move |id| {
+        let name = r.borrow().devices.get(id.as_str()).map_or_else(|| id.to_string(), |d| d.name.clone());
+        ui_weak.unwrap().set_dev_message("".into());
+        w.borrow_mut().start_existing(format!("Pair again: {name}"));
+        let _ = tx.send(ws_client::Request::WizardReauth { device: id.to_string() });
+    });
+    let (tx, ui_weak, r, w) = (request_tx.clone(), ui.as_weak(), rows.clone(), wizard.clone());
+    ui.on_device_reconfigure(move |id| {
+        let name = r.borrow().devices.get(id.as_str()).map_or_else(|| id.to_string(), |d| d.name.clone());
+        ui_weak.unwrap().set_dev_message("".into());
+        w.borrow_mut().start_existing(format!("Settings: {name}"));
+        let _ = tx.send(ws_client::Request::WizardReconfigure { device: id.to_string() });
+    });
+    let tx = request_tx.clone();
+    ui.on_device_remove(move |id| {
+        let _ = tx.send(ws_client::Request::RemoveDevice { id: id.to_string() });
     });
 
     // `ui.as_weak()` below: a `Weak` reference to the UI, not a strong one
@@ -294,13 +391,46 @@ fn main() {
                     let _ = request_tx.send(ws_client::Request::ListClients);
                 }
                 ws_client::Update::Disconnected => ui.set_connected(false),
-                ws_client::Update::Devices(list) => rows.replace_all(list),
-                ws_client::Update::DeviceChanged(device) => rows.changed(device),
-                ws_client::Update::DeviceRemoved(id) => rows.removed(&id),
+                ws_client::Update::Devices(list) => rows.borrow_mut().replace_all(list),
+                ws_client::Update::DeviceChanged(device) => {
+                    // The details page follows its device (e.g. "online").
+                    if ui.get_page() == setup::PAGE_DEVICE && ui.get_dev_id() == device.id.as_str() {
+                        show_device_page(&ui, &device, &wizard.borrow());
+                    }
+                    rows.borrow_mut().changed(device);
+                }
+                ws_client::Update::DeviceRemoved(id) => rows.borrow_mut().removed(&id),
                 ws_client::Update::CommandFailed(message) => {
+                    ui.set_device_message_ok(false);
                     ui.set_device_message(message.into());
                     device_message_until = Some(std::time::Instant::now() + DEVICE_MESSAGE_TIME);
                 }
+                // Adding and setting up devices (issue #40, setup.rs).
+                ws_client::Update::Templates(templates) => {
+                    wizard.borrow_mut().templates = templates.clone();
+                    wizard.borrow().show_lists(&ui);
+                    rows.borrow_mut().set_templates(templates);
+                }
+                ws_client::Update::Found(found) => {
+                    wizard.borrow_mut().found = found;
+                    wizard.borrow().show_lists(&ui);
+                    wizard.borrow_mut().found_changed(&ui, &request_tx);
+                }
+                ws_client::Update::WizardStep(step) => wizard.borrow_mut().show_step(&ui, &request_tx, &step),
+                ws_client::Update::WizardError { field, message, detail } => {
+                    wizard.borrow_mut().show_error(&ui, field.as_deref(), &message, &detail)
+                }
+                ws_client::Update::WizardDone(device) => {
+                    wizard.borrow_mut().finished(&ui, &device.name);
+                    device_message_until = Some(std::time::Instant::now() + DEVICE_MESSAGE_TIME);
+                }
+                ws_client::Update::Removed(Ok(())) => {
+                    ui.set_page(setup::PAGE_DEVICES);
+                    ui.set_device_message_ok(true);
+                    ui.set_device_message(format!("{} removed", ui.get_dev_name()).into());
+                    device_message_until = Some(std::time::Instant::now() + DEVICE_MESSAGE_TIME);
+                }
+                ws_client::Update::Removed(Err(message)) => ui.set_dev_message(message.into()),
                 ws_client::Update::Network(status) => {
                     ui.set_net(to_net_status(&status));
                     if let Some(password) = status.hotspot.password.as_ref().filter(|_| status.hotspot.active) {
@@ -571,6 +701,8 @@ fn apply_action_result(ui: &AppWindow, action: ws_client::Action, result: Result
 /// the list doesn't jump back to the top every time a lamp is switched.
 struct DeviceRows {
     devices: std::collections::BTreeMap<String, ws_client::Device>,
+    /// The device types (issue #40): whether a card offers "Pair again".
+    templates: Vec<ws_client::Template>,
     /// What app.slint shows: one entry per row of cards.
     grid: std::rc::Rc<slint::VecModel<slint::ModelRc<DeviceItem>>>,
     /// The same rows' own models, to update a single card.
@@ -589,6 +721,7 @@ impl DeviceRows {
         ui.set_device_rows(grid.clone().into());
         DeviceRows {
             devices: Default::default(),
+            templates: Vec::new(),
             grid,
             rows: Vec::new(),
             ids: Vec::new(),
@@ -612,6 +745,11 @@ impl DeviceRows {
         self.refresh();
     }
 
+    fn set_templates(&mut self, templates: Vec<ws_client::Template>) {
+        self.templates = templates;
+        self.refresh();
+    }
+
     /// Brings the rows in line with `devices`: sorted by room, then name
     /// (so a room's devices stay together), then id.
     fn refresh(&mut self) {
@@ -620,7 +758,7 @@ impl DeviceRows {
         let mut sorted: Vec<&ws_client::Device> = self.devices.values().collect();
         sorted.sort_by(|a, b| (&a.room, &a.name, &a.id).cmp(&(&b.room, &b.name, &b.id)));
         let ids: Vec<String> = sorted.iter().map(|d| d.id.clone()).collect();
-        let items: Vec<DeviceItem> = sorted.into_iter().map(device_item).collect();
+        let items: Vec<DeviceItem> = sorted.into_iter().map(|d| device_item(d, &self.templates)).collect();
         if ids == self.ids && columns == self.columns {
             // Same cards in the same places: card i is in row i / columns,
             // at position i % columns.
@@ -643,9 +781,40 @@ impl DeviceRows {
     }
 }
 
+/// A device's reachability (issue #40) as the card and details page say
+/// it: "" when all is well (or not known).
+fn status_text(device: &ws_client::Device) -> &'static str {
+    match device.online.as_deref() {
+        Some("offline") => "Offline",
+        Some("unauthorized") => "Needs pairing again",
+        _ => "",
+    }
+}
+
+/// Fills the device details page (issue #40).
+fn show_device_page(ui: &AppWindow, device: &ws_client::Device, wizard: &setup::Setup) {
+    let template = wizard.template(&device.template);
+    ui.set_dev_id(device.id.clone().into());
+    ui.set_dev_name(device.name.clone().into());
+    ui.set_dev_room(device.room.clone().into());
+    ui.set_dev_type(template.map_or_else(|| if device.source == "virtual" { "Test device".into() } else { device.template.clone() }, |t| t.name.clone()).into());
+    ui.set_dev_status(match device.online.as_deref() {
+        Some("online") => "Online",
+        _ => status_text(device),
+    }.into());
+    ui.set_dev_can_reauth(template.is_some_and(|t| t.can_reauth));
+    ui.set_dev_can_reconfigure(template.is_some_and(|t| t.can_reconfigure));
+    // Built into the hub (the board's LED): hardware whose type the wizard
+    // doesn't offer. backend_daemon would refuse; don't offer it.
+    ui.set_dev_can_remove(device.source == "virtual" || template.is_some());
+    if ui.get_dev_id() != device.id.as_str() || ui.get_page() != setup::PAGE_DEVICE {
+        ui.set_dev_message("".into());
+    }
+}
+
 /// One device -> one row of the list: which capabilities it has, and
 /// their values in the form app.slint shows them.
-fn device_item(device: &ws_client::Device) -> DeviceItem {
+fn device_item(device: &ws_client::Device, templates: &[ws_client::Template]) -> DeviceItem {
     let caps = &device.capabilities;
     let (color, color_text) = match &caps.color {
         Some(c) => color_of(c),
@@ -670,6 +839,19 @@ fn device_item(device: &ws_client::Device) -> DeviceItem {
         color,
         color_text: color_text.into(),
         sensor_text: sensor_text.into(),
+        status: status_text(device).into(),
+        can_reauth: device.online.as_deref() == Some("unauthorized")
+            && templates.iter().any(|t| t.id == device.template && t.can_reauth),
+        has_media: caps.media.is_some(),
+        volume: caps.media.as_ref().map_or(0, |m| m.volume.into()),
+        muted: caps.media.as_ref().is_some_and(|m| m.muted),
+        input: caps.media.as_ref().map_or(String::new(), |m| m.input.clone()).into(),
+        inputs: std::rc::Rc::new(slint::VecModel::from(
+            caps.media
+                .as_ref()
+                .map_or(vec![], |m| m.inputs.iter().map(|i| MediaInputItem { id: i.id.clone().into(), label: i.label.clone().into() }).collect()),
+        ))
+        .into(),
     }
 }
 

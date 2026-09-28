@@ -48,10 +48,16 @@ FILESEXTRAPATHS:prepend := "/home/builder/linux_a7/backend_daemon:"
 SRC_URI = " \
     file://Cargo.toml \
     file://Cargo.lock \
+    file://src/adapters/mod.rs \
+    file://src/adapters/lg_webos.rs \
+    file://src/adapters/m4_led.rs \
+    file://src/adapters/net.rs \
+    file://src/adapters/wled.rs \
     file://src/auth.rs \
     file://src/ble.rs \
     file://src/control.rs \
     file://src/device.rs \
+    file://src/discovery.rs \
     file://src/health.rs \
     file://src/helper.rs \
     file://src/hotspot.rs \
@@ -59,11 +65,15 @@ SRC_URI = " \
     file://src/mqtt.rs \
     file://src/network.rs \
     file://src/rpmsg.rs \
+    file://src/secrets.rs \
     file://src/settings.rs \
     file://src/shadow.rs \
     file://src/state.rs \
     file://src/store.rs \
+    file://src/templates.rs \
+    file://templates \
     file://src/tls.rs \
+    file://src/wizard.rs \
     file://src/ws.rs \
     file://patched/rumqttc \
 "
@@ -176,10 +186,15 @@ do_install() {
     install -m 0644 ${WORKDIR}/hub-helper@.service ${D}${systemd_system_unitdir}/hub-helper@.service
     install -D -m 0755 ${WORKDIR}/hub-helper.sh ${D}${libexecdir}/hub-helper
     install -D -m 0644 ${WORKDIR}/backend-daemon-tmpfiles.conf ${D}${nonarch_libdir}/tmpfiles.d/backend-daemon.conf
+    # Device templates (issue #40): read-only data, one JSON file per device
+    # type (templates.rs's TEMPLATE_DIR).
+    install -d ${D}${datadir}/universal-controller/templates
+    install -m 0644 ${WORKDIR}/templates/*.json ${D}${datadir}/universal-controller/templates/
 }
 
 FILES:${PN} += " \
     ${systemd_system_unitdir}/hub-helper@.service \
     ${libexecdir}/hub-helper \
     ${nonarch_libdir}/tmpfiles.d/backend-daemon.conf \
+    ${datadir}/universal-controller/templates \
 "

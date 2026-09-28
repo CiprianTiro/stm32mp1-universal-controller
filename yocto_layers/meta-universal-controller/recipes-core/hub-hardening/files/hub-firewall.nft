@@ -6,7 +6,9 @@
 # Only the services the hub offers are open:
 #
 #   tcp 8443   the LAN API (wss://, paired clients only -- ws.rs)
-#   udp 5353   mDNS: answering "where is stm32mp1.local?" (avahi)
+#   udp 5353   mDNS: answering "where is stm32mp1.local?" (avahi), and
+#              devices answering the hub's own searches (discovery.rs, #40)
+#   udp 50190  answers to the hub's SSDP searches (discovery.rs, #40)
 #   on the setup hotspot's interface (uap0) only, so only while it's open:
 #     tcp 80   the setup page (hotspot.rs)
 #     udp 67   DHCP: handing out addresses to phones that join it
@@ -66,8 +68,16 @@ table inet hub {
         udp sport 67 udp dport 68 accept
         ip6 saddr fe80::/10 udp sport 547 udp dport 546 accept
 
-        # mDNS (stm32mp1.local).
+        # mDNS (stm32mp1.local; and devices found by discovery.rs, #40).
         udp dport 5353 accept
+
+        # Answers to the hub's SSDP device searches (issue #40). The hub
+        # asks by MULTICAST, devices answer by UNICAST -- connection
+        # tracking can't tell those answers are replies, so without this
+        # they'd be dropped. discovery.rs always searches from this one
+        # port (SSDP_PORT there; keep them equal) and only reads SSDP
+        # answers on it.
+        udp dport 50190 accept
 
         # The hub's own services.
         tcp dport @lan_tcp accept

@@ -2,8 +2,8 @@
 """Tiny command-line client for backend_daemon's WebSocket API (ws.rs,
 protocol v2 since issue #34 -- see the wiki's Device-Model page).
 
-Until the add-device wizard exists, this is how devices are added, changed
-and removed by hand.
+Virtual (test) devices are added by hand with `add`; real devices with
+`add-device`, the same setup wizard the touchscreen shows (issue #40).
 
 PAIRING (issue #35). The hub only accepts paired clients from the LAN, over
 TLS (wss://<hub>:8443). Pair once: on the hub's screen open Settings ->
@@ -53,6 +53,18 @@ Allowed for every paired client; the hub's screen follows at once.
   mode: dark | light | auto, accent: sky | emerald | amber | violet | rose,
   density: comfortable | compact, time_zone: an IANA name.
 
+Adding real devices (issue #40): the hub's setup wizard, step by step in
+the terminal. `found` lists what the hub sees on the network; pick one with
+found=<address>, or start from a device type (and optionally its way in):
+
+    python3 tools/hub_ws.py <board> found                    "Found on your network"
+    python3 tools/hub_ws.py <board> discover                 search the network now
+    python3 tools/hub_ws.py <board> templates                device types that can be added
+    python3 tools/hub_ws.py <board> add-device wled found=192.168.1.139
+    python3 tools/hub_ws.py <board> add-device wled advanced
+    python3 tools/hub_ws.py <board> pair-again <id>          e.g. a TV shown "unauthorized"
+    python3 tools/hub_ws.py <board> reconfigure <id>         change its address/settings
+
 Pairing management (normally done on the hub's screen), hub itself only:
 
     python3 tools/hub_ws.py localhost:18080 start-pairing    shows a code
@@ -69,6 +81,7 @@ the board), and use `localhost:18080` as the board:
 Needs the `websockets` package (pip install websockets).
 """
 import asyncio
+import getpass
 import hashlib
 import json
 import os
@@ -140,6 +153,23 @@ def build_request(args):
             return {"action": "get_settings"}
         case ["set-settings", *pairs] if pairs and all("=" in p for p in pairs):
             return {"action": "set_settings", **dict(p.split("=", 1) for p in pairs)}
+        case ["found"]:
+            return {"action": "list_found"}
+        case ["discover"]:
+            return {"action": "discover_now"}
+        case ["templates"]:
+            return {"action": "list_templates"}
+        case ["pair-again", device_id]:
+            return {"action": "wizard_reauth", "device": device_id}
+        case ["reconfigure", device_id]:
+            return {"action": "wizard_reconfigure", "device": device_id}
+        case ["add-device", template, *rest] if len(rest) <= 1:
+            request = {"action": "wizard_start", "template": template}
+            if rest and rest[0].startswith("found="):
+                request["found"] = rest[0].removeprefix("found=")
+            elif rest:
+                request["variant"] = rest[0]
+            return request
     sys.exit(__doc__)
 
 
@@ -222,6 +252,115 @@ async def connect(board):
     return ws
 
 
+async def ask(ws, request):
+    await ws.send(json.dumps(request))
+    return json.loads(await ws.recv())
+
+
+def answer_step(view):
+    """Shows one wizard step and asks for its answer: ("answer", values),
+    or ("finish", name, room) on the last one."""
+    step = view["step"]
+    print(f"\n-- step {view['number']}: {step}")
+    if step == "info":
+        print(view["text"])
+        input("(Enter to go on) ")
+        return ("answer", {})
+    if step == "discover":
+        found = view["found"]
+        for i, device in enumerate(found, 1):
+            print(f"  {i}. {device['name']}  ({device['address']})")
+        if not found:
+            print("  nothing found yet")
+        pick = input("Number to pick, Enter to search again: ").strip()
+        if pick.isdigit() and 1 <= int(pick) <= len(found):
+            return ("answer", {"found": found[int(pick) - 1]["address"]})
+        return ("answer", {})
+    if step in ("form", "choice", "code_from_device"):
+        fields = view["fields"] if step == "form" else [view["field"]]
+        values = {}
+        for field in fields:
+            if field.get("hint"):
+                print(f"  ({field['hint']})")
+            for choice in field.get("choices", []):
+                print(f"  {choice['value']}: {choice['label']}")
+            current = field.get("value") or ""
+            prompt = f"{field['label']}{' [' + current + ']' if current else ''}: "
+            if field["type"] == "secret":
+                typed = getpass.getpass(prompt)
+            else:
+                typed = input(prompt).strip() or current
+            values[field["id"]] = typed
+        return ("answer", values)
+    if step == "confirm_on_device":
+        print(view["hint"])
+        for hint in view["hints"]:
+            print(f"  - {hint}")
+        print(f"waiting up to {view['timeout_s']} s for the confirmation...")
+        return ("answer", {})
+    if step == "test":
+        print("Testing...")
+        return ("answer", {})
+    if step == "save":
+        if view["summary"]:
+            print(f"Found: {view['summary']}")
+        input(f"Save the changes to {view['device']!r}? (Enter = yes, Ctrl+C = no) ")
+        return ("finish", "", "")
+    if step == "name":
+        if view["summary"]:
+            print(f"Found: {view['summary']}")
+        name = input(f"Name [{view['name']}]: ").strip() or view["name"]
+        room = input(f"Room [{view['room']}]: ").strip() or view["room"]
+        return ("finish", name, room)
+    sys.exit(f"this tool doesn't know the step {step!r}")
+
+
+async def run_wizard(ws, start):
+    """Walks through the hub's wizard (ws.rs wizard_*) until the device is
+    added. A refused answer shows the reason and asks the same step again."""
+    reply = await ask(ws, start)
+    if reply["type"] != "wizard_step":
+        sys.exit(reply.get("message", reply))
+    view = reply
+    try:
+        while True:
+            action = answer_step(view)
+            if action[0] == "finish":
+                reply = await ask(ws, {"action": "wizard_finish", "session": view["session"],
+                                       "name": action[1], "room": action[2]})
+            else:
+                reply = await ask(ws, {"action": "wizard_answer", "session": view["session"], "values": action[1]})
+            if reply["type"] == "device":
+                device = reply["device"]
+                print(f"\nDone: {device['name']!r} (id {device['id']}).")
+                return
+            if reply["type"] == "wizard_error":
+                where = f" [{reply['field']}]" if reply.get("field") else ""
+                print(f"\n!! {reply['message']}{where}")
+                if reply.get("detail"):
+                    print(f"   ({reply['detail']})")
+                if not reply.get("session"):
+                    return
+                # Retrying a test or pairing step unchanged fails the same
+                # way: let the person go back (to fix an address) or stop.
+                choice = input("Enter = try again, b = back, c = cancel: ").strip().lower()
+                if choice == "c":
+                    await ws.send(json.dumps({"action": "wizard_cancel", "session": view["session"]}))
+                    print("cancelled")
+                    return
+                if choice == "b":
+                    reply = await ask(ws, {"action": "wizard_back", "session": view["session"]})
+                    if reply["type"] == "wizard_step":
+                        view = reply
+                    else:
+                        print(f"!! {reply.get('message', reply)}")
+                continue  # the (same or previous) step again
+            view = reply
+    except (KeyboardInterrupt, EOFError):
+        await ws.send(json.dumps({"action": "wizard_cancel", "session": view["session"]}))
+        print("\ncancelled")
+
+
 async def main():
     if len(sys.argv) < 3:
         sys.exit(__doc__)
@@ -231,6 +370,9 @@ async def main():
         return
     ws = await connect(sys.argv[1])
     try:
+        if request["action"] in ("wizard_start", "wizard_reauth", "wizard_reconfigure"):
+            await run_wizard(ws, request)
+            return
         await ws.send(json.dumps(request))
         print(json.dumps(json.loads(await ws.recv()), indent=2))
         if request["action"] == "subscribe":

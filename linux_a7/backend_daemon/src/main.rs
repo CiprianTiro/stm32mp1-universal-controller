@@ -6,21 +6,26 @@ use tokio::time::interval;
  * part of this crate" -- this is what actually makes their code exist in
  * the final binary at all. It does NOT run anything in them; nothing in
  * either file executes until something below explicitly spawns it. */
+mod adapters;
 mod auth;
 mod ble;
 mod control;
 mod device;
+mod discovery;
 mod health;
 mod helper;
 mod hotspot;
 mod mqtt;
 mod network;
 mod rpmsg;
+mod secrets;
 mod settings;
 mod shadow;
 mod state;
 mod store;
+mod templates;
 mod tls;
+mod wizard;
 mod ws;
 
 /* worker_threads = 2 -- pinned explicitly to match the DK2's 2 physical
@@ -87,11 +92,51 @@ async fn main() {
     let (led_tx, led_rx) = tokio::sync::watch::channel(None);
     tokio::spawn(rpmsg::run(rpmsg_rx, led_tx));
 
-    /* The one door for device commands (control.rs, issue #34): the
-     * WebSocket clients and the cloud both go through it. The LED's driver
-     * keeps the "ld7" device in step with what the M4 reports. */
-    let control = control::Control::new(state_tx, rpmsg_tx);
-    tokio::spawn(control::run_led_driver(control.clone(), led_rx));
+    /* The adapters (issue #40): the code for each device family's
+     * protocol: the board's LED through the M4, WLED lights, LG TVs. And the one door
+     * for device commands (control.rs, issue #34): the WebSocket clients
+     * and the cloud both go through it; it hands hardware commands to the
+     * device's adapter. */
+    let adapters = std::sync::Arc::new(adapters::Registry::new(vec![
+        Box::new(adapters::m4_led::M4Led::new(rpmsg_tx, led_rx)),
+        Box::new(adapters::wled::Wled),
+        Box::new(adapters::lg_webos::LgWebos),
+    ]));
+    /* Devices' secrets (issue #40, secrets.rs): a separate hubd-only file,
+     * never logged, never sent to a client. */
+    let secrets_store = store::Store::new(&secrets::secrets_dir(), "secrets.json");
+    let secrets = std::sync::Arc::new(secrets::Secrets::new(
+        secrets_store.load_or_default("device secrets", secrets::decode),
+        store::writer(secrets_store, secrets::SECRETS_SCHEMA),
+    ));
+    let control = control::Control::new(state_tx, adapters.clone(), secrets);
+
+    /* Device templates (issue #40): what kinds of device the wizard can
+     * add. Checked against this build's adapters and capabilities; one
+     * broken or not-yet-supported template is skipped, never fatal. */
+    let (templates, problems) = templates::Templates::load(
+        std::path::Path::new(templates::TEMPLATE_DIR),
+        &templates::Known {
+            adapters: &adapters.ids(),
+            capabilities: &device::CAPABILITY_NAMES,
+        },
+    );
+    for problem in &problems {
+        println!("templates: skipped {problem}");
+    }
+    println!("templates: {} loaded", templates.len());
+    let templates = std::sync::Arc::new(templates);
+
+    /* Finding devices on the LAN (issue #40): the templates say what to
+     * look for; the inbox and IP auto-update come from here. */
+    let discovery = std::sync::Arc::new(discovery::Discovery::new());
+    tokio::spawn(discovery::run(discovery.clone(), templates.clone(), control.clone()));
+
+    /* Every hardware device's task (adapters/), after the built-in devices
+     * (the LED) exist. */
+    let starting = control.clone();
+    let registry = adapters.clone();
+    tokio::spawn(async move { registry.start_all(&starting).await });
 
     /* Cloud sync (mqtt.rs). local_clients: how many WebSocket clients are
      * connected right now -- ws.rs counts, health.rs (inside mqtt.rs)
@@ -155,7 +200,18 @@ async fn main() {
 
     /* The WebSocket API (ws.rs), protocol v2: ws://127.0.0.1:8080 for the
      * hub itself, wss://<hub>:8443 (paired clients only) for the LAN. */
-    tokio::spawn(ws::run(control, auth, hotspot, identity, network_tx, events_tx, local_clients, settings));
+    tokio::spawn(ws::run(
+        control,
+        auth,
+        hotspot,
+        identity,
+        network_tx,
+        events_tx,
+        local_clients,
+        settings,
+        discovery,
+        templates,
+    ));
 
     /* SIGTERM is what systemd sends on stop/restart; SIGINT covers Ctrl-C
      when running this interactively during development. */

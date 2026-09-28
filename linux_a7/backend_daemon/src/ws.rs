@@ -38,6 +38,28 @@
  *   set_settings {mode?, accent?, density?, time_zone?}
  *                                          -> settings {...} (see settings.rs, #39)
  *        after subscribe also: settings_changed {mode, accent, density, time_zone}
+ *   list_found                             -> found {devices: [...]} (the "Found on
+ *                                             your network" inbox, discovery.rs, #40)
+ *   discover_now                           -> ack (a search round now)
+ *        after subscribe also: found_changed (list_found again)
+ * Adding a device, the wizard (issue #40, wizard.rs -- one per connection):
+ *   list_templates                         -> templates {templates: [{id, name,
+ *                                             category, description, variants}]}
+ *   wizard_start {template, variant?, found?}
+ *                                          -> wizard_step {session, template, number,
+ *                                             step: "info"|"discover"|"form"|..., ...}
+ *        found: an address from list_found (that device, already chosen)
+ *   wizard_answer {session, values: {...}} -> the next wizard_step
+ *   wizard_back {session}                  -> the previous wizard_step
+ *   wizard_finish {session, name, room}    -> device {device} (added, running)
+ *   wizard_cancel {session}                -> ack
+ *   wizard_reauth {device}                 -> wizard_step: "pair again" (a device
+ *                                             shown online: "unauthorized")
+ *   wizard_reconfigure {device}            -> wizard_step: "change settings"
+ *        these end with step "save": wizard_finish {session} (no name/room)
+ *        -> device {device}, same id, adapter restarted
+ *        a refused answer, or an ended session:
+ *                                          -> wizard_error {session, field?, message, detail?}
  * On the LAN door (#35):
  *   pair {code, client_name}               -> paired {client_id, token, hub_fingerprint}
  *   auth {token}                           -> authenticated {client_id, name}
@@ -77,11 +99,14 @@ use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use crate::auth::{self, Auth};
 use crate::control::Control;
 use crate::hotspot::{self, Hotspot};
+use crate::discovery::{self, Discovery};
 use crate::settings::{self, HubSettings, Settings};
 use crate::device::{self, Device};
 use crate::network;
 use crate::state::{DeviceId, Event};
+use crate::templates::Templates;
 use crate::tls;
+use crate::wizard;
 
 /* The two doors (see the header). */
 const LOCAL_ADDR: &str = "127.0.0.1:8080";
@@ -106,6 +131,10 @@ const PROTOCOL_VERSION: u32 = 2;
  * field is refused with serde's own (quite clear) message. */
 #[derive(Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
+// AddDevice carries a whole Device, the rest a few strings: clippy calls
+// the size difference wasteful, but a request is parsed once and handled
+// at once -- boxing would only make the code noisier (as in state.rs).
+#[allow(clippy::large_enum_variant)]
 enum ClientRequest {
     Hello,
     ListDevices,
@@ -167,6 +196,43 @@ enum ClientRequest {
     },
     /* The hub's settings (issue #39, settings.rs): allowed for every
      * client, they only change how things look. */
+    /* The inbox of devices found on the LAN (issue #40, discovery.rs). */
+    ListFound,
+    DiscoverNow,
+    /* Adding a device (issue #40, wizard.rs). */
+    ListTemplates,
+    WizardStart {
+        template: String,
+        #[serde(default)]
+        variant: Option<String>,
+        #[serde(default)]
+        found: Option<String>,
+    },
+    WizardAnswer {
+        session: String,
+        #[serde(default)]
+        values: serde_json::Map<String, serde_json::Value>,
+    },
+    WizardBack {
+        session: String,
+    },
+    WizardFinish {
+        session: String,
+        /* Not needed after "pair again" / "change settings". */
+        #[serde(default)]
+        name: String,
+        #[serde(default)]
+        room: String,
+    },
+    WizardReauth {
+        device: DeviceId,
+    },
+    WizardReconfigure {
+        device: DeviceId,
+    },
+    WizardCancel {
+        session: String,
+    },
     GetSettings,
     SetSettings {
         #[serde(default)]
@@ -266,6 +332,24 @@ enum ServerMessage {
         #[serde(flatten)]
         settings: HubSettings,
     },
+    Found {
+        devices: Vec<discovery::Found>,
+    },
+    Templates {
+        templates: Vec<wizard::TemplateInfo>,
+    },
+    WizardStep {
+        #[serde(flatten)]
+        step: wizard::StepView,
+    },
+    WizardError {
+        session: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        field: Option<String>,
+        message: String,
+        #[serde(skip_serializing_if = "String::is_empty")]
+        detail: String,
+    },
     /* Events. */
     DeviceChanged {
         device: Device,
@@ -278,6 +362,7 @@ enum ServerMessage {
         #[serde(flatten)]
         settings: HubSettings,
     },
+    FoundChanged,
     Error {
         message: String,
     },
@@ -301,6 +386,10 @@ struct AppState {
     local_clients: Arc<AtomicUsize>,
     /* The hub's settings (issue #39). */
     settings: Arc<Settings>,
+    /* Devices found on the LAN (issue #40). */
+    discovery: Arc<Discovery>,
+    /* What the wizard can add (issue #40). */
+    templates: Arc<Templates>,
 }
 
 /* Counts one connected client for as long as it exists: +1 when created,
@@ -342,6 +431,8 @@ pub async fn run(
     events_tx: broadcast::Sender<Event>,
     local_clients: Arc<AtomicUsize>,
     settings: Arc<Settings>,
+    discovery: Arc<Discovery>,
+    templates: Arc<Templates>,
 ) {
     let fingerprint = Arc::new(identity.as_ref().map(|i| i.fingerprint.clone()).unwrap_or_default());
     let state = AppState {
@@ -353,6 +444,8 @@ pub async fn run(
         events_tx,
         local_clients,
         settings,
+        discovery,
+        templates,
     };
     /* The same routes behind both doors; `Extension(Door)` tells the
      * handler which one a connection used. */
@@ -479,6 +572,9 @@ async fn handle_socket(mut socket: WebSocket, app_state: AppState, door: Door, p
     /* None until the client subscribes. */
     let mut events: Option<broadcast::Receiver<Event>> = None;
     let mut settings_rx: Option<watch::Receiver<HubSettings>> = None;
+    let mut found_rx: Option<watch::Receiver<u64>> = None;
+    /* The device this client is adding, if any (wizard.rs). */
+    let mut wizard: Option<wizard::Session> = None;
     let mut revocations = app_state.auth.revocations();
     let deadline = tokio::time::sleep(AUTH_DEADLINE);
     tokio::pin!(deadline);
@@ -490,7 +586,10 @@ async fn handle_socket(mut socket: WebSocket, app_state: AppState, door: Door, p
                 let Some(Ok(msg)) = incoming else { break };
                 let Message::Text(text) = msg else { continue };
                 match serde_json::from_str::<ClientRequest>(&text) {
-                    Ok(req) => handle_message(req, &mut session, &mut events, &mut settings_rx, &app_state).await,
+                    Ok(req) => {
+                        let subscriptions = Subscriptions { events: &mut events, settings: &mut settings_rx, found: &mut found_rx };
+                        handle_message(req, &mut session, subscriptions, &mut wizard, &app_state).await
+                    }
                     Err(e) => Next::Send(ServerMessage::Error { message: e.to_string() }),
                 }
             }
@@ -500,6 +599,8 @@ async fn handle_socket(mut socket: WebSocket, app_state: AppState, door: Door, p
             Some(settings) = next_settings(&mut settings_rx), if settings_rx.is_some() => {
                 Next::Send(ServerMessage::SettingsChanged { settings })
             }
+            /* The inbox changed (issue #40), also only while subscribed. */
+            Some(()) = next_found(&mut found_rx), if found_rx.is_some() => Next::Send(ServerMessage::FoundChanged),
             Ok(id) = revocations.recv() => {
                 if session.client.as_ref().is_some_and(|c| c.id == id) {
                     println!("ws.rs: {id} was removed on the hub, closing its connection");
@@ -532,12 +633,19 @@ async fn handle_socket(mut socket: WebSocket, app_state: AppState, door: Door, p
     }
 }
 
+/* What a connection is subscribed to (all None until "subscribe"). */
+struct Subscriptions<'a> {
+    events: &'a mut Option<broadcast::Receiver<Event>>,
+    settings: &'a mut Option<watch::Receiver<HubSettings>>,
+    found: &'a mut Option<watch::Receiver<u64>>,
+}
+
 /* Checks what this session may do, then carries the request out. */
 async fn handle_message(
     req: ClientRequest,
     session: &mut Session,
-    events: &mut Option<broadcast::Receiver<Event>>,
-    settings_rx: &mut Option<watch::Receiver<HubSettings>>,
+    subscriptions: Subscriptions<'_>,
+    wizard: &mut Option<wizard::Session>,
     app_state: &AppState,
 ) -> Next {
     if req.local_only() && session.door != Door::Local {
@@ -560,12 +668,16 @@ async fn handle_message(
         ClientRequest::Subscribe => {
             /* Events from now on; the client lists the devices once to
              * know where to start. */
-            *events = Some(app_state.events_tx.subscribe());
+            *subscriptions.events = Some(app_state.events_tx.subscribe());
             /* The settings too (issue #39) -- from now on: the current
              * ones count as seen (the client asks get_settings once). */
             let mut rx = app_state.settings.subscribe();
             rx.mark_unchanged();
-            *settings_rx = Some(rx);
+            *subscriptions.settings = Some(rx);
+            /* And the inbox (issue #40), the same way. */
+            let mut rx = app_state.discovery.subscribe();
+            rx.mark_unchanged();
+            *subscriptions.found = Some(rx);
             Next::Send(ServerMessage::Ack)
         }
         ClientRequest::Pair { code, client_name } => match auth.pair(&code, &client_name) {
@@ -621,7 +733,115 @@ async fn handle_message(
             };
             Next::Send(reply)
         }
+        ClientRequest::ListTemplates
+        | ClientRequest::WizardStart { .. }
+        | ClientRequest::WizardAnswer { .. }
+        | ClientRequest::WizardBack { .. }
+        | ClientRequest::WizardFinish { .. }
+        | ClientRequest::WizardCancel { .. }
+        | ClientRequest::WizardReauth { .. }
+        | ClientRequest::WizardReconfigure { .. } => Next::Send(handle_wizard(req, wizard, app_state).await),
         other => Next::Send(handle_request(other, app_state).await),
+    }
+}
+
+/* The wizard's requests (issue #40). The session lives in the connection
+ * (handle_socket's `wizard`): one per client, gone with it. Adapters'
+ * probes and pairing actions run inside the request, so this client's
+ * other messages wait meanwhile (up to a step's timeout); other clients
+ * aren't affected. */
+async fn handle_wizard(req: ClientRequest, wizard: &mut Option<wizard::Session>, app_state: &AppState) -> ServerMessage {
+    let ctx = wizard::Context {
+        templates: &app_state.templates,
+        control: &app_state.control,
+        discovery: &app_state.discovery,
+    };
+    /* A step's reply, or its error for this session. */
+    let reply = |id: &str, result: Result<wizard::StepView, wizard::WizardError>| match result {
+        Ok(step) => ServerMessage::WizardStep { step },
+        Err(e) => wizard_error(id, e),
+    };
+    match req {
+        ClientRequest::ListTemplates => ServerMessage::Templates {
+            templates: wizard::list(&app_state.templates),
+        },
+        ClientRequest::WizardStart { template, variant, found } => {
+            match wizard::Session::start(&ctx, &template, variant.as_deref(), found.as_deref()).await {
+                Ok((session, step)) => {
+                    /* A new start replaces an unfinished one. */
+                    *wizard = Some(session);
+                    ServerMessage::WizardStep { step }
+                }
+                Err(e) => wizard_error("", e),
+            }
+        }
+        ClientRequest::WizardReauth { .. } | ClientRequest::WizardReconfigure { .. } => {
+            let (device, mode) = match req {
+                ClientRequest::WizardReauth { device } => (device, wizard::Mode::Reauth),
+                ClientRequest::WizardReconfigure { device } => (device, wizard::Mode::Reconfigure),
+                _ => unreachable!("matched above"),
+            };
+            match wizard::Session::start_for(&ctx, &device, mode).await {
+                Ok((session, step)) => {
+                    *wizard = Some(session);
+                    ServerMessage::WizardStep { step }
+                }
+                Err(e) => wizard_error("", e),
+            }
+        }
+        ClientRequest::WizardAnswer { session, values } => match current(wizard, &session) {
+            Ok(s) => reply(&session, s.answer(&ctx, values).await),
+            Err(e) => wizard_error(&session, e),
+        },
+        ClientRequest::WizardBack { session } => match current(wizard, &session) {
+            Ok(s) => reply(&session, s.back(&ctx).await),
+            Err(e) => wizard_error(&session, e),
+        },
+        ClientRequest::WizardFinish { session, name, room } => match current(wizard, &session) {
+            Ok(s) => match s.finish(&ctx, &name, &room).await {
+                Ok(device) => {
+                    println!("ws.rs: {} set up with the wizard ({})", device.id, device.template);
+                    *wizard = None;
+                    ServerMessage::Device { device: Some(device) }
+                }
+                Err(e) => wizard_error(&session, e),
+            },
+            Err(e) => wizard_error(&session, e),
+        },
+        ClientRequest::WizardCancel { session } => {
+            if wizard.as_ref().is_some_and(|s| s.id() == session) {
+                *wizard = None;
+            }
+            ServerMessage::Ack
+        }
+        _ => ServerMessage::Error {
+            message: "internal: not a wizard request".into(),
+        },
+    }
+}
+
+/* The running session with this id -- or the message saying it's over
+ * (idle too long, replaced by a newer start, or never existed). */
+fn current<'a>(wizard: &'a mut Option<wizard::Session>, id: &str) -> Result<&'a mut wizard::Session, wizard::WizardError> {
+    if wizard.as_ref().is_some_and(|s| s.expired()) {
+        *wizard = None;
+    }
+    match wizard {
+        Some(s) if s.id() == id => Ok(s),
+        _ => Err(wizard::WizardError {
+            field: None,
+            message: "This setup has ended (it waited too long, or another one started). Please start again.".into(),
+            detail: String::new(),
+        }),
+    }
+}
+
+fn wizard_error(session: &str, e: wizard::WizardError) -> ServerMessage {
+    ServerMessage::WizardError {
+        session: session.to_string(),
+        field: e.field,
+        message: e.message,
+        detail: e.detail,
     }
 }
 
@@ -677,6 +897,17 @@ async fn next_event(events: &mut Option<broadcast::Receiver<Event>>) -> ServerMe
     }
 }
 
+/* The next inbox change for a subscribed client (issue #40). */
+async fn next_found(rx: &mut Option<watch::Receiver<u64>>) -> Option<()> {
+    let receiver = rx.as_mut()?;
+    if receiver.changed().await.is_err() {
+        *rx = None;
+        return None;
+    }
+    receiver.borrow_and_update();
+    Some(())
+}
+
 /* The next settings change for a subscribed client (issue #39). None:
  * settings.rs is gone (shutting down) -- then stop listening. */
 async fn next_settings(rx: &mut Option<watch::Receiver<HubSettings>>) -> Option<HubSettings> {
@@ -710,6 +941,13 @@ async fn handle_request(req: ClientRequest, app_state: &AppState) -> ServerMessa
         ClientRequest::UpdateDeviceInfo { id, name, room } => device(control.update_info(&id, name, room).await),
         ClientRequest::RemoveDevice { id } => ack_or_error(control.remove(&id).await),
         ClientRequest::Command { id, capability, value } => device(control.command(&id, &capability, value).await),
+        ClientRequest::ListFound => ServerMessage::Found {
+            devices: app_state.discovery.inbox(control).await,
+        },
+        ClientRequest::DiscoverNow => {
+            app_state.discovery.discover_now();
+            ServerMessage::Ack
+        }
         ClientRequest::GetSettings => ServerMessage::Settings {
             settings: app_state.settings.get(),
         },
@@ -739,7 +977,15 @@ async fn handle_request(req: ClientRequest, app_state: &AppState) -> ServerMessa
         | ClientRequest::RevokeClient { .. }
         | ClientRequest::StartHotspot
         | ClientRequest::StopHotspot
-        | ClientRequest::GetNetworkStatus => ServerMessage::Error {
+        | ClientRequest::GetNetworkStatus
+        | ClientRequest::ListTemplates
+        | ClientRequest::WizardStart { .. }
+        | ClientRequest::WizardAnswer { .. }
+        | ClientRequest::WizardBack { .. }
+        | ClientRequest::WizardFinish { .. }
+        | ClientRequest::WizardCancel { .. }
+        | ClientRequest::WizardReauth { .. }
+        | ClientRequest::WizardReconfigure { .. } => ServerMessage::Error {
             message: "internal: request not routed".into(),
         },
         ClientRequest::WifiScan => {

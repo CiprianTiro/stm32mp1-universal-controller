@@ -1,0 +1,29 @@
+{
+  "$comment": "WLED: open local API (pattern P1), found by mDNS. Format: wiki Device-Templates.",
+  "format": 1,
+  "id": "wled",
+  "version": 1,
+  "name": "WLED light",
+  "category": "lighting",
+  "description": "LED strips and lamps running WLED (ESP8266 / ESP32).",
+  "adapter": "wled",
+  "capabilities": ["switch", "dimmer", "color"],
+  "inputs": [
+    {
+      "id": "host",
+      "type": "text",
+      "label": "Address",
+      "hint": "The IP address shown in the WLED app, e.g. 192.168.1.50",
+      "validate": { "pattern": "host" }
+    }
+  ],
+  "discovery": [
+    { "method": "mdns", "service": "_wled._tcp", "fill": { "host": "{address}", "name": "{name}", "mac": "{txt.mac}" } }
+  ],
+  "setup": [
+    { "id": "guided", "label": "Find it automatically", "steps": [ { "type": "discover" }, { "type": "test" } ] },
+    { "id": "advanced", "label": "Enter the address", "steps": [ { "type": "form", "fields": ["host"] }, { "type": "test" } ] }
+  ],
+  "identity": "{mac}",
+  "defaults": { "name": "LED strip" }
+}

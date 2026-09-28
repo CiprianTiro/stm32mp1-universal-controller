@@ -1,0 +1,13 @@
+{
+  "$comment": "The board's LED LD7, driven by the Cortex-M4. Built in: created automatically, never added or removed by the wizard. Format: wiki Device-Templates.",
+  "format": 1,
+  "id": "m4-led",
+  "version": 1,
+  "name": "Board LED",
+  "category": "lighting",
+  "description": "The DK2's LED LD7, switched by the Cortex-M4.",
+  "adapter": "m4-led",
+  "capabilities": ["switch"],
+  "builtin": true,
+  "defaults": { "name": "Board LED (LD7)", "room": "Hub" }
+}

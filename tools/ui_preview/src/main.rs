@@ -49,7 +49,7 @@ fn set_size_and_rows(ui: &AppWindow, window: &MinimalSoftwareWindow, width: u32,
 
 /// The pages worth looking at, with the number app.slint uses for each.
 /// None: the welcome screen (shown until the backend first answers).
-const PAGES: [(&str, Option<i32>); 10] = [
+const PAGES: [(&str, Option<i32>); 12] = [
     ("welcome", None),
     ("devices", Some(0)),
     ("network", Some(1)),
@@ -60,7 +60,90 @@ const PAGES: [(&str, Option<i32>); 10] = [
     ("pairing", Some(6)),
     ("appearance", Some(7)),
     ("timezone", Some(8)),
+    ("add-device", Some(9)),
+    ("device", Some(11)),
 ];
+
+/// The wizard page (10) in each kind of step (issue #40): the step's
+/// sample data is set just before its render.
+const WIZARD_STEPS: [(&str, fn(&AppWindow)); 6] = [
+    ("wizard-discover", |ui| {
+        wizard(ui, "Add: WLED light", "discover", 1, "", false);
+        ui.set_wizard_found(Rc::new(VecModel::from(vec![
+            FoundItem { name: "WLED-Desk".into(), address: "192.168.1.139".into(), ..Default::default() },
+            FoundItem { name: "wled-kitchen".into(), address: "192.168.1.61".into(), ..Default::default() },
+        ])).into());
+        ui.set_wizard_variants(Rc::new(VecModel::from(vec![
+            VariantItem { id: "advanced".into(), label: "Enter the address".into() },
+        ])).into());
+    }),
+    ("wizard-form", |ui| {
+        wizard(ui, "Add: LG TV (webOS)", "form", 1, "", false);
+        ui.set_wizard_fields(fields(&[
+            ("host", "TV address", "Settings > Network on the TV shows it, e.g. 192.168.1.40", "192.168.1.140", true),
+            ("mac", "TV MAC address", "Needed to switch the TV on; read from the TV after pairing if left empty", "", false),
+        ]));
+    }),
+    ("wizard-typing", |ui| {
+        wizard(ui, "Add: WLED light", "form", 1, "", false);
+        ui.set_wizard_fields(fields(&[("host", "Address", "The IP address shown in the WLED app, e.g. 192.168.1.50", "", true)]));
+        ui.set_wizard_editing(0);
+        ui.set_wizard_edit_text("192.168.1.13".into());
+        ui.set_wizard_error("Address: an IP address like 192.168.1.50, or a name like wled.local.".into());
+    }),
+    ("wizard-confirm", |ui| {
+        wizard(ui, "Add: LG TV (webOS)", "confirm_on_device", 2, "A prompt appears on the TV: accept it with the remote.", true);
+        ui.set_wizard_hints(Rc::new(VecModel::from(vec![slint::SharedString::from(
+            "Can't see it? The TV may be showing another input: press Home.",
+        )])).into());
+        ui.set_wizard_seconds(60);
+    }),
+    ("wizard-failed", |ui| {
+        wizard(ui, "Add: WLED light", "test", 2, "", false);
+        ui.set_wizard_error("The hub can't reach the device. Is it on and on the same network?".into());
+        ui.set_wizard_detail("can't reach 192.168.1.250: No route to host (os error 113)".into());
+    }),
+    ("wizard-name", |ui| {
+        wizard(ui, "Add: WLED light", "name", 3, "WLED 16.0.1", false);
+        ui.set_wizard_primary("Add".into());
+        ui.set_wizard_fields(fields(&[
+            ("name", "Name", "", "LED strip", true),
+            ("room", "Room", "Where it is, e.g. Living room", "Office", false),
+        ]));
+    }),
+];
+
+/// Resets the wizard page to one step.
+fn wizard(ui: &AppWindow, title: &str, step: &str, number: i32, text: &str, busy: bool) {
+    ui.set_wizard_title(title.into());
+    ui.set_wizard_step(step.into());
+    ui.set_wizard_number(number);
+    ui.set_wizard_text(text.into());
+    ui.set_wizard_busy(busy);
+    ui.set_wizard_error("".into());
+    ui.set_wizard_detail("".into());
+    ui.set_wizard_editing(-1);
+    ui.set_wizard_primary("Next".into());
+    ui.set_wizard_fields(Rc::new(VecModel::from(Vec::<FieldItem>::new())).into());
+}
+
+/// Text fields: (id, label, hint, value, required).
+fn fields(list: &[(&str, &str, &str, &str, bool)]) -> slint::ModelRc<FieldItem> {
+    let items: Vec<FieldItem> = list
+        .iter()
+        .map(|&(id, label, hint, value, required)| FieldItem {
+            id: id.into(),
+            label: label.into(),
+            hint: hint.into(),
+            kind: "text".into(),
+            shown: value.into(),
+            value: value.into(),
+            required,
+            ..Default::default()
+        })
+        .collect();
+    Rc::new(VecModel::from(items)).into()
+}
 
 /// Slint needs a Platform before any window exists; this one hands out the
 /// in-memory window. The event loop is never run (frames are drawn by hand).
@@ -112,6 +195,14 @@ fn main() {
             save_png(&window, width, height, &path);
             println!("{path}");
         }
+        ui.set_ever_connected(true);
+        ui.set_page(10);
+        for (name, setup) in WIZARD_STEPS {
+            setup(&ui);
+            let path = format!("{out_dir}/{width}x{height}-{name}{suffix}.png");
+            save_png(&window, width, height, &path);
+            println!("{path}");
+        }
     }
 }
 
@@ -153,7 +244,19 @@ fn fill_sample_data(ui: &AppWindow, appearance: &theme::Appearance) {
                      color: slint::Color::from_rgb_u8(0, 255, 136), color_text: "#00FF88".into(),
                      ..device("bulb", "Hall bulb", "Hall") },
         DeviceItem { has_switch: true, on: false, has_dimmer: true, level: 73, ..device("lamp-1", "Desk lamp", "Office") },
-        DeviceItem { has_switch: true, on: true, ..device("tv", "Living room TV", "Living room") },
+        DeviceItem { has_switch: true, on: true, has_media: true, volume: 12, input: "TV".into(),
+                     inputs: Rc::new(VecModel::from(vec![
+                         MediaInputItem { id: "TV".into(), label: "Live TV".into() },
+                         MediaInputItem { id: "HDMI_1".into(), label: "HDMI 1".into() },
+                         MediaInputItem { id: "HDMI_2".into(), label: "HDMI 2".into() },
+                         MediaInputItem { id: "HDMI_3".into(), label: "HDMI 3".into() },
+                     ])).into(),
+                     ..device("tv", "Living room TV", "Living room") },
+        DeviceItem { has_switch: true, on: false, has_dimmer: true, level: 100, has_color: true,
+                     color: slint::Color::from_rgb_u8(255, 64, 194), color_text: "#FF40C2".into(),
+                     status: "Offline".into(), ..device("strip", "Desk strip", "Office") },
+        DeviceItem { has_switch: true, on: false, status: "Needs pairing again".into(), can_reauth: true,
+                     ..device("tv2", "Bedroom TV", "Bedroom") },
         DeviceItem { sensor_text: "temperature 21.5 °C   humidity 48 %".into(), ..device("climate", "Climate sensor", "Bedroom") },
         DeviceItem { has_switch: true, on: false, ..device("kettle", "Kettle", "Kitchen") },
     ];
@@ -222,6 +325,25 @@ fn fill_sample_data(ui: &AppWindow, appearance: &theme::Appearance) {
         .map(|z| ZoneItem { label: z.label.into(), value: z.value.into(), marked: z.marked })
         .collect();
     ui.set_zone_items(Rc::new(VecModel::from(zones)).into());
+
+    // Adding devices (issue #40).
+    let found = vec![FoundItem { template: "wled".into(), name: "WLED-Desk".into(), address: "192.168.1.139".into(), type_name: "WLED light".into() }];
+    ui.set_found(Rc::new(VecModel::from(found)).into());
+    let templates = vec![
+        TemplateItem { id: "wled".into(), name: "WLED light".into(), category: "Lighting".into(),
+                       description: "LED strips and lamps running WLED (ESP8266 / ESP32).".into() },
+        TemplateItem { id: "lg-webos-tv".into(), name: "LG TV (webOS)".into(), category: "TV & media".into(),
+                       description: "LG smart TVs with webOS (2014 and later).".into() },
+    ];
+    ui.set_templates(Rc::new(VecModel::from(templates)).into());
+    ui.set_dev_id("tv".into());
+    ui.set_dev_name("Living room TV".into());
+    ui.set_dev_room("Living room".into());
+    ui.set_dev_type("LG TV (webOS)".into());
+    ui.set_dev_status("Online".into());
+    ui.set_dev_can_reauth(true);
+    ui.set_dev_can_reconfigure(true);
+    ui.set_dev_can_remove(true);
 }
 
 /// A QR-code-sized checkerboard stand-in (the real code isn't the point of
