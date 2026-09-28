@@ -21,8 +21,9 @@
  * device from its capabilities alone: switch -> toggle, dimmer -> slider.
  *
  * WHAT'S HERE: switch, dimmer, color and sensor -- the general ones almost
- * every device type uses. The specialised ones (media, vacuum,
- * camera_stream, ir_remote) come with their devices (#42-#45). Adding one
+ * every device type uses -- and media (a TV's volume, mute and input,
+ * issue #40). The other specialised ones (vacuum, camera_stream,
+ * ir_remote) come with their devices (#42-#45). Adding one
  * means: a struct for its state, `impl Capability` (its rules), a field in
  * `Capabilities`, and one line in `set_capability`. Nothing else changes.
  *
@@ -55,29 +56,98 @@ pub struct Device {
     /* Where the device's state really lives (see Source). */
     #[serde(default)]
     pub source: Source,
+    /* The adapter's plain settings, from setup (issue #40): {"host":
+     * "192.168.1.50", ...}. Never secrets (secrets.rs keeps those), never
+     * sent to the cloud (shadow.rs lists what is). */
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub config: BTreeMap<String, String>,
+    /* What stays the same when its IP address changes (issue #40): a MAC,
+     * serial or UUID, from its template's "identity". Empty = none: the
+     * device is only known by its address. */
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub identity: String,
+    /* Can the hub reach it right now (issue #40)? Set by its adapter's
+     * task; None = not known (yet), e.g. virtual devices, or hardware
+     * whose task hasn't connected yet. It only describes THIS run of the
+     * hub: never saved in the registry (state::encode_registry drops it),
+     * and never taken from a client or a file (skip_deserializing). */
+    #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
+    pub online: Option<Health>,
     pub capabilities: Capabilities,
 }
 
-/* Where a device's truth is. For a VIRTUAL device the hub's own record is
- * the truth (test devices, and devices whose real driver doesn't exist
- * yet). For hardware, the hub only reports what the hardware confirms:
- * a command goes to the hardware first, and the state changes when it
- * answers. More sources come with their drivers (Zigbee #46, the ESP32 IR
- * blaster #42, ...). */
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum Source {
-    #[default]
-    Virtual,
-    /* The board's LED LD7, driven by the Cortex-M4 (rpmsg.rs). */
-    M4Led,
+/* A hardware device's reachability, as its adapter sees it. A screen
+ * shows anything but Online greyed out, with the reason. */
+#[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Health {
+    Online,
+    /* Not answering: switched off, unplugged, left the WiFi. */
+    Offline,
+    /* Answering, but refusing us: e.g. a TV whose pairing key was
+     * revoked -- it needs pairing again (the wizard's re-auth). */
+    #[allow(dead_code)] /* first used by the LG TV adapter (#40 step 7) */
+    Unauthorized,
 }
 
+/* Where a device's truth is, as the id of the ADAPTER that runs it
+ * (issue #40, adapters/): "m4-led", "wled", "lg-webos", ... -- or
+ * "virtual". For a VIRTUAL device the hub's own record is the truth (test
+ * devices, and devices whose real driver doesn't exist yet). For hardware,
+ * the hub only reports what the hardware confirms: a command goes to the
+ * device's adapter first, and the state changes when it answers.
+ *
+ * Until #40 this was a fixed list (virtual, m4_led); registries and
+ * clients from then still work: "m4_led" is read as "m4-led". */
+#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(transparent)]
+pub struct Source(String);
+
+/* Adapters whose devices are part of the hub itself (templates with
+ * "builtin": true): always there, can't be removed (deleting the cloud
+ * shadow just recreates them). A test checks this matches the templates. */
+pub const BUILTIN_SOURCES: [&str; 1] = ["m4-led"];
+
 impl Source {
-    /* Part of the hub itself: always there, can't be removed (deleting
-     * its cloud shadow just recreates it). */
-    pub fn is_builtin(self) -> bool {
-        matches!(self, Source::M4Led)
+    pub const VIRTUAL: &'static str = "virtual";
+
+    pub fn new(adapter: &str) -> Self {
+        Source(adapter.to_string())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn is_virtual(&self) -> bool {
+        self.0 == Self::VIRTUAL
+    }
+
+    pub fn is_builtin(&self) -> bool {
+        BUILTIN_SOURCES.contains(&self.0.as_str())
+    }
+}
+
+impl Default for Source {
+    fn default() -> Self {
+        Source::new(Self::VIRTUAL)
+    }
+}
+
+impl std::fmt::Display for Source {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/* Hand-written instead of derived: to read the pre-#40 names. */
+impl<'de> Deserialize<'de> for Source {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let name = String::deserialize(deserializer)?;
+        Ok(Source(match name.as_str() {
+            "m4_led" => "m4-led".to_string(),
+            _ => name,
+        }))
     }
 }
 
@@ -97,10 +167,12 @@ pub struct Capabilities {
     pub color: Option<Color>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sensor: Option<Sensor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media: Option<Media>,
 }
 
 /* The names, e.g. for error messages and the protocol's "hello". */
-pub const CAPABILITY_NAMES: [&str; 4] = ["switch", "dimmer", "color", "sensor"];
+pub const CAPABILITY_NAMES: [&str; 5] = ["switch", "dimmer", "color", "sensor", "media"];
 
 /* On/off: lamps, plugs, relays, a TV's power. */
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -143,6 +215,31 @@ pub struct Reading {
     pub value: f64,
     #[serde(default)]
     pub unit: String,
+}
+
+/* A TV's (later: a speaker's, a receiver's) sound and source:
+ *   {"volume": 12, "muted": false, "input": "HDMI_1",
+ *    "inputs": [{"id": "HDMI_1", "label": "PlayStation"}, ...]}
+ * Power is the device's `switch`. `input` is "" while no input is shown
+ * (an app, e.g. Netflix). `inputs` is what the device offers -- it only
+ * comes FROM the device: in a command it's ignored (and may be left out),
+ * a client sends volume, muted and input. */
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct Media {
+    pub volume: u8,
+    pub muted: bool,
+    #[serde(default)]
+    pub input: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inputs: Vec<MediaInput>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct MediaInput {
+    pub id: String,
+    pub label: String,
 }
 
 /* ------------------------------------------------------------------ */
@@ -201,6 +298,23 @@ impl Capability for Color {
     }
 }
 
+impl Capability for Media {
+    const NAME: &'static str = "media";
+    fn check(&self) -> Result<(), String> {
+        if self.volume > 100 {
+            return Err(format!("media volume must be 0-100, got {}", self.volume));
+        }
+        let text_ok = |t: &str| t.chars().count() <= 64 && !t.chars().any(char::is_control);
+        if !text_ok(&self.input) {
+            return Err("media input: at most 64 characters, no control characters".into());
+        }
+        if self.inputs.len() > 32 || !self.inputs.iter().all(|i| text_ok(&i.id) && text_ok(&i.label)) {
+            return Err("media inputs: at most 32, each id and label at most 64 characters".into());
+        }
+        Ok(())
+    }
+}
+
 impl Capability for Sensor {
     const NAME: &'static str = "sensor";
     const SETTABLE: bool = false;
@@ -246,6 +360,7 @@ pub fn set_capability(
         "dimmer" => replace(&mut caps.dimmer, id, value, origin)?,
         "color" => replace(&mut caps.color, id, value, origin)?,
         "sensor" => replace(&mut caps.sensor, id, value, origin)?,
+        "media" => replace(&mut caps.media, id, value, origin)?,
         other => {
             return Err(format!(
                 "unknown capability {other:?} (known: {})",
@@ -276,6 +391,30 @@ fn replace<T: Capability>(
 }
 
 impl Capabilities {
+    /* A new device's capabilities, from its template's list of names:
+     * each with a neutral starting value (off, full brightness, white).
+     * Its adapter reports the real state as soon as it's connected. */
+    pub fn with_defaults(names: &[String]) -> Result<Capabilities, String> {
+        let mut caps = Capabilities::default();
+        for name in names {
+            match name.as_str() {
+                "switch" => caps.switch = Some(Switch { on: false }),
+                "dimmer" => caps.dimmer = Some(Dimmer { level: 100 }),
+                "color" => {
+                    caps.color = Some(Color {
+                        hex: Some("#FFFFFF".into()),
+                        kelvin: None,
+                    })
+                }
+                "sensor" => caps.sensor = Some(Sensor::default()),
+                "media" => caps.media = Some(Media::default()),
+                other => return Err(format!("unknown capability {other:?}")),
+            }
+        }
+        caps.check()?;
+        Ok(caps)
+    }
+
     /* Checks every capability that's present, and that there is at least
      * one (a device that can't do anything can't be shown or used). */
     pub fn check(&self) -> Result<(), String> {
@@ -293,6 +432,10 @@ impl Capabilities {
             any = true;
         }
         if let Some(c) = &self.sensor {
+            c.check()?;
+            any = true;
+        }
+        if let Some(c) = &self.media {
             c.check()?;
             any = true;
         }
@@ -317,6 +460,17 @@ impl Device {
         check_text("name", &self.name, 1)?;
         check_text("room", &self.room, 0)?;
         check_text("template", &self.template, 0)?;
+        for (key, value) in &self.config {
+            if key.is_empty() || key.len() > 40 || !key.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_') {
+                return Err(format!("config key {key:?}: use a-z, 0-9 and _"));
+            }
+            if value.len() > 256 || value.chars().any(char::is_control) {
+                return Err(format!("config {key:?}: at most 256 characters, no control characters"));
+            }
+        }
+        if self.identity.len() > 128 || self.identity.chars().any(char::is_control) {
+            return Err("identity: at most 128 characters, no control characters".into());
+        }
         self.capabilities.check()
     }
 }
@@ -369,7 +523,10 @@ pub fn migrate_v1(id: &str, properties: &HashMap<String, serde_json::Value>) -> 
         name: id.to_string(),
         room: String::new(),
         template: "migrated".into(),
-        source: Source::Virtual,
+        source: Source::default(),
+        config: Default::default(),
+        identity: String::new(),
+        online: None,
         capabilities: caps,
     };
     device.check().map_err(|e| format!("{id}: {e} (had: {})", dropped.join(", ")))?;
@@ -387,7 +544,10 @@ mod tests {
             name: "Living room lamp".into(),
             room: "Living room".into(),
             template: "dimmable-light".into(),
-            source: Source::Virtual,
+            source: Source::default(),
+            config: Default::default(),
+            identity: String::new(),
+            online: None,
             capabilities: Capabilities {
                 switch: Some(Switch { on: true }),
                 dimmer: Some(Dimmer { level: 80 }),
@@ -412,7 +572,7 @@ mod tests {
             "id": "t1", "name": "T", "capabilities": {"sensor": {"readings": {"temperature": {"value": 21.5, "unit": "°C"}}}}
         }))
         .unwrap();
-        assert_eq!(parsed.source, Source::Virtual);
+        assert_eq!(parsed.source, Source::default());
         assert!(parsed.check().is_ok());
     }
 

@@ -28,7 +28,7 @@
 use std::collections::{BTreeMap, HashMap};
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
-use crate::device::{self, Device, Origin};
+use crate::device::{self, Device, Health, Origin};
 
 /* A device's id, e.g. "lamp-1" (also its AWS shadow's name). A type alias:
  * just a String with a name that says what it's for. */
@@ -36,6 +36,10 @@ pub type DeviceId = String;
 
 /* What happened to a device, for event subscribers (ws.rs). */
 #[derive(Debug, Clone, PartialEq)]
+// Changed carries a whole Device, Removed only an id: clippy calls the
+// size difference wasteful, but events are rare (a device changing), so
+// boxing would only make the code noisier.
+#[allow(clippy::large_enum_variant)]
 pub enum Event {
     /* Added, or changed in any way: the device as it is now. */
     Changed(Device),
@@ -45,6 +49,8 @@ pub enum Event {
 /* Every request the actor understands. Each carries its reply envelope;
  * a sender that doesn't care about the answer can drop the receiving half
  * (the actor ignores a failed reply). */
+// AddDevice carries a whole Device: the same trade-off as Event above.
+#[allow(clippy::large_enum_variant)]
 pub enum Msg {
     GetDevice {
         id: DeviceId,
@@ -66,6 +72,14 @@ pub enum Msg {
         room: Option<String>,
         reply: oneshot::Sender<Result<Device, String>>,
     },
+    /* Change some of an adapter's settings (issue #40), e.g. the new
+     * address of a device discovery found elsewhere. Only the given keys
+     * change. */
+    SetConfig {
+        id: DeviceId,
+        config: BTreeMap<String, String>,
+        reply: oneshot::Sender<Result<Device, String>>,
+    },
     /* Change one capability. `origin` says who's asking (device.rs):
      * clients may only change virtual devices this way -- hardware state
      * only changes when the hardware confirms (Origin::Device, sent by its
@@ -80,6 +94,14 @@ pub enum Msg {
     RemoveDevice {
         id: DeviceId,
         reply: oneshot::Sender<Result<(), String>>,
+    },
+    /* A hardware device became reachable or not (issue #40), reported by
+     * its adapter. Screens and the cloud hear about it; the flash doesn't
+     * (it only describes this run of the hub, see Device::online). */
+    SetOnline {
+        id: DeviceId,
+        online: Health,
+        reply: oneshot::Sender<Result<Device, String>>,
     },
 }
 
@@ -108,14 +130,21 @@ pub async fn run(mut rx: mpsc::Receiver<Msg>, mut devices: HashMap<DeviceId, Dev
             Msg::AddDevice { device, reply } => {
                 let result = add(&mut devices, device);
                 if let Ok(device) = &result {
-                    changed(&out, &devices, Event::Changed(device.clone()));
+                    changed(&out, &devices, Event::Changed(device.clone()), true);
                 }
                 let _ = reply.send(result);
             }
             Msg::UpdateInfo { id, name, room, reply } => {
                 let result = update_info(&mut devices, &id, name, room);
                 if let Ok((device, true)) = &result {
-                    changed(&out, &devices, Event::Changed(device.clone()));
+                    changed(&out, &devices, Event::Changed(device.clone()), true);
+                }
+                let _ = reply.send(result.map(|(device, _)| device));
+            }
+            Msg::SetConfig { id, config, reply } => {
+                let result = set_config(&mut devices, &id, config);
+                if let Ok((device, true)) = &result {
+                    changed(&out, &devices, Event::Changed(device.clone()), true);
                 }
                 let _ = reply.send(result.map(|(device, _)| device));
             }
@@ -128,14 +157,21 @@ pub async fn run(mut rx: mpsc::Receiver<Msg>, mut devices: HashMap<DeviceId, Dev
             } => {
                 let result = set(&mut devices, &id, &capability, value, origin);
                 if let Ok((device, true)) = &result {
-                    changed(&out, &devices, Event::Changed(device.clone()));
+                    changed(&out, &devices, Event::Changed(device.clone()), true);
+                }
+                let _ = reply.send(result.map(|(device, _)| device));
+            }
+            Msg::SetOnline { id, online, reply } => {
+                let result = set_online(&mut devices, &id, online);
+                if let Ok((device, true)) = &result {
+                    changed(&out, &devices, Event::Changed(device.clone()), false);
                 }
                 let _ = reply.send(result.map(|(device, _)| device));
             }
             Msg::RemoveDevice { id, reply } => {
                 let result = remove(&mut devices, &id);
                 if result.is_ok() {
-                    changed(&out, &devices, Event::Removed(id));
+                    changed(&out, &devices, Event::Removed(id), true);
                 }
                 let _ = reply.send(result);
             }
@@ -144,10 +180,13 @@ pub async fn run(mut rx: mpsc::Receiver<Msg>, mut devices: HashMap<DeviceId, Dev
 }
 
 /* Tells everyone about a change: the registry writer (the whole registry,
- * encoded), the cloud's bell, and the event subscribers. `send` on a
- * broadcast channel fails only when nobody is subscribed -- fine. */
-fn changed(out: &Outputs, devices: &HashMap<DeviceId, Device>, event: Event) {
-    out.save_tx.send_replace(encode_registry(devices));
+ * encoded -- only if `persist`: nothing it saves changed otherwise), the
+ * cloud's bell, and the event subscribers. `send` on a broadcast channel
+ * fails only when nobody is subscribed -- fine. */
+fn changed(out: &Outputs, devices: &HashMap<DeviceId, Device>, event: Event, persist: bool) {
+    if persist {
+        out.save_tx.send_replace(encode_registry(devices));
+    }
     out.changed_tx.send_replace(());
     let _ = out.events_tx.send(event);
 }
@@ -187,6 +226,22 @@ fn update_info(
     Ok((new, true))
 }
 
+fn set_config(
+    devices: &mut HashMap<DeviceId, Device>,
+    id: &str,
+    config: BTreeMap<String, String>,
+) -> Result<(Device, bool), String> {
+    let current = devices.get(id).ok_or_else(|| format!("unknown device {id:?}"))?;
+    let mut new = current.clone();
+    new.config.extend(config);
+    if new == *current {
+        return Ok((new, false));
+    }
+    new.check()?;
+    devices.insert(id.to_string(), new.clone());
+    Ok((new, true))
+}
+
 fn set(
     devices: &mut HashMap<DeviceId, Device>,
     id: &str,
@@ -195,7 +250,7 @@ fn set(
     origin: Origin,
 ) -> Result<(Device, bool), String> {
     let current = devices.get(id).ok_or_else(|| format!("unknown device {id:?}"))?;
-    if origin == Origin::Client && current.source != device::Source::Virtual {
+    if origin == Origin::Client && !current.source.is_virtual() {
         /* Hardware only changes when it confirms (control.rs sends the
          * command to it). Reaching this means a caller skipped that. */
         return Err(format!("{id} is hardware: commands go through its driver"));
@@ -208,6 +263,16 @@ fn set(
     new.capabilities = capabilities;
     devices.insert(id.to_string(), new.clone());
     Ok((new, true))
+}
+
+fn set_online(devices: &mut HashMap<DeviceId, Device>, id: &str, online: Health) -> Result<(Device, bool), String> {
+    let device = devices.get_mut(id).ok_or_else(|| format!("unknown device {id:?}"))?;
+    if device.source.is_virtual() {
+        return Err(format!("{id} is virtual: it has no connection to be online or not"));
+    }
+    let changed = device.online != Some(online);
+    device.online = Some(online);
+    Ok((device.clone(), changed))
 }
 
 fn remove(devices: &mut HashMap<DeviceId, Device>, id: &str) -> Result<(), String> {
@@ -231,7 +296,14 @@ fn remove(devices: &mut HashMap<DeviceId, Device>, id: &str) -> Result<(), Strin
 pub const REGISTRY_SCHEMA: u32 = 2;
 
 pub fn encode_registry(devices: &HashMap<DeviceId, Device>) -> Vec<u8> {
-    let mut sorted: Vec<&Device> = devices.values().collect();
+    /* Without `online`: it only describes this run (Device::online). */
+    let mut sorted: Vec<Device> = devices
+        .values()
+        .map(|d| Device {
+            online: None,
+            ..d.clone()
+        })
+        .collect();
     sorted.sort_by(|a, b| a.id.cmp(&b.id));
     /* Serializing plain data structures can't fail. */
     serde_json::to_vec_pretty(&sorted).expect("devices serialize")
@@ -266,7 +338,12 @@ pub fn decode_registry(schema: u32, payload: &[u8]) -> Result<HashMap<DeviceId, 
         2 => {
             let list: Vec<Device> =
                 serde_json::from_slice(payload).map_err(|e| format!("invalid registry: {e}"))?;
-            for device in list {
+            for mut device in list {
+                /* The LED's template was called "builtin-led" before #40
+                 * gave it a real template (templates/m4-led.json). */
+                if device.template == "builtin-led" {
+                    device.template = "m4-led".into();
+                }
                 match device.check() {
                     Ok(()) => {
                         devices.insert(device.id.clone(), device);
@@ -296,7 +373,10 @@ mod tests {
             name: format!("Lamp {id}"),
             room: String::new(),
             template: "dimmable-light".into(),
-            source: Source::Virtual,
+            source: Source::default(),
+            config: Default::default(),
+            identity: String::new(),
+            online: None,
             capabilities: Capabilities {
                 switch: Some(Switch { on: false }),
                 dimmer: Some(Dimmer { level: 50 }),
@@ -374,7 +454,7 @@ mod tests {
     #[tokio::test]
     async fn hardware_only_changes_through_its_driver() {
         let mut led = lamp("ld7");
-        led.source = Source::M4Led;
+        led.source = Source::new("m4-led");
         let a = spawn(vec![led]);
         let err = set_cap(&a.tx, "ld7", "switch", json!({"on": true}), Origin::Client).await.unwrap_err();
         assert!(err.contains("hardware"));
@@ -384,6 +464,30 @@ mod tests {
         /* And built-in hardware can't be removed. */
         let err = ask(&a.tx, |reply| Msg::RemoveDevice { id: "ld7".into(), reply }).await.unwrap_err();
         assert!(err.contains("built into the hub"));
+    }
+
+    /* Reachability (issue #40): announced, but never written to the flash
+     * -- and not saved with the next change either. Virtual devices have
+     * none. */
+    #[tokio::test]
+    async fn online_is_announced_but_never_saved() {
+        let mut strip = lamp("strip");
+        strip.source = Source::new("wled");
+        let mut a = spawn(vec![strip, lamp("lamp-1")]);
+        let set_online = |id: &str, online| {
+            let id = id.to_string();
+            move |reply| Msg::SetOnline { id, online, reply }
+        };
+        let d = ask(&a.tx, set_online("strip", Health::Online)).await.unwrap();
+        assert_eq!(d.online, Some(Health::Online));
+        assert_eq!(a.events.recv().await.unwrap(), Event::Changed(d));
+        assert!(!a.saves.has_changed().unwrap());
+        assert!(ask(&a.tx, set_online("lamp-1", Health::Online)).await.is_err());
+
+        /* A change that IS saved: the saved registry has no "online". */
+        set_cap(&a.tx, "lamp-1", "dimmer", json!({"level": 10}), Origin::Client).await.unwrap();
+        let saved = a.saves.borrow_and_update().clone();
+        assert!(!String::from_utf8(saved).unwrap().contains("online"));
     }
 
     #[tokio::test]

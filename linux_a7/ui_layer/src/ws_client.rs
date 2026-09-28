@@ -67,6 +67,28 @@ pub enum Request {
         #[serde(skip_serializing_if = "Option::is_none")]
         time_zone: Option<String>,
     },
+    // Adding devices (issue #40): the wizard runs in backend_daemon; this
+    // screen shows its current step and sends the answers.
+    ListTemplates,
+    ListFound,
+    DiscoverNow,
+    WizardStart {
+        template: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        variant: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        found: Option<String>,
+    },
+    WizardAnswer {
+        session: String,
+        values: serde_json::Map<String, serde_json::Value>,
+    },
+    WizardBack { session: String },
+    WizardFinish { session: String, name: String, room: String },
+    WizardCancel { session: String },
+    WizardReauth { device: String },
+    WizardReconfigure { device: String },
+    RemoveDevice { id: String },
 }
 
 /// The hub's settings (issue #39), as backend_daemon's settings.rs sends
@@ -102,6 +124,16 @@ pub struct Device {
     pub name: String,
     #[serde(default)]
     pub room: String,
+    /* Which device type (issue #40): the add-device menu's templates. */
+    #[serde(default)]
+    pub template: String,
+    /* "virtual", or the adapter running it ("wled", "lg-webos"...). */
+    #[serde(default)]
+    pub source: String,
+    /* Can the hub reach it (issue #40): "online", "offline",
+     * "unauthorized"; absent = not known (virtual devices). */
+    #[serde(default)]
+    pub online: Option<String>,
     pub capabilities: Capabilities,
 }
 
@@ -111,6 +143,54 @@ pub struct Capabilities {
     pub dimmer: Option<Dimmer>,
     pub color: Option<Color>,
     pub sensor: Option<Sensor>,
+    /* A TV's volume, mute and input (issue #40). */
+    pub media: Option<Media>,
+}
+
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct Media {
+    pub volume: u8,
+    pub muted: bool,
+    #[serde(default)]
+    pub input: String,
+    #[serde(default)]
+    pub inputs: Vec<MediaInput>,
+}
+
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct MediaInput {
+    pub id: String,
+    pub label: String,
+}
+
+/// A device type the wizard can add (backend_daemon's wizard.rs
+/// TemplateInfo).
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct Template {
+    pub id: String,
+    pub name: String,
+    pub category: String,
+    #[serde(default)]
+    pub description: String,
+    pub variants: Vec<Variant>,
+    #[serde(default)]
+    pub can_reauth: bool,
+    #[serde(default)]
+    pub can_reconfigure: bool,
+}
+
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct Variant {
+    pub id: String,
+    pub label: String,
+}
+
+/// A device found on the network, not added yet (discovery.rs's Found).
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct Found {
+    pub template: String,
+    pub name: String,
+    pub address: String,
 }
 
 #[derive(Deserialize, Clone, Debug, PartialEq)]
@@ -223,7 +303,24 @@ pub struct WifiNetwork {
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ServerMessage {
     Devices { devices: Vec<Device> },
-    Device {},
+    /* The reply to a command (its result also arrives as an event) and
+     * to wizard_finish (the device set up). */
+    Device {
+        #[serde(default)]
+        device: Option<Device>,
+    },
+    Templates { templates: Vec<Template> },
+    Found { devices: Vec<Found> },
+    /* The wizard's current step: kept as JSON, main.rs reads it (its
+     * fields depend on the step's kind). */
+    WizardStep(serde_json::Map<String, serde_json::Value>),
+    WizardError {
+        #[serde(default)]
+        field: Option<String>,
+        message: String,
+        #[serde(default)]
+        detail: String,
+    },
     NetworkStatus {
         status: NetworkStatus,
         #[serde(default)]
@@ -243,6 +340,7 @@ enum ServerMessage {
     DeviceRemoved { id: String },
     EventsLost,
     SettingsChanged(HubSettings),
+    FoundChanged,
     #[serde(other)]
     Unknown,
 }
@@ -278,6 +376,15 @@ pub enum Update {
     /// The hub's settings: after connecting, and whenever they change --
     /// from this screen or from a phone (issue #39).
     Settings(HubSettings),
+    /// Adding devices (issue #40).
+    Templates(Vec<Template>),
+    Found(Vec<Found>),
+    WizardStep(serde_json::Map<String, serde_json::Value>),
+    WizardError { field: Option<String>, message: String, detail: String },
+    /// The wizard finished: the device added (or updated).
+    WizardDone(Device),
+    /// A device was removed on request.
+    Removed(Result<(), String>),
 }
 
 const BACKEND_URL: &str = "ws://127.0.0.1:8080/ws";
@@ -346,8 +453,13 @@ fn serve(socket: &mut Socket, request_rx: &mpsc::Receiver<Request>, update_tx: &
     // Subscribe first, THEN ask: nothing that changes in between is lost.
     // The settings first (issue #39): the chosen look should replace the
     // default one before the devices appear.
-    let mut outbox: VecDeque<Request> =
-        VecDeque::from([Request::Subscribe, Request::GetSettings, Request::ListDevices]);
+    let mut outbox: VecDeque<Request> = VecDeque::from([
+        Request::Subscribe,
+        Request::GetSettings,
+        Request::ListDevices,
+        Request::ListTemplates,
+        Request::ListFound,
+    ]);
     let mut next_network = Instant::now();
 
     loop {
@@ -403,6 +515,11 @@ fn serve(socket: &mut Socket, request_rx: &mpsc::Receiver<Request>, update_tx: &
             ServerMessage::DeviceChanged { device } => Some(Update::DeviceChanged(device)),
             ServerMessage::DeviceRemoved { id } => Some(Update::DeviceRemoved(id)),
             ServerMessage::SettingsChanged(settings) => Some(Update::Settings(settings)),
+            /* The "found on your network" list changed: fetch it. */
+            ServerMessage::FoundChanged => {
+                outbox.push_back(Request::ListFound);
+                None
+            }
             ServerMessage::EventsLost => {
                 // Missed some changes: start over from the full list.
                 outbox.push_back(Request::ListDevices);
@@ -453,6 +570,13 @@ fn to_update(request: &Request, reply: ServerMessage) -> Option<Update> {
         (_, ServerMessage::Pairing(pairing)) => Some(Update::Pairing(pairing)),
         (_, ServerMessage::Clients { clients }) => Some(Update::Clients(clients)),
         (_, ServerMessage::Settings(settings)) => Some(Update::Settings(settings)),
+        (_, ServerMessage::Templates { templates }) => Some(Update::Templates(templates)),
+        (_, ServerMessage::Found { devices }) => Some(Update::Found(devices)),
+        (_, ServerMessage::WizardStep(step)) => Some(Update::WizardStep(step)),
+        (_, ServerMessage::WizardError { field, message, detail }) => Some(Update::WizardError { field, message, detail }),
+        (Request::WizardFinish { .. }, ServerMessage::Device { device: Some(device) }) => Some(Update::WizardDone(device)),
+        (Request::RemoveDevice { .. }, ServerMessage::Ack) => Some(Update::Removed(Ok(()))),
+        (Request::RemoveDevice { .. }, ServerMessage::Error { message }) => Some(Update::Removed(Err(message))),
         (Request::WifiScan, ServerMessage::Error { message }) => Some(Update::ScanFailed(message)),
         (Request::Command { id, .. }, ServerMessage::Error { message }) => {
             println!("ui_layer: command for {id} refused: {message}");

@@ -1,0 +1,596 @@
+// wizard.slint -- adding and setting up devices on the touchscreen (issue
+// #40).
+//
+// The wizard itself runs in backend_daemon (its wizard.rs): it knows the
+// steps, checks every answer and talks to the device. These pages only
+// DRAW the step backend_daemon sent and report what was tapped or typed;
+// main.rs turns that into wizard_answer / wizard_back / wizard_finish. So
+// there is no code here for "a WLED" or "a TV" -- one page draws every
+// step type, for every device type.
+//
+//   AddDevicePage   "Found on your network" (one tap to add) and the
+//                   device types that can be added
+//   WizardPage      the current step: text, a pick-list, fields (typed on
+//                   the on-screen keyboard), "accept on the device" with a
+//                   countdown, "Testing...", then name and room
+//   DevicePage      one device's details: change settings, pair again,
+//                   remove
+
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { PageHeader, ActionButton, Choice } from "common.slint";
+import { Keyboard } from "keyboard.slint";
+
+// A device type the wizard can add.
+export struct TemplateItem {
+    id: string,
+    name: string,
+    // "Lighting", "TV & media", ...
+    category: string,
+    description: string,
+}
+
+// A device found on the network, not added yet.
+export struct FoundItem {
+    template: string,
+    name: string,
+    address: string,
+    // The device type's name, e.g. "WLED light".
+    type-name: string,
+}
+
+// One choice of a choice field.
+export struct ChoiceItem {
+    value: string,
+    label: string,
+}
+
+// One input of the current step, as the page draws it.
+export struct FieldItem {
+    id: string,
+    label: string,
+    hint: string,
+    // "text", "number", "secret", "choice", "toggle"
+    kind: string,
+    // What's shown in the box: the value, dots for a secret, or "".
+    shown: string,
+    // The raw value (a choice's selected value).
+    value: string,
+    required: bool,
+    choices: [ChoiceItem],
+}
+
+// Another way into the same device type ("Enter the address").
+export struct VariantItem {
+    id: string,
+    label: string,
+}
+
+// A section title in a list.
+component SectionTitle inherits Text {
+    color: Theme.text-muted;
+    font-size: Theme.font-body;
+}
+
+// A tappable row with a title and a detail line.
+component PickRow inherits Rectangle {
+    in property <string> title;
+    in property <string> detail;
+    in property <string> action: "";
+    callback clicked();
+
+    height: Theme.touch-height + Theme.space-l + Theme.space-xxs;
+    border-radius: Theme.radius-medium;
+    background: touch.pressed ? Theme.surface-pressed : Theme.surface;
+
+    HorizontalLayout {
+        padding-left: Theme.space-xl;
+        padding-right: Theme.space-xl;
+        spacing: Theme.space-m;
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            Text {
+                text: title;
+                color: Theme.text;
+                font-size: Theme.font-subtitle;
+                overflow: elide;
+            }
+            if detail != "": Text {
+                text: detail;
+                color: Theme.text-muted;
+                font-size: Theme.font-caption;
+                overflow: elide;
+            }
+        }
+        if action != "": Text {
+            text: action;
+            color: Theme.accent;
+            font-size: Theme.font-body;
+            vertical-alignment: center;
+        }
+    }
+
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+export component AddDevicePage inherits Rectangle {
+    in property <[FoundItem]> found;
+    in property <[TemplateItem]> templates;
+    in property <string> message;
+    callback back();
+    callback add-found(string, string);
+    callback pick-template(string);
+    callback search();
+
+    background: Theme.background;
+
+    VerticalLayout {
+        padding: Theme.space-l;
+        spacing: Theme.space-m;
+
+        PageHeader {
+            title: "Add a device";
+            back => {
+                root.back();
+            }
+        }
+
+        if message != "": Text {
+            text: message;
+            color: Theme.error;
+            font-size: Theme.font-body;
+            wrap: word-wrap;
+        }
+
+        ScrollView {
+            vertical-stretch: 1;
+            VerticalLayout {
+                spacing: Theme.space-s;
+                // Top-aligned: the ScrollView gives its content at least
+                // its own height, which would otherwise be shared out
+                // between the rows.
+                alignment: start;
+                HorizontalLayout {
+                    spacing: Theme.space-m;
+                    SectionTitle {
+                        text: found.length == 0 ? "Nothing new found on your network" : "Found on your network";
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                    }
+                    ActionButton {
+                        text: "Search again";
+                        clicked => {
+                            root.search();
+                        }
+                    }
+                }
+                for f in found: PickRow {
+                    title: f.name;
+                    detail: f.type-name + ", " + f.address;
+                    action: "Add";
+                    clicked => {
+                        root.add-found(f.template, f.address);
+                    }
+                }
+                SectionTitle {
+                    text: "Or choose the type of device";
+                }
+                // By category (backend_daemon sends them sorted by it): a
+                // heading wherever the category changes.
+                for t[i] in templates: VerticalLayout {
+                    spacing: Theme.space-s;
+                    if i == 0 || templates[i - 1].category != t.category: Text {
+                        text: t.category;
+                        color: Theme.text;
+                        font-size: Theme.font-subtitle;
+                    }
+                    PickRow {
+                        title: t.name;
+                        detail: t.description;
+                        clicked => {
+                            root.pick-template(t.id);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// One field: its label, the value box (tap to type), and its hint. Choice
+// and toggle fields are buttons instead of a box.
+component FieldRow inherits VerticalLayout {
+    // Only as tall as its content: spare height must not open gaps
+    // between the label and its box.
+    vertical-stretch: 0;
+    alignment: start;
+    in property <FieldItem> field;
+    in property <bool> editing;
+    // While editing: what's typed so far (dots for a secret).
+    in property <string> live;
+    callback edit();
+    callback pick(string);
+
+    spacing: Theme.space-xxs;
+
+    Text {
+        text: field.label + (field.required ? "" : " (optional)");
+        color: Theme.text-muted;
+        font-size: Theme.font-body;
+    }
+    if field.kind == "choice": HorizontalLayout {
+        spacing: Theme.space-s;
+        for c in field.choices: Choice {
+            text: c.label;
+            selected: c.value == field.value;
+            clicked => {
+                root.pick(c.value);
+            }
+        }
+    }
+    if field.kind == "toggle": HorizontalLayout {
+        spacing: Theme.space-s;
+        Choice {
+            text: "On";
+            selected: field.value == "true";
+            clicked => {
+                root.pick("true");
+            }
+        }
+        Choice {
+            text: "Off";
+            selected: field.value != "true";
+            clicked => {
+                root.pick("false");
+            }
+        }
+    }
+    if field.kind != "choice" && field.kind != "toggle": Rectangle {
+        height: Theme.touch-height;
+        border-radius: Theme.radius-medium;
+        background: Theme.surface;
+        border-width: editing ? 2px : 1px;
+        border-color: editing ? Theme.accent : Theme.outline;
+        Text {
+            x: Theme.space-l;
+            width: parent.width - 2 * Theme.space-l;
+            // "|": a simple cursor while typing into it.
+            text: (editing ? live : field.shown) + (editing ? "|" : "");
+            color: Theme.text;
+            font-size: Theme.font-heading;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        TouchArea {
+            clicked => {
+                root.edit();
+            }
+        }
+    }
+    if field.hint != "": Text {
+        text: field.hint;
+        color: Theme.text-muted;
+        font-size: Theme.font-caption;
+        wrap: word-wrap;
+    }
+}
+
+export component WizardPage inherits Rectangle {
+    // E.g. "Add: WLED light", "Pair again: Living room TV".
+    in property <string> title;
+    // backend_daemon's step type: "info", "discover", "form", "choice",
+    // "confirm_on_device", "code_from_device", "test", "name", "save".
+    in property <string> step;
+    in property <int> number;
+    // info: the text; confirm_on_device: the hint; name/save: what the
+    // test found ("WLED 16.0.1").
+    in property <string> text;
+    // confirm_on_device: more hints, shown one after the other.
+    in property <[string]> hints;
+    // confirm_on_device: how long the device waits for the person.
+    in property <int> seconds;
+    in property <[FoundItem]> found;
+    in property <[FieldItem]> fields;
+    // The template's other ways in (discover step).
+    in property <[VariantItem]> variants;
+    // Which field is being typed into (-1: none) and what's typed so far.
+    in property <int> editing: -1;
+    in-out property <string> edit-text;
+    // edit-text as the field shows it (masked for a secret; app.slint).
+    in property <string> edit-shown;
+    // The last refused answer: the sentence, and its technical detail.
+    in property <string> error;
+    in property <string> detail;
+    // Waiting for backend_daemon (a test, the device's confirmation).
+    in property <bool> busy;
+    // The main button's text ("Next", "Add", "Save").
+    in property <string> primary-text: "Next";
+    callback back();
+    callback next();
+    callback retry();
+    callback pick-found(string);
+    callback search();
+    callback edit(int);
+    callback pick(int, string);
+    callback edit-done();
+    callback backspace();
+    callback switch-variant(string);
+
+    // confirm_on_device: the countdown and which hint shows.
+    property <int> left: seconds;
+    property <int> hint-index: 0;
+    changed busy => {
+        left = seconds;
+        hint-index = 0;
+    }
+    Timer {
+        interval: 1s;
+        running: busy && step == "confirm_on_device" && left > 0;
+        triggered => {
+            left -= 1;
+            // A new hint every 8 s.
+            if (hints.length > 0 && Math.mod(seconds - left, 8) == 0) {
+                hint-index = Math.mod(hint-index + 1, hints.length);
+            }
+        }
+    }
+
+    background: Theme.background;
+
+    VerticalLayout {
+        padding: Theme.space-l;
+        spacing: Theme.space-m;
+
+        PageHeader {
+            title: root.title;
+            back => {
+                root.back();
+            }
+        }
+
+        Text {
+            text: "Step " + number;
+            color: Theme.text-muted;
+            font-size: Theme.font-caption;
+        }
+
+        if error != "": VerticalLayout {
+            spacing: Theme.space-xxs;
+            vertical-stretch: 0;
+            Text {
+                text: error;
+                color: Theme.error;
+                font-size: Theme.font-body;
+                wrap: word-wrap;
+            }
+            if detail != "": Text {
+                text: detail;
+                color: Theme.text-muted;
+                font-size: Theme.font-caption;
+                wrap: word-wrap;
+            }
+        }
+
+        // ---- the step ----
+        if step == "info": Text {
+            text: root.text;
+            color: Theme.text;
+            font-size: Theme.font-subtitle;
+            wrap: word-wrap;
+        }
+
+        if step == "discover": ScrollView {
+            vertical-stretch: 1;
+            VerticalLayout {
+                spacing: Theme.space-s;
+                alignment: start;
+                Text {
+                    text: found.length == 0 ? "Looking for devices on your network\u{2026}" : "Tap your device:";
+                    color: Theme.text-muted;
+                    font-size: Theme.font-body;
+                }
+                for f in found: PickRow {
+                    title: f.name;
+                    detail: f.address;
+                    clicked => {
+                        root.pick-found(f.address);
+                    }
+                }
+                HorizontalLayout {
+                    spacing: Theme.space-s;
+                    alignment: start;
+                    ActionButton {
+                        text: "Search again";
+                        clicked => {
+                            root.search();
+                        }
+                    }
+                    for v in variants: ActionButton {
+                        text: v.label;
+                        clicked => {
+                            root.switch-variant(v.id);
+                        }
+                    }
+                }
+            }
+        }
+
+        if step == "form" || step == "choice" || step == "code_from_device" || step == "name": VerticalLayout {
+            spacing: Theme.space-l;
+            vertical-stretch: 0;
+            for f[i] in fields: FieldRow {
+                field: f;
+                editing: i == root.editing;
+                live: root.edit-shown;
+                edit => {
+                    root.edit(i);
+                }
+                pick(value) => {
+                    root.pick(i, value);
+                }
+            }
+        }
+
+        if step == "confirm_on_device": VerticalLayout {
+            spacing: Theme.space-m;
+            vertical-stretch: 0;
+            Text {
+                text: root.text;
+                color: Theme.text;
+                font-size: Theme.font-heading;
+                wrap: word-wrap;
+            }
+            if busy && hints.length > 0: Text {
+                text: hints[hint-index];
+                color: Theme.text-muted;
+                font-size: Theme.font-body;
+                wrap: word-wrap;
+            }
+            if busy: Text {
+                text: "Waiting\u{2026} " + left + " s";
+                color: Theme.accent;
+                font-size: Theme.font-subtitle;
+            }
+        }
+
+        if step == "test" && busy: Text {
+            text: "Testing the connection\u{2026}";
+            color: Theme.accent;
+            font-size: Theme.font-subtitle;
+        }
+
+        if step == "save": Text {
+            text: (root.text == "" ? "" : "Found: " + root.text + ". ") + "Save the changes?";
+            color: Theme.text;
+            font-size: Theme.font-subtitle;
+            wrap: word-wrap;
+        }
+        if step == "name" && root.text != "": Text {
+            text: "Found: " + root.text;
+            color: Theme.ok;
+            font-size: Theme.font-body;
+        }
+
+        // Fill the rest, so the buttons or keyboard sit at the bottom --
+        // except on the discover step, whose list takes that space.
+        if step != "discover": Rectangle {
+            vertical-stretch: 1;
+        }
+
+        // ---- bottom: the keyboard while typing, else the buttons ----
+        if editing >= 0: Keyboard {
+            text <=> root.edit-text;
+            max-length: 128;
+            backspace => {
+                root.backspace();
+            }
+            done => {
+                root.edit-done();
+            }
+        }
+
+        if editing < 0 && !busy: HorizontalLayout {
+            spacing: Theme.space-s;
+            alignment: end;
+            vertical-stretch: 0;
+            // A test or pairing that failed: try again (the step stays).
+            if error != "" && (step == "test" || step == "confirm_on_device"): ActionButton {
+                text: "Try again";
+                primary: true;
+                clicked => {
+                    root.retry();
+                }
+            }
+            if step == "info" || step == "form" || step == "code_from_device" || step == "name" || step == "save": ActionButton {
+                text: root.primary-text;
+                primary: true;
+                clicked => {
+                    root.next();
+                }
+            }
+        }
+    }
+}
+
+// One device's details and what can be done with it.
+export component DevicePage inherits Rectangle {
+    in property <string> name;
+    in property <string> room;
+    in property <string> type-name;
+    // "Online", "Offline", "Needs pairing again", or "".
+    in property <string> status;
+    in property <bool> can-reauth;
+    in property <bool> can-reconfigure;
+    in property <bool> can-remove;
+    in property <string> message;
+    callback back();
+    callback reauth();
+    callback reconfigure();
+    callback remove();
+
+    // "Remove" asks once more before it happens.
+    property <bool> confirm-remove: false;
+
+    background: Theme.background;
+
+    VerticalLayout {
+        padding: Theme.space-l;
+        spacing: Theme.space-m;
+        alignment: start;
+
+        PageHeader {
+            title: root.name;
+            back => {
+                confirm-remove = false;
+                root.back();
+            }
+        }
+        Text {
+            text: type-name + (room == "" ? "" : ", " + room);
+            color: Theme.text-muted;
+            font-size: Theme.font-body;
+        }
+        if status != "": Text {
+            text: status;
+            color: status == "Online" ? Theme.ok : Theme.error;
+            font-size: Theme.font-subtitle;
+        }
+        if message != "": Text {
+            text: message;
+            color: Theme.error;
+            font-size: Theme.font-body;
+            wrap: word-wrap;
+        }
+        if can-reconfigure: PickRow {
+            title: "Change settings";
+            detail: "A new address, a changed password";
+            clicked => {
+                root.reconfigure();
+            }
+        }
+        if can-reauth: PickRow {
+            title: "Pair again";
+            detail: "When the device no longer accepts the hub";
+            clicked => {
+                root.reauth();
+            }
+        }
+        if can-remove: ActionButton {
+            text: confirm-remove ? "Tap again to remove " + root.name : "Remove device";
+            destructive: true;
+            clicked => {
+                if (confirm-remove) {
+                    confirm-remove = false;
+                    root.remove();
+                } else {
+                    confirm-remove = true;
+                }
+            }
+        }
+    }
+}

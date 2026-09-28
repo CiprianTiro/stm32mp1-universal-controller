@@ -1,0 +1,56 @@
+{
+  "$comment": "LG webOS TV: confirm on the TV (pattern P3), found by SSDP; the pairing key is a secret. Format: wiki Device-Templates.",
+  "format": 1,
+  "id": "lg-webos-tv",
+  "version": 1,
+  "name": "LG TV (webOS)",
+  "category": "media",
+  "description": "LG smart TVs with webOS (2014 and later).",
+  "adapter": "lg-webos",
+  "capabilities": ["switch", "media"],
+  "inputs": [
+    { "id": "host", "type": "text", "label": "TV address", "hint": "Settings > Network on the TV shows it, e.g. 192.168.1.40", "validate": { "pattern": "host" } },
+    { "id": "mac", "type": "text", "label": "TV MAC address", "hint": "Needed to switch the TV on; read from the TV after pairing if left empty", "required": false, "validate": { "pattern": "mac" } }
+  ],
+  "discovery": [
+    { "method": "ssdp", "search": "urn:lge-com:service:webos-second-screen:1", "fill": { "host": "{address}", "name": "{header.DLNADeviceName.lge.com}", "uuid": "{uuid}" } }
+  ],
+  "setup": [
+    {
+      "id": "guided",
+      "label": "Find the TV",
+      "steps": [
+        { "type": "info", "text": "Switch the TV on and keep its remote at hand." },
+        { "type": "discover" },
+        {
+          "type": "confirm_on_device",
+          "action": "pair",
+          "timeout_s": 60,
+          "hint": "A prompt appears on the TV: accept it with the remote.",
+          "hints": [
+            "Can't see it? The TV may be showing another input: press Home.",
+            "Still nothing? Check that the TV is on the same network as the hub."
+          ]
+        },
+        { "type": "test" }
+      ]
+    },
+    {
+      "id": "advanced",
+      "label": "Enter the address",
+      "steps": [
+        { "type": "form", "fields": ["host", "mac"] },
+        { "type": "confirm_on_device", "action": "pair", "timeout_s": 60, "hint": "A prompt appears on the TV: accept it with the remote." },
+        { "type": "test" }
+      ]
+    }
+  ],
+  "errors": {
+    "not_confirmed": "The TV didn't get the OK. Accept the \"Universal Controller\" prompt with the remote, then try again."
+  },
+  "identity": "{uuid}",
+  "tls": "tofu",
+  "wake": "wol",
+  "reauth": ["pair"],
+  "defaults": { "name": "TV", "room": "Living room" }
+}

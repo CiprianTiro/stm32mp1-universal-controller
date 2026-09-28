@@ -14,9 +14,10 @@
 #   3. Restarts the service.
 #
 # Dev only: the change lives on the board's rootfs until the next flash,
-# and it needs SSH (so not on the production image). Anything else the
-# recipe installs (config files, tmpfiles, ...) is NOT copied -- for those,
-# do a normal build-hw + flash-hw.
+# and it needs SSH (so not on the production image). Besides the binary
+# and its units, only the device templates and the tmpfiles rules are
+# copied (issue #40); anything else the recipe installs is NOT -- for
+# that, do a normal build-hw + flash-hw.
 # =============================================================================
 set -euo pipefail
 
@@ -51,6 +52,20 @@ scp -q "$IMAGE_DIR/usr/bin/$RECIPE" "root@$BOARD_HOST:/usr/bin/.$RECIPE.new"
 # The unit files too: #38 changes ui-layer's sandbox (e.g. /dev/dri access).
 for unit in "$IMAGE_DIR"/usr/lib/systemd/system/*; do
     [ -f "$unit" ] && scp -q "$unit" "root@$BOARD_HOST:/usr/lib/systemd/system/"
+done
+
+# The device templates (backend-daemon, issue #40): read-only data the
+# daemon loads at start, replaced as a whole folder.
+TEMPLATES="$IMAGE_DIR/usr/share/universal-controller/templates"
+if [ -d "$TEMPLATES" ]; then
+    ssh "root@$BOARD_HOST" "rm -rf /usr/share/universal-controller/templates && mkdir -p /usr/share/universal-controller/templates"
+    scp -q "$TEMPLATES"/*.json "root@$BOARD_HOST:/usr/share/universal-controller/templates/"
+fi
+
+# Its tmpfiles rules (the folders it owns, e.g. #40's secrets folder):
+# backend-daemon applies them itself before every start.
+for rules in "$IMAGE_DIR"/usr/lib/tmpfiles.d/*.conf; do
+    [ -f "$rules" ] && scp -q "$rules" "root@$BOARD_HOST:/usr/lib/tmpfiles.d/"
 done
 
 echo "🔄 Restarting $RECIPE..."

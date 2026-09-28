@@ -10,6 +10,13 @@
 
 import { ListView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
+import { ActionButton, Choice } from "common.slint";
+
+// One of a TV's inputs (issue #40).
+export struct MediaInputItem {
+    id: string,
+    label: string,
+}
 
 // One device, flattened for display. The has-* flags say which
 // capabilities it has; the other fields are only meaningful when their
@@ -28,6 +35,17 @@ export struct DeviceItem {
     color-text: string,
     // e.g. "temperature 21.5 °C   humidity 40 %"; empty = no sensor
     sensor-text: string,
+    // Issue #40: "" (fine, or not known), "Offline", "Needs pairing again".
+    // A card with a status is drawn dimmed: its values may be stale.
+    status: string,
+    // Offers "Pair again" right on the card (unauthorized + its type can).
+    can-reauth: bool,
+    // A TV's sound and source (media capability).
+    has-media: bool,
+    volume: int,
+    muted: bool,
+    input: string,
+    inputs: [MediaInputItem],
 }
 
 // On/off, big enough for a finger.
@@ -161,9 +179,16 @@ component DeviceRow inherits Rectangle {
     in property <DeviceItem> item;
     callback set-switch(string, bool);
     callback set-level(string, int);
+    // Issue #40: the TV's volume/mute/input -- all three, as the media
+    // capability is set as a whole.
+    callback set-media(string, int, bool, string);
+    callback open(string);
+    callback reauth(string);
 
     border-radius: Theme.radius-medium;
     background: Theme.surface;
+    // Not reachable: dimmed (its values may be stale).
+    opacity: item.status == "" ? 1 : 0.6;
 
     VerticalLayout {
         padding: Theme.space-l;
@@ -175,19 +200,39 @@ component DeviceRow inherits Rectangle {
 
         HorizontalLayout {
             spacing: Theme.space-m;
-            VerticalLayout {
-                alignment: center;
+            // The name: tap for the device's details (issue #40). The
+            // TouchArea is a sibling OVER the texts, not inside their
+            // layout: inside, it would be one more (zero-height) row of it
+            // -- nothing to tap (seen on the DK2).
+            Rectangle {
                 horizontal-stretch: 1;
-                Text {
-                    text: item.name;
-                    color: Theme.text;
-                    font-size: Theme.font-subtitle;
-                    overflow: elide;
+                VerticalLayout {
+                    alignment: center;
+                    Text {
+                        text: item.name;
+                        color: Theme.text;
+                        font-size: Theme.font-subtitle;
+                        overflow: elide;
+                    }
+                    if item.room != "" || item.status != "": Text {
+                        text: item.status != "" ? item.status + (item.room == "" ? "" : " \u{2022} " + item.room) : item.room;
+                        color: item.status != "" ? Theme.error : Theme.text-muted;
+                        font-size: Theme.font-caption;
+                    }
                 }
-                if item.room != "": Text {
-                    text: item.room;
-                    color: Theme.text-muted;
-                    font-size: Theme.font-caption;
+                TouchArea {
+                    clicked => {
+                        root.open(item.id);
+                    }
+                }
+            }
+            if item.can-reauth: VerticalLayout {
+                alignment: center;
+                ActionButton {
+                    text: "Pair again";
+                    clicked => {
+                        root.reauth(item.id);
+                    }
                 }
             }
             if item.has-color: VerticalLayout {
@@ -243,6 +288,47 @@ component DeviceRow inherits Rectangle {
             font-size: Theme.font-caption;
         }
 
+        // A TV (issue #40): volume, mute, and its inputs. Like the dimmer,
+        // only usable while it's on.
+        if item.has-media: HorizontalLayout {
+            spacing: Theme.space-l;
+            volume := LevelBar {
+                horizontal-stretch: 1;
+                level: item.volume;
+                enabled: item.on;
+                set(level) => {
+                    set-media(item.id, level, item.muted, item.input);
+                }
+            }
+            Text {
+                text: volume.shown;
+                color: item.on ? Theme.text : Theme.text-muted;
+                font-size: Theme.font-body;
+                vertical-alignment: center;
+                min-width: 32px;
+                horizontal-alignment: right;
+            }
+            ActionButton {
+                text: item.muted ? "Unmute" : "Mute";
+                enabled: item.on;
+                clicked => {
+                    set-media(item.id, item.volume, !item.muted, item.input);
+                }
+            }
+        }
+        if item.has-media && item.inputs.length > 0: HorizontalLayout {
+            spacing: Theme.space-xs;
+            for input in item.inputs: Choice {
+                text: input.label;
+                selected: input.id == item.input;
+                clicked => {
+                    if (item.on) {
+                        set-media(item.id, item.volume, item.muted, input.id);
+                    }
+                }
+            }
+        }
+
         if item.sensor-text != "": Text {
             text: item.sensor-text;
             color: Theme.text;
@@ -265,6 +351,9 @@ export component DeviceList inherits Rectangle {
     in property <int> columns: 1;
     callback set-switch(string, bool);
     callback set-level(string, int);
+    callback set-media(string, int, bool, string);
+    callback open(string);
+    callback reauth(string);
 
     if rows.length == 0: Text {
         text: "No devices yet";
@@ -289,6 +378,15 @@ export component DeviceList inherits Rectangle {
                 }
                 set-level(id, level) => {
                     root.set-level(id, level);
+                }
+                set-media(id, volume, muted, input) => {
+                    root.set-media(id, volume, muted, input);
+                }
+                open(id) => {
+                    root.open(id);
+                }
+                reauth(id) => {
+                    root.reauth(id);
                 }
             }
             // The last row may have fewer cards: empty places keep them at

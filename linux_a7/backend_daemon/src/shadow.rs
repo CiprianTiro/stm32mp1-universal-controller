@@ -13,7 +13,7 @@
  *   │     the hub itself:     {"state":{"reported":{"system":{...}}}}
  *   ├── named shadow "ld7"    $aws/things/dk2-01/shadow/name/ld7/...
  *   │     one device:         {"state":{"reported":{"name":"Board LED (LD7)",
- *   │                           "room":"Hub", "template":"builtin-led",
+ *   │                           "room":"Hub", "template":"m4-led",
  *   │                           "capabilities":{"switch":{"on":true}}}}}
  *   └── named shadow "lamp-1" ...
  *
@@ -177,12 +177,15 @@ pub fn device_report(reported: &Value, clear_desired: bool, drop_old_keys: bool)
 }
 
 /* What a device's shadow reports: everything about it except the id (the
- * shadow's name already is the id) and its source (internal). */
+ * shadow's name already is the id), its source, config and identity
+ * (internal). `online` (issue #40) is null until its adapter knows: a
+ * null removes the key from the shadow. */
 pub fn reported(device: &Device) -> Value {
     json!({
         "name": device.name,
         "room": device.room,
         "template": device.template,
+        "online": device.online,
         "capabilities": device.capabilities,
     })
 }
@@ -404,7 +407,11 @@ mod tests {
         .unwrap();
         assert_eq!(
             reported(&device),
-            json!({"name": "Lamp", "room": "Office", "template": "t", "capabilities": {"switch": {"on": true}}})
+            json!({"name": "Lamp", "room": "Office", "template": "t", "online": null,
+                   "capabilities": {"switch": {"on": true}}})
         );
+        let mut device = device;
+        device.online = Some(crate::device::Health::Offline);
+        assert_eq!(reported(&device)["online"], "offline");
     }
 }

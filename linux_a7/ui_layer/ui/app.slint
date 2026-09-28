@@ -21,14 +21,16 @@ import "../fonts/DejaVuSans.ttf";
 // screens (issue #61).
 import { Theme, Splash, Glyphs } from "theme.slint";
 import { HeaderButton } from "common.slint";
-import { DeviceItem, DeviceList } from "devices.slint";
+import { DeviceItem, MediaInputItem, DeviceList } from "devices.slint";
+import { TemplateItem, FoundItem, FieldItem, ChoiceItem, VariantItem, AddDevicePage, WizardPage, DevicePage } from "wizard.slint";
 import { ClientItem, SettingsPage, ClientsPage, PairingPage } from "settings.slint";
 import { NetStatus, WifiNetwork, NetIndicator, NetworkPage, PasswordPage, CountryPage } from "network.slint";
 import { AccentItem, ZoneItem, AppearancePage, TimeZonePage } from "appearance.slint";
 
 // Re-exported so main.rs can use these types (the Rust side only sees what
 // the main file exports).
-export { NetStatus, WifiNetwork, DeviceItem, ClientItem, AccentItem, ZoneItem }
+export { NetStatus, WifiNetwork, DeviceItem, MediaInputItem, ClientItem, AccentItem, ZoneItem }
+export { TemplateItem, FoundItem, FieldItem, ChoiceItem, VariantItem }
 // The design tokens (issue #39): main.rs's theme.rs sets them.
 export { Theme }
 
@@ -115,8 +117,10 @@ export component AppWindow inherits Window {
     in property <length> pointer-y;
     in property <bool> pointer-visible: false;
     // A refused command's reason (e.g. "no answer from the M4"), shown
-    // briefly under the list; main.rs clears it again.
+    // briefly under the list; main.rs clears it again. `device-message-ok`:
+    // good news instead ("Kitchen strip added"), shown in green.
     in property <string> device-message;
+    in property <bool> device-message-ok: false;
 
     // Whether we're connected to backend_daemon right now -- lets the UI
     // honestly say so instead of silently showing a stale LED state as if
@@ -136,7 +140,9 @@ export component AppWindow inherits Window {
     // ---- Network (issue #61) ----------------------------------------
     // Which screen is shown: 0 = main, 1 = network, 2 = WiFi password,
     // 3 = WiFi country, 4 = settings, 5 = paired devices, 6 = pairing,
-    // 7 = appearance, 8 = time zone (issue #39).
+    // 7 = appearance, 8 = time zone (issue #39),
+    // 9 = add a device, 10 = the wizard's step, 11 = a device's details
+    // (issue #40).
     in-out property <int> page: 0;
     // Where the network page's Back goes (main screen or settings).
     property <int> network-back: 0;
@@ -221,6 +227,59 @@ export component AppWindow inherits Window {
     // backend_daemon is Rust's job.
     callback set-switch(string, bool);
     callback set-level(string, int);
+    // A TV's volume, mute and input (issue #40).
+    callback set-media(string, int, bool, string);
+
+    // ---- Adding and setting up devices (issue #40, wizard.slint) -------
+    // The "Add a device" page.
+    in property <[TemplateItem]> templates;
+    in property <[FoundItem]> found;
+    in property <string> add-message;
+    callback open-add-device();
+    callback add-found(string, string);
+    callback pick-template(string);
+    callback search-devices();
+    // The wizard's current step (see WizardPage), filled in by main.rs.
+    in property <string> wizard-title;
+    in property <string> wizard-step;
+    in property <int> wizard-number;
+    in property <string> wizard-text;
+    in property <[string]> wizard-hints;
+    in property <int> wizard-seconds;
+    in property <[FoundItem]> wizard-found;
+    in property <[FieldItem]> wizard-fields;
+    in property <[VariantItem]> wizard-variants;
+    in property <int> wizard-editing: -1;
+    in-out property <string> wizard-edit-text;
+    // The field being typed into is a secret: shown as dots.
+    in property <bool> wizard-edit-secret;
+    in property <string> wizard-error;
+    in property <string> wizard-detail;
+    in property <bool> wizard-busy;
+    in property <string> wizard-primary: "Next";
+    callback wizard-back();
+    callback wizard-next();
+    callback wizard-retry();
+    callback wizard-pick-found(string);
+    callback wizard-search();
+    callback wizard-edit(int);
+    callback wizard-pick(int, string);
+    callback wizard-edit-done();
+    callback wizard-switch-variant(string);
+    // A device's details page.
+    in property <string> dev-id;
+    in property <string> dev-name;
+    in property <string> dev-room;
+    in property <string> dev-type;
+    in property <string> dev-status;
+    in property <bool> dev-can-reauth;
+    in property <bool> dev-can-reconfigure;
+    in property <bool> dev-can-remove;
+    in property <string> dev-message;
+    callback open-device(string);
+    callback device-reauth(string);
+    callback device-reconfigure(string);
+    callback device-remove(string);
 
     background: Theme.background;
 
@@ -260,6 +319,15 @@ export component AppWindow inherits Window {
                 vertical-alignment: center;
                 horizontal-stretch: 1;
             }
+            // Add a device (issue #40): square, the header is full on the
+            // 480 px touchscreen.
+            HeaderButton {
+                text: "+";
+                width: Theme.touch-height;
+                clicked => {
+                    root.open-add-device();
+                }
+            }
             HeaderButton {
                 text: "Settings";
                 clicked => {
@@ -288,9 +356,33 @@ export component AppWindow inherits Window {
 
         if device-message != "": Text {
             text: device-message;
-            color: Theme.error;
+            color: device-message-ok ? Theme.ok : Theme.error;
             font-size: Theme.font-body;
             wrap: word-wrap;
+        }
+
+        // Devices found on the network, not added yet (issue #40): one tap
+        // to the "Add a device" page, where they're listed first.
+        if found.length > 0: Rectangle {
+            height: Theme.touch-height;
+            border-radius: Theme.radius-medium;
+            background: found-touch.pressed ? Theme.surface-pressed : Theme.surface;
+            border-width: 1px;
+            border-color: Theme.accent;
+            Text {
+                x: Theme.space-l;
+                width: parent.width - 2 * Theme.space-l;
+                text: (found.length == 1 ? "1 new device" : found.length + " new devices") + " found on your network. Add\u{2026}";
+                color: Theme.accent;
+                font-size: Theme.font-body;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            found-touch := TouchArea {
+                clicked => {
+                    root.open-add-device();
+                }
+            }
         }
 
         DeviceList {
@@ -303,6 +395,114 @@ export component AppWindow inherits Window {
             set-level(id, level) => {
                 root.set-level(id, level);
             }
+            set-media(id, volume, muted, input) => {
+                root.set-media(id, volume, muted, input);
+            }
+            open(id) => {
+                root.open-device(id);
+            }
+            reauth(id) => {
+                root.device-reauth(id);
+            }
+        }
+    }
+
+    if page == 9: AddDevicePage {
+        width: min(parent.width, Theme.content-max-width);
+        x: (parent.width - self.width) / 2;
+        height: parent.height;
+        found: root.found;
+        templates: root.templates;
+        message: root.add-message;
+        back => {
+            page = 0;
+        }
+        add-found(template, address) => {
+            root.add-found(template, address);
+        }
+        pick-template(id) => {
+            root.pick-template(id);
+        }
+        search => {
+            root.search-devices();
+        }
+    }
+
+    if page == 10: WizardPage {
+        width: min(parent.width, Theme.content-max-width);
+        x: (parent.width - self.width) / 2;
+        height: parent.height;
+        title: root.wizard-title;
+        step: root.wizard-step;
+        number: root.wizard-number;
+        text: root.wizard-text;
+        hints: root.wizard-hints;
+        seconds: root.wizard-seconds;
+        found: root.wizard-found;
+        fields: root.wizard-fields;
+        variants: root.wizard-variants;
+        editing: root.wizard-editing;
+        edit-text <=> root.wizard-edit-text;
+        edit-shown: root.wizard-edit-secret ? mask(root.wizard-edit-text) : root.wizard-edit-text;
+        error: root.wizard-error;
+        detail: root.wizard-detail;
+        busy: root.wizard-busy;
+        primary-text: root.wizard-primary;
+        back => {
+            root.wizard-back();
+        }
+        next => {
+            root.wizard-next();
+        }
+        retry => {
+            root.wizard-retry();
+        }
+        pick-found(address) => {
+            root.wizard-pick-found(address);
+        }
+        search => {
+            root.wizard-search();
+        }
+        edit(i) => {
+            root.wizard-edit(i);
+        }
+        pick(i, value) => {
+            root.wizard-pick(i, value);
+        }
+        edit-done => {
+            root.wizard-edit-done();
+        }
+        backspace => {
+            root.wizard-edit-text = drop-last(root.wizard-edit-text);
+        }
+        switch-variant(id) => {
+            root.wizard-switch-variant(id);
+        }
+    }
+
+    if page == 11: DevicePage {
+        width: min(parent.width, Theme.content-max-width);
+        x: (parent.width - self.width) / 2;
+        height: parent.height;
+        name: root.dev-name;
+        room: root.dev-room;
+        type-name: root.dev-type;
+        status: root.dev-status;
+        can-reauth: root.dev-can-reauth;
+        can-reconfigure: root.dev-can-reconfigure;
+        can-remove: root.dev-can-remove;
+        message: root.dev-message;
+        back => {
+            page = 0;
+        }
+        reauth => {
+            root.device-reauth(root.dev-id);
+        }
+        reconfigure => {
+            root.device-reconfigure(root.dev-id);
+        }
+        remove => {
+            root.device-remove(root.dev-id);
         }
     }
 

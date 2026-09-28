@@ -57,6 +57,7 @@ SRC_URI = " \
     file://ui/network.slint \
     file://ui/settings.slint \
     file://ui/appearance.slint \
+    file://ui/wizard.slint \
     file://ui/tokens.json \
     file://ui/images/welcome.png \
     file://ui/images/pointer.png \
@@ -64,6 +65,7 @@ SRC_URI = " \
     file://src/main.rs \
     file://src/display.rs \
     file://src/pointer.rs \
+    file://src/setup.rs \
     file://src/theme.rs \
     file://src/zones.rs \
     file://src/ws_client.rs \
