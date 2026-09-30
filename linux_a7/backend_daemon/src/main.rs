@@ -15,6 +15,7 @@ mod discovery;
 mod health;
 mod helper;
 mod hotspot;
+mod ir_codes;
 mod mqtt;
 mod network;
 mod rpmsg;
@@ -101,6 +102,7 @@ async fn main() {
         Box::new(adapters::m4_led::M4Led::new(rpmsg_tx, led_rx)),
         Box::new(adapters::wled::Wled),
         Box::new(adapters::lg_webos::LgWebos),
+        Box::new(adapters::ir_blaster::IrBlaster),
     ]));
     /* Devices' secrets (issue #40, secrets.rs): a separate hubd-only file,
      * never logged, never sent to a client. */
@@ -109,7 +111,14 @@ async fn main() {
         secrets_store.load_or_default("device secrets", secrets::decode),
         store::writer(secrets_store, secrets::SECRETS_SCHEMA),
     ));
-    let control = control::Control::new(state_tx, adapters.clone(), secrets);
+    /* IR codes the blasters learned (issue #42, ir_codes.rs): which
+     * button sends which code, per IR blaster device. */
+    let ir_codes_store = store::Store::new(&store::data_dir(), "ir-codes.json");
+    let ir_codes = std::sync::Arc::new(ir_codes::IrCodes::new(
+        ir_codes_store.load_or_default("IR codes", ir_codes::decode),
+        store::writer(ir_codes_store, ir_codes::IR_CODES_SCHEMA),
+    ));
+    let control = control::Control::new(state_tx, adapters.clone(), secrets).with_ir_codes(ir_codes);
 
     /* Device templates (issue #40): what kinds of device the wizard can
      * add. Checked against this build's adapters and capabilities; one

@@ -1,0 +1,17 @@
+# ESP32-S3 N16R8 (16 MB flash) partition layout for the IR blaster (#42).
+#
+# Two app slots (ota_0 / ota_1) from the start, so hub-driven updates can
+# write the new firmware into the unused slot and switch over, falling back
+# to the old one if the new one doesn't start. Changing this layout later
+# would need a full erase, so it's set up now even before OTA exists.
+#
+# nvs_keys: holds the key for encrypted NVS once flash encryption is on
+# (the identity's private key lives in NVS).
+#
+# Name,    Type, SubType,  Offset,   Size
+nvs,       data, nvs,      0x9000,   0x6000
+otadata,   data, ota,      0xf000,   0x2000
+phy_init,  data, phy,      0x11000,  0x1000
+nvs_keys,  data, nvs_keys, 0x12000,  0x1000
+ota_0,     app,  ota_0,    0x20000,  0x400000
+ota_1,     app,  ota_1,    0x420000, 0x400000

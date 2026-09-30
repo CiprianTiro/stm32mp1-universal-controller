@@ -116,3 +116,11 @@ yocto_layers/userfs-backups/
 
 # Docker container volume state leftovers
 yocto_layers/.docker/
+# ESP32 IR blaster (#42): ESP-IDF build output and the generated full config
+# (sdkconfig.defaults is the tracked source of truth)
+firmware_ir_blaster/build/
+firmware_ir_blaster/sdkconfig
+firmware_ir_blaster/sdkconfig.old
+# Registry components (mdns, cjson) are downloaded at build time; the
+# versions are pinned in firmware_ir_blaster/dependencies.lock (tracked).
+firmware_ir_blaster/managed_components/

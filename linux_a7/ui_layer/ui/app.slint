@@ -24,6 +24,7 @@ import { HeaderButton } from "common.slint";
 import { DeviceItem, MediaInputItem, DeviceList } from "devices.slint";
 import { TemplateItem, FoundItem, FieldItem, ChoiceItem, VariantItem, AddDevicePage, WizardPage, DevicePage } from "wizard.slint";
 import { RemoteItem, RemotePage } from "remote.slint";
+import { IrRemotePage } from "ir_remote.slint";
 import { ClientItem, SettingsPage, ClientsPage, PairingPage } from "settings.slint";
 import { NetStatus, WifiNetwork, NetIndicator, NetworkPage, PasswordPage, CountryPage } from "network.slint";
 import { AccentItem, ZoneItem, AppearancePage, TimeZonePage } from "appearance.slint";
@@ -143,7 +144,8 @@ export component AppWindow inherits Window {
     // 3 = WiFi country, 4 = settings, 5 = paired devices, 6 = pairing,
     // 7 = appearance, 8 = time zone (issue #39),
     // 9 = add a device, 10 = the wizard's step, 11 = a device's details
-    // (issue #40), 12 = a TV's remote (issue #44).
+    // (issue #40), 12 = a TV's remote (issue #44), 13 = an IR device's
+    // remote (issue #42).
     in-out property <int> page: 0;
     // Where the network page's Back goes (main screen or settings).
     property <int> network-back: 0;
@@ -254,6 +256,8 @@ export component AppWindow inherits Window {
     in-out property <string> wizard-edit-text;
     // The field being typed into is a secret: shown as dots.
     in property <bool> wizard-edit-secret;
+    // A secret field shown in plain text (the wizard's Show / Hide).
+    in-out property <bool> wizard-reveal: false;
     in property <string> wizard-error;
     in property <string> wizard-detail;
     in property <bool> wizard-busy;
@@ -276,6 +280,8 @@ export component AppWindow inherits Window {
     in property <bool> dev-can-reauth;
     in property <bool> dev-can-reconfigure;
     in property <bool> dev-can-remove;
+    in property <bool> dev-has-remote;
+    in property <bool> dev-remote-learns;
     in property <string> dev-message;
     // A TV's remote (issue #44, remote.slint).
     in property <string> remote-id;
@@ -297,6 +303,19 @@ export component AppWindow inherits Window {
     callback remote-open-channels();
     callback remote-pick(string);
     callback remote-send-text();
+    // An IR blaster device's remote (issue #42, ir_remote.slint): the
+    // taught buttons. Taps go out through the same remote-id.
+    in property <[string]> ir-buttons;
+    in property <string> ir-status;
+    in property <string> ir-message;
+    in property <bool> ir-message-ok;
+    in-out property <int> ir-view: 0;
+    in-out property <string> ir-text;
+    in-out property <string> ir-selected;
+    callback ir-press(string);
+    callback ir-learn(string);
+    callback ir-forget(string);
+    callback ir-rename(string, string);
     callback open-device(string);
     callback device-reauth(string);
     callback device-reconfigure(string);
@@ -431,6 +450,38 @@ export component AppWindow inherits Window {
         }
     }
 
+    if page == 13: IrRemotePage {
+        width: min(parent.width, Theme.content-max-width);
+        x: (parent.width - self.width) / 2;
+        height: parent.height;
+        device-name: root.remote-name;
+        buttons: root.ir-buttons;
+        status: root.ir-status;
+        message: root.ir-message;
+        message-ok: root.ir-message-ok;
+        view <=> root.ir-view;
+        text <=> root.ir-text;
+        selected <=> root.ir-selected;
+        back => {
+            page = 0;
+        }
+        press(button) => {
+            root.ir-press(button);
+        }
+        learn(button) => {
+            root.ir-learn(button);
+        }
+        forget(button) => {
+            root.ir-forget(button);
+        }
+        rename(button, to) => {
+            root.ir-rename(button, to);
+        }
+        backspace => {
+            root.ir-text = drop-last(root.ir-text);
+        }
+    }
+
     if page == 12: RemotePage {
         width: min(parent.width, Theme.content-max-width);
         x: (parent.width - self.width) / 2;
@@ -515,7 +566,8 @@ export component AppWindow inherits Window {
         variants: root.wizard-variants;
         editing: root.wizard-editing;
         edit-text <=> root.wizard-edit-text;
-        edit-shown: root.wizard-edit-secret ? mask(root.wizard-edit-text) : root.wizard-edit-text;
+        edit-shown: root.wizard-edit-secret && !root.wizard-reveal ? mask(root.wizard-edit-text) : root.wizard-edit-text;
+        reveal <=> root.wizard-reveal;
         error: root.wizard-error;
         detail: root.wizard-detail;
         busy: root.wizard-busy;
@@ -564,8 +616,13 @@ export component AppWindow inherits Window {
         can-reconfigure: root.dev-can-reconfigure;
         can-remove: root.dev-can-remove;
         message: root.dev-message;
+        has-remote: root.dev-has-remote;
+        remote-learns: root.dev-remote-learns;
         back => {
             page = 0;
+        }
+        open-remote => {
+            root.open-remote(root.dev-id);
         }
         reauth => {
             root.device-reauth(root.dev-id);

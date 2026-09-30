@@ -211,10 +211,15 @@ component FieldRow inherits VerticalLayout {
     alignment: start;
     in property <FieldItem> field;
     in property <bool> editing;
-    // While editing: what's typed so far (dots for a secret).
+    // While editing: what's typed so far (dots for a secret, unless
+    // revealed).
     in property <string> live;
+    // A secret shown in plain text ("Show" tapped), so a long code like an
+    // IR blaster's pairing code can be checked before sending (issue #42).
+    in property <bool> reveal;
     callback edit();
     callback pick(string);
+    callback toggle-reveal();
 
     spacing: Theme.space-xxs;
 
@@ -256,11 +261,13 @@ component FieldRow inherits VerticalLayout {
         background: Theme.surface;
         border-width: editing ? 2px : 1px;
         border-color: editing ? Theme.accent : Theme.outline;
+        // A secret has a Show / Hide switch on the right.
+        property <length> reveal-width: field.kind == "secret" ? 72px : 0;
         Text {
             x: Theme.space-l;
-            width: parent.width - 2 * Theme.space-l;
+            width: parent.width - 2 * Theme.space-l - reveal-width;
             // "|": a simple cursor while typing into it.
-            text: (editing ? live : field.shown) + (editing ? "|" : "");
+            text: (editing ? live : (field.kind == "secret" && reveal ? field.value : field.shown)) + (editing ? "|" : "");
             color: Theme.text;
             font-size: Theme.font-heading;
             vertical-alignment: center;
@@ -269,6 +276,25 @@ component FieldRow inherits VerticalLayout {
         TouchArea {
             clicked => {
                 root.edit();
+            }
+        }
+        if field.kind == "secret": Rectangle {
+            x: parent.width - reveal-width;
+            width: reveal-width;
+            height: parent.height;
+            Text {
+                text: reveal ? "Hide" : "Show";
+                color: Theme.accent;
+                font-size: Theme.font-body;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            // On top of the box's own TouchArea (declared later), so a tap
+            // here only switches, it doesn't start typing.
+            TouchArea {
+                clicked => {
+                    root.toggle-reveal();
+                }
             }
         }
     }
@@ -303,6 +329,9 @@ export component WizardPage inherits Rectangle {
     in-out property <string> edit-text;
     // edit-text as the field shows it (masked for a secret; app.slint).
     in property <string> edit-shown;
+    // Secrets shown in plain text (FieldRow's Show / Hide). main.rs hides
+    // them again at every new step.
+    in-out property <bool> reveal: false;
     // The last refused answer: the sentence, and its technical detail.
     in property <string> error;
     in property <string> detail;
@@ -427,6 +456,10 @@ export component WizardPage inherits Rectangle {
                 field: f;
                 editing: i == root.editing;
                 live: root.edit-shown;
+                reveal: root.reveal;
+                toggle-reveal => {
+                    root.reveal = !root.reveal;
+                }
                 edit => {
                     root.edit(i);
                 }
@@ -528,7 +561,12 @@ export component DevicePage inherits Rectangle {
     in property <bool> can-reconfigure;
     in property <bool> can-remove;
     in property <string> message;
+    // The device has a remote (a TV, an IR blaster device), and whether its
+    // buttons are taught (issue #42).
+    in property <bool> has-remote;
+    in property <bool> remote-learns;
     callback back();
+    callback open-remote();
     callback reauth();
     callback reconfigure();
     callback remove();
@@ -565,6 +603,14 @@ export component DevicePage inherits Rectangle {
             color: Theme.error;
             font-size: Theme.font-body;
             wrap: word-wrap;
+        }
+        if has-remote: PickRow {
+            title: "Remote";
+            detail: remote-learns ? "Its buttons, and teaching new ones" : "Buttons, apps and channels";
+            clicked => {
+                confirm-remove = false;
+                root.open-remote();
+            }
         }
         if can-reconfigure: PickRow {
             title: "Change settings";

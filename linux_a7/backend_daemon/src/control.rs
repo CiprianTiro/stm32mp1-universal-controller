@@ -24,6 +24,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::adapters::Registry;
 use crate::device::{self, Device, Health, Origin};
+use crate::ir_codes::IrCodes;
 use crate::secrets::Secrets;
 use crate::state::Msg;
 
@@ -35,6 +36,9 @@ pub struct Control {
     adapters: Arc<Registry>,
     /* Devices' secrets (issue #40): removed with their device. */
     secrets: Arc<Secrets>,
+    /* IR blasters' learned codes (issue #42): removed with their device
+     * too. */
+    ir_codes: Arc<IrCodes>,
 }
 
 impl Control {
@@ -43,11 +47,25 @@ impl Control {
             state_tx,
             adapters,
             secrets,
+            /* Not saved: main.rs attaches the real store (with_ir_codes);
+             * tests that don't care about IR get an empty one. */
+            ir_codes: Arc::new(IrCodes::in_memory()),
         }
+    }
+
+    /* Uses `ir_codes` (loaded from and saved to disk) instead of the
+     * empty in-memory store. */
+    pub fn with_ir_codes(mut self, ir_codes: Arc<IrCodes>) -> Self {
+        self.ir_codes = ir_codes;
+        self
     }
 
     pub fn secrets(&self) -> &Secrets {
         &self.secrets
+    }
+
+    pub fn ir_codes(&self) -> &IrCodes {
+        &self.ir_codes
     }
 
     /* One request/reply round trip with state.rs. Err only while the
@@ -130,11 +148,12 @@ impl Control {
     }
 
     /* Removed means gone for good: its adapter task stops and its
-     * secrets are deleted (issue #40). */
+     * secrets (issue #40) and learned IR codes (#42) are deleted. */
     pub async fn remove(&self, id: &str) -> Result<(), String> {
         self.ask(|reply| Msg::RemoveDevice { id: id.to_string(), reply }).await??;
         self.adapters.stop(id);
         self.secrets.remove(id);
+        self.ir_codes.remove(id);
         Ok(())
     }
 

@@ -1,0 +1,34 @@
+# Board: ESP32-S3 N16R8 = 16 MB flash, 8 MB octal PSRAM (#42).
+CONFIG_IDF_TARGET="esp32s3"
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+
+# The 8 MB PSRAM is octal (it uses GPIO 33-37 -- never wire anything there).
+# IGNORE_NOTFOUND: boot anyway if a board turns out to have none, instead
+# of crashing at start.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_IGNORE_NOTFOUND=y
+
+# Console (logs + the `ir>` prompt) on the COM port (UART0 through the
+# board's CH343 USB-serial chip). That port is the one to use: on this board
+# only COM feeds USB power to the 5V pin, which powers the IR LED -- on the
+# native "USB" port the 5V pin shows ~1 V and the LED gets almost nothing.
+# Logs also go to the native USB port (output only), handy for debugging.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y
+
+# The hub connection (hub_link.c): the blaster checks the hub's certificate
+# itself after the handshake, so Mbed TLS must keep it.
+CONFIG_MBEDTLS_SSL_KEEP_PEER_CERTIFICATE=y
+
+# identity.c writes the blaster's own self-signed certificate on first start.
+CONFIG_MBEDTLS_X509_CREATE_C=y
+CONFIG_MBEDTLS_X509_CRT_WRITE_C=y
+
+# Partitions: two 4 MB app slots for over-the-air updates (partitions.csv).
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# The bundle of public web certificates (~60 KB) is for talking to
+# websites; the blaster only talks to its own hub, checked by fingerprint.
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=n

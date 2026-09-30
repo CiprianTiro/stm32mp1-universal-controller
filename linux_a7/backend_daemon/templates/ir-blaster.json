@@ -1,0 +1,47 @@
+{
+  "$comment": "The hub's own IR blaster add-on (issue #42, firmware_ir_blaster/): paired with the code on its label (pattern P3), found by mDNS. Placed next to ONE device with an IR remote, it becomes that device; its buttons are taught afterwards on the device's remote screen. Format: wiki Device-Templates.",
+  "format": 1,
+  "id": "ir-blaster",
+  "version": 1,
+  "name": "IR remote device",
+  "category": "other",
+  "description": "Anything with an infrared remote (LED strips, projectors, fans, audio), controlled through the hub's IR blaster placed next to it. You teach it the remote's buttons after adding it.",
+  "adapter": "ir-blaster",
+  "capabilities": ["remote"],
+  "inputs": [
+    { "id": "host", "type": "text", "label": "Blaster address", "hint": "The blaster's console shows it: type `status`, e.g. 192.168.1.143", "validate": { "pattern": "host" } },
+    { "id": "pairing_code", "type": "secret", "label": "Pairing code", "hint": "On the blaster's label, or type `pairing` in its console: XXXX-XXXX-XXXX-XXXX (small letters are fine)", "validate": { "min_length": 16, "max_length": 24 } }
+  ],
+  "discovery": [
+    { "method": "mdns", "service": "_uc-irblaster._tcp", "fill": { "host": "{address}", "name": "{name}", "blaster_id": "{txt.id}" } }
+  ],
+  "setup": [
+    {
+      "id": "guided",
+      "label": "Find it automatically",
+      "steps": [
+        { "type": "info", "text": "Plug the IR blaster in next to the device it will control, and make sure it's on the WiFi." },
+        { "type": "discover" },
+        { "type": "code_from_device", "action": "pair", "field": "pairing_code" },
+        { "type": "test" }
+      ]
+    },
+    {
+      "id": "advanced",
+      "label": "Enter the address",
+      "steps": [
+        { "type": "form", "fields": ["host"] },
+        { "type": "code_from_device", "action": "pair", "field": "pairing_code" },
+        { "type": "test" }
+      ]
+    }
+  ],
+  "errors": {
+    "refused": "The blaster refused: {message}.",
+    "unreachable": "The hub can't reach the blaster. Is it plugged in and on the same WiFi?"
+  },
+  "identity": "{blaster_id}",
+  "tls": "tofu",
+  "reauth": ["pair"],
+  "defaults": { "name": "IR device" }
+}

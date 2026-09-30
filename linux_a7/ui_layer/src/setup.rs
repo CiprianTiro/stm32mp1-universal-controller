@@ -153,6 +153,8 @@ impl Setup {
             return;
         }
         let kind = text(&get("step"));
+        // A secret revealed on the last step is hidden again on this one.
+        ui.set_wizard_reveal(false);
         self.session = text(&get("session"));
         self.template = text(&get("template"));
         self.variant = text(&get("variant"));

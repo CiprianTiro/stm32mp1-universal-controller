@@ -23,6 +23,12 @@
  *   /usr/local/etc/universal-controller/tls/   (mode 700)
  *   ├── hub.key   the private key (mode 600: whoever has it can pose as the hub)
  *   └── hub.crt   the certificate (public)
+ *
+ * The same identity also works the other way round (issue #42): when the
+ * hub CONNECTS to one of its own add-ons (an IR blaster), it shows this
+ * certificate as a client certificate ("mutual TLS"), and the add-on, which
+ * pinned its fingerprint at pairing, only talks to this hub
+ * (client_identity).
  */
 use std::fs;
 use std::io::Write;
@@ -87,6 +93,39 @@ pub fn load_or_create(dir: &Path) -> Result<Identity, String> {
         config: Arc::new(config),
         fingerprint,
     })
+}
+
+/* The hub's key and certificate for connecting AS A CLIENT (see the
+ * header). Created first if missing, like load_or_create. */
+pub struct ClientIdentity {
+    pub cert: CertificateDer<'static>,
+    pub key: PrivateKeyDer<'static>,
+    /* What the add-on pins (same as Identity::fingerprint). */
+    pub fingerprint: String,
+}
+
+impl Clone for ClientIdentity {
+    fn clone(&self) -> Self {
+        ClientIdentity {
+            cert: self.cert.clone(),
+            key: self.key.clone_key(),
+            fingerprint: self.fingerprint.clone(),
+        }
+    }
+}
+
+pub fn client_identity(dir: &Path) -> Result<ClientIdentity, String> {
+    let key_path = dir.join("hub.key");
+    let cert_path = dir.join("hub.crt");
+    if !key_path.exists() || !cert_path.exists() {
+        create(dir, &key_path, &cert_path)?;
+    }
+    let key_pem = fs::read(&key_path).map_err(|e| format!("{}: {e}", key_path.display()))?;
+    let cert_pem = fs::read(&cert_path).map_err(|e| format!("{}: {e}", cert_path.display()))?;
+    let key = PrivateKeyDer::from_pem_slice(&key_pem).map_err(|e| format!("{}: {e}", key_path.display()))?;
+    let cert = CertificateDer::from_pem_slice(&cert_pem).map_err(|e| format!("{}: {e}", cert_path.display()))?;
+    let fingerprint = hex(ring::digest::digest(&ring::digest::SHA256, cert.as_ref()).as_ref());
+    Ok(ClientIdentity { cert, key, fingerprint })
 }
 
 /* Makes a new key pair and a self-signed certificate for it. The key is
@@ -179,6 +218,14 @@ mod tests {
         /* A second start loads the same identity: same fingerprint. */
         let second = load_or_create(&dir).unwrap();
         assert_eq!(first.fingerprint, second.fingerprint);
+    }
+
+    #[test]
+    fn client_identity_is_the_same_certificate() {
+        let dir = test_dir("client");
+        let server = load_or_create(&dir).unwrap();
+        let client = client_identity(&dir).unwrap();
+        assert_eq!(server.fingerprint, client.fingerprint);
     }
 
     #[test]

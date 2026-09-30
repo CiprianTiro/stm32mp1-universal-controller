@@ -284,6 +284,56 @@ async fn ws_open_inner(
     Ok((socket, fingerprint))
 }
 
+/* A plain TLS connection (no WebSocket on top) to host:port, e.g. an IR
+ * blaster's line protocol (issue #42). The server's certificate must have
+ * the fingerprint `expected` (None = any: the first contact, pairing);
+ * with `client`, the hub also shows its own certificate (mutual TLS).
+ * Returns the stream and the server certificate's fingerprint. A
+ * different certificate than the pinned one fails with
+ * ErrorKind::Refused, like ws_open. */
+pub async fn tls_open(
+    host: &str,
+    port: u16,
+    expected: Option<&str>,
+    client: Option<&crate::tls::ClientIdentity>,
+) -> Result<(tokio_rustls::client::TlsStream<TcpStream>, String), NetError> {
+    let open = async {
+        let unreachable = |e: String| NetError::new(ErrorKind::Unreachable, e);
+        let tcp = TcpStream::connect((host, port))
+            .await
+            .map_err(|e| unreachable(format!("can't reach {host}:{port}: {e}")))?;
+        let verifier = Arc::new(PinnedCert::new(expected.map(str::to_string)));
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let builder = rustls::ClientConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .map_err(|e| unreachable(format!("TLS setup: {e}")))?
+            .dangerous()
+            .with_custom_certificate_verifier(verifier.clone());
+        let config = match client {
+            Some(me) => builder
+                .with_client_auth_cert(vec![me.cert.clone()], me.key.clone_key())
+                .map_err(|e| unreachable(format!("TLS client certificate: {e}")))?,
+            None => builder.with_no_client_auth(),
+        };
+        let name = ServerName::try_from(host.to_string()).map_err(|e| unreachable(format!("{host}: {e}")))?;
+        let tls = tokio_rustls::TlsConnector::from(Arc::new(config)).connect(name, tcp).await;
+        let seen = verifier.seen.lock().unwrap().clone();
+        match (tls, seen) {
+            (Ok(tls), Some(seen)) => Ok((tls, seen)),
+            (Err(_), Some(seen)) if expected.is_some_and(|e| e != seen) => Err(NetError::new(
+                ErrorKind::Refused,
+                format!("{host} presented a different certificate than at pairing"),
+            )),
+            (Err(e), _) => Err(unreachable(format!("{host}:{port}: TLS failed: {e}"))),
+            (Ok(_), None) => Err(unreachable(format!("{host}:{port}: no certificate seen"))),
+        }
+    };
+    match tokio::time::timeout(HTTP_TIMEOUT, open).await {
+        Ok(result) => result,
+        Err(_) => Err(NetError::new(ErrorKind::Timeout, format!("{host}:{port} isn't answering"))),
+    }
+}
+
 /* rustls's check of the server's certificate, replaced by pinning: the
  * usual check (signed by a known authority, for this name) can't work for
  * a self-signed certificate. What still IS checked, as normal: that the

@@ -730,6 +730,7 @@ impl Task {
             let remote = Remote {
                 buttons: REMOTE_BUTTONS.iter().map(|b| b.to_string()).collect(),
                 keyboard: true,
+                learn: false,
             };
             if let Err(e) = self.hub.report(&self.id, "remote", json!(remote)).await {
                 println!("lg-webos: {}: {e}", self.id);

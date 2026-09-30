@@ -66,7 +66,7 @@ const PAGES: [(&str, Option<i32>); 12] = [
 
 /// The wizard page (10) in each kind of step (issue #40): the step's
 /// sample data is set just before its render.
-const WIZARD_STEPS: [(&str, fn(&AppWindow)); 10] = [
+const WIZARD_STEPS: [(&str, fn(&AppWindow)); 18] = [
     // The remote (issue #44), page 12, in its views.
     ("remote", |ui| {
         ui.set_page(12);
@@ -97,6 +97,45 @@ const WIZARD_STEPS: [(&str, fn(&AppWindow)); 10] = [
         ui.set_page(12);
         ui.set_remote_view(3);
         ui.set_remote_text("stranger thi".into());
+    }),
+    // An IR device's remote (issue #42), page 13, in its views.
+    ("ir-remote-empty", |ui| {
+        ir_remote(ui, &[], 0);
+    }),
+    ("ir-remote", |ui| {
+        ir_remote(ui, &["Power", "Brighter", "Dimmer", "Red", "Green", "Blue", "White", "Flash", "Smooth", "Speed +"], 0);
+        ui.set_ir_message_ok(true);
+        ui.set_ir_message("Learned \u{201C}Speed +\u{201D}. Tap it to try it.".into());
+    }),
+    ("ir-remote-offline", |ui| {
+        ir_remote(ui, &["Power", "Red"], 0);
+        ui.set_ir_status("The IR blaster is offline: buttons can't be sent or taught right now. Is it plugged in and on the WiFi?".into());
+    }),
+    ("ir-edit", |ui| {
+        ir_remote(ui, &["Power", "Brighter", "Dimmer", "Red"], 1);
+    }),
+    ("ir-name", |ui| {
+        ir_remote(ui, &["Power"], 2);
+        ui.set_ir_text("Brigh".into());
+    }),
+    ("ir-waiting", |ui| {
+        ir_remote(ui, &["Power"], 3);
+        ui.set_ir_selected("Brighter".into());
+    }),
+    // The IR blaster's pairing code (issue #42): a secret field, hidden,
+    // then shown while typing.
+    ("wizard-code", |ui| {
+        wizard(ui, "Add: IR remote device", "code_from_device", 3, "", false);
+        ui.set_wizard_fields(secret_field("5MCN-WM19-04CH-Q2GT"));
+        ui.set_wizard_reveal(false);
+    }),
+    ("wizard-code-shown", |ui| {
+        wizard(ui, "Add: IR remote device", "code_from_device", 3, "", false);
+        ui.set_wizard_fields(secret_field(""));
+        ui.set_wizard_editing(0);
+        ui.set_wizard_edit_secret(true);
+        ui.set_wizard_edit_text("5MCN-WM19-04C".into());
+        ui.set_wizard_reveal(true);
     }),
     ("wizard-discover", |ui| {
         wizard(ui, "Add: WLED light", "discover", 1, "", false);
@@ -144,6 +183,18 @@ const WIZARD_STEPS: [(&str, fn(&AppWindow)); 10] = [
     }),
 ];
 
+/// The IR remote page (issue #42) with `buttons`, in `view`.
+fn ir_remote(ui: &AppWindow, buttons: &[&str], view: i32) {
+    ui.set_page(13);
+    ui.set_remote_name("Astronaut".into());
+    let buttons: Vec<slint::SharedString> = buttons.iter().map(|&b| b.into()).collect();
+    ui.set_ir_buttons(Rc::new(VecModel::from(buttons)).into());
+    ui.set_ir_status("".into());
+    ui.set_ir_message("".into());
+    ui.set_ir_text("".into());
+    ui.set_ir_view(view);
+}
+
 /// Resets the wizard page to one step.
 fn wizard(ui: &AppWindow, title: &str, step: &str, number: i32, text: &str, busy: bool) {
     ui.set_wizard_title(title.into());
@@ -156,6 +207,21 @@ fn wizard(ui: &AppWindow, title: &str, step: &str, number: i32, text: &str, busy
     ui.set_wizard_editing(-1);
     ui.set_wizard_primary("Next".into());
     ui.set_wizard_fields(Rc::new(VecModel::from(Vec::<FieldItem>::new())).into());
+}
+
+/// The IR blaster's pairing code field (a secret) holding `value`.
+fn secret_field(value: &str) -> slint::ModelRc<FieldItem> {
+    let item = FieldItem {
+        id: "pairing_code".into(),
+        label: "Pairing code".into(),
+        hint: "On the blaster's label, or type `pairing` in its console: XXXX-XXXX-XXXX-XXXX (small letters are fine)".into(),
+        kind: "secret".into(),
+        shown: "\u{2022}".repeat(value.chars().count()).into(),
+        value: value.into(),
+        required: true,
+        ..Default::default()
+    };
+    Rc::new(VecModel::from(vec![item])).into()
 }
 
 /// Text fields: (id, label, hint, value, required).
@@ -381,6 +447,8 @@ fn fill_sample_data(ui: &AppWindow, appearance: &theme::Appearance) {
     ui.set_dev_can_reauth(true);
     ui.set_dev_can_reconfigure(true);
     ui.set_dev_can_remove(true);
+    ui.set_dev_has_remote(true);
+    ui.set_dev_remote_learns(true);
 }
 
 /// A QR-code-sized checkerboard stand-in (the real code isn't the point of

@@ -163,6 +163,9 @@ pub struct Remote {
     pub buttons: Vec<String>,
     #[serde(default)]
     pub keyboard: bool,
+    /* Issue #42: buttons are taught (an IR blaster), with any names. */
+    #[serde(default)]
+    pub learn: bool,
 }
 
 #[derive(Deserialize, Clone, Debug, PartialEq)]

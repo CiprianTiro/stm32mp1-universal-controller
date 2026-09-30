@@ -347,7 +347,10 @@ component DeviceRow inherits Rectangle {
             }
             if item.has-remote: ActionButton {
                 text: "Remote";
-                enabled: item.on;
+                // A TV's remote does nothing while the TV is off; a device
+                // without an on/off state the hub knows (an IR blaster's,
+                // issue #42) can always be used.
+                enabled: item.on || !item.has-switch;
                 clicked => {
                     root.open-remote(item.id);
                 }
