@@ -32,3 +32,9 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 # The bundle of public web certificates (~60 KB) is for talking to
 # websites; the blaster only talks to its own hub, checked by fingerprint.
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=n
+
+# WiFi setup over Bluetooth (provision.c): Bluetooth LE with the NimBLE
+# stack (smaller than Bluedroid, and all that's needed for a GATT server).
+# Its memory is released once the WiFi is set up.
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y

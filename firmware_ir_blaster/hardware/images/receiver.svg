@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 300" role="img" aria-label="Receiver schematic" width="700" height="300"><style>
+text{font-family:'IBM Plex Mono',ui-monospace,Menlo,Consolas,monospace;font-size:13px;fill:#1d2320}
+.lbl{font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font-weight:600;font-size:14px}
+.sm{font-size:12px;fill:#5d6862}
+.w{stroke:#2b322e;stroke-width:2.2;fill:none}
+.v5{stroke:#c8322b;stroke-width:3;fill:none}.v33{stroke:#d47a12;stroke-width:3;fill:none}
+.gnd{stroke:#3a4a8c;stroke-width:3;fill:none}.sig{stroke:#1f8a4c;stroke-width:3;fill:none}
+.ir{stroke:#8a3fc2;stroke-width:2;fill:none}
+.res,.body{fill:#ffffff;stroke:#2b322e;stroke-width:2.2}
+.solid,.dot{fill:#2b322e;stroke:none}
+.t5{fill:#c8322b}.t33{fill:#d47a12}.tg{fill:#3a4a8c}.ts{fill:#1f8a4c}
+</style><rect width="100%%" height="100%%" fill="#ffffff"/>
+        <!-- 3V3 in -->
+        <text x="40" y="66" class="lbl t33">3V3 pin</text>
+        <path class="v33" d="M40 80 H130"/>
+        <rect class="res" x="130" y="68" width="64" height="24" rx="3"/>
+        <text x="132" y="114" class="lbl">R4 100Ω</text>
+        <path class="w" d="M194 80 H460"/>
+        <circle cx="290" cy="80" r="4.5" class="dot"/>
+
+        <!-- C2 ceramic -->
+        <path class="w" d="M290 80 V160"/>
+        <path class="w" d="M270 160 H310 M270 172 H310"/>
+        <path class="w" d="M290 172 V250"/>
+        <text x="318" y="164" class="lbl">C2 100nF</text>
+        <text x="318" y="182" class="sm">no polarity, keep</text>
+        <text x="318" y="198" class="sm">close to receiver</text>
+
+        <!-- receiver box -->
+        <rect class="body" x="460" y="50" width="110" height="180" rx="6"/>
+        <text x="472" y="140" class="lbl">CHQ1838</text>
+        <text x="472" y="158" class="sm">38 kHz IR</text>
+        <text x="472" y="174" class="sm">receiver</text>
+        <text x="466" y="84" class="sm">VCC</text>
+        <text x="466" y="214" class="sm">GND</text>
+        <text x="530" y="84" class="sm">OUT</text>
+
+        <!-- OUT to GPIO5 -->
+        <path class="sig" d="M570 80 H670"/>
+        <text x="600" y="66" class="lbl ts">GPIO5</text>
+
+        <!-- GND -->
+        <path class="w" d="M460 210 H440 V250"/>
+        <path class="gnd" d="M40 250 H460"/>
+        <circle cx="290" cy="250" r="4.5" class="dot"/>
+        <circle cx="440" cy="250" r="4.5" class="dot"/>
+        <text x="40" y="276" class="lbl tg">GND pin</text>
+      </svg>

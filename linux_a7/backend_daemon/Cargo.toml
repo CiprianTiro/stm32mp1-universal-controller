@@ -52,6 +52,10 @@ hyper-util = { version = "0.1", features = ["tokio", "server", "service"] }
 tower-service = "0.3"
 bluer = { version = "0.17.4", features = ["bluetoothd"] }
 spake2 = "0.4.0"
+# Big-number maths for SRP6a (issue #42, adapters/esp_prov/srp.rs: WiFi setup
+# of IR blasters over Bluetooth with Espressif's protocol). Already in the
+# build as a dependency of another crate; named here since we use it directly.
+num-bigint = "0.4"
 dbus = { version = "0.9", features = ["vendored"] }
 mdns-sd = "0.21"
 # Issue #40, the adapters' toolkit (adapters/net.rs): talking to devices.

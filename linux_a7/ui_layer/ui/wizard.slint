@@ -310,7 +310,8 @@ export component WizardPage inherits Rectangle {
     // E.g. "Add: WLED light", "Pair again: Living room TV".
     in property <string> title;
     // backend_daemon's step type: "info", "discover", "form", "choice",
-    // "confirm_on_device", "code_from_device", "test", "name", "save".
+    // "confirm_on_device", "code_from_device", "provision_ble", "test",
+    // "name", "save".
     in property <string> step;
     in property <int> number;
     // info: the text; confirm_on_device: the hint; name/save: what the
@@ -359,7 +360,7 @@ export component WizardPage inherits Rectangle {
     }
     Timer {
         interval: 1s;
-        running: busy && step == "confirm_on_device" && left > 0;
+        running: busy && (step == "confirm_on_device" || step == "provision_ble") && left > 0;
         triggered => {
             left -= 1;
             // A new hint every 8 s.
@@ -469,7 +470,7 @@ export component WizardPage inherits Rectangle {
             }
         }
 
-        if step == "confirm_on_device": VerticalLayout {
+        if step == "confirm_on_device" || step == "provision_ble": VerticalLayout {
             spacing: Theme.space-m;
             vertical-stretch: 0;
             Text {
@@ -532,7 +533,7 @@ export component WizardPage inherits Rectangle {
             alignment: end;
             vertical-stretch: 0;
             // A test or pairing that failed: try again (the step stays).
-            if error != "" && (step == "test" || step == "confirm_on_device"): ActionButton {
+            if error != "" && (step == "test" || step == "confirm_on_device" || step == "provision_ble"): ActionButton {
                 text: "Try again";
                 primary: true;
                 clicked => {

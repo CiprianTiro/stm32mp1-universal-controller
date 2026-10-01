@@ -307,7 +307,14 @@ pub enum Step {
     Test,
     /* Onboarding a factory-fresh device (later, #71). */
     ProvisionSoftap { ssid_pattern: String, action: String },
-    ProvisionBle { service_uuid: String, action: String },
+    /* Implemented for the IR blaster (#42): the adapter's action sets the
+     * device's WiFi over Bluetooth; `hint` is shown while it runs. */
+    ProvisionBle {
+        service_uuid: String,
+        action: String,
+        #[serde(default)]
+        hint: String,
+    },
     Smartconfig { flavour: String },
 }
 

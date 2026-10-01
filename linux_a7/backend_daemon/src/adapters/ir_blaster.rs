@@ -14,7 +14,16 @@
  * hub checks the blaster's against the fingerprint pinned at pairing
  * (config "fingerprint"). Inside: one JSON object per line.
  *
- * SETUP (the wizard):
+ * SETUP (the wizard), a new blaster (no WiFi yet):
+ *   form             pairing code, WiFi name (the hub's own, pre-filled)
+ *                    and password
+ *   provision_ble    action "provision" (below): over Bluetooth, the code
+ *                    opens an SRP6a session (esp_prov/) and the WiFi goes
+ *                    to the blaster; once it's on the WiFi, the same code
+ *                    pairs it (as below)
+ *   test             connect pinned, "hello" (probe, below)
+ *
+ * ...or one already on the WiFi:
  *   discover         mDNS _uc-irblaster._tcp -> "host", "blaster_id"
  *   code_from_device the pairing code (action "pair", below): both sides
  *                    prove they know it, without sending it, bound to
@@ -96,6 +105,7 @@ impl Adapter for IrBlaster {
         Box::pin(async move {
             match name {
                 "pair" => pair(values).await,
+                "provision" => provision(values).await,
                 other => Err(SetupError::new(ErrorKind::Unsupported, format!("ir-blaster has no action {other:?}"))),
             }
         })
@@ -301,6 +311,70 @@ async fn pair(values: &SetupValues) -> Result<SetupValues, SetupError> {
     if let Some(id) = hello["device"].as_str() {
         result.plain.insert("blaster_id".into(), id.to_string());
     }
+    Ok(result)
+}
+
+/* ------------------------------------------------------------------ */
+/* A new blaster: WiFi over Bluetooth, then pairing (issue #42)        */
+/* ------------------------------------------------------------------ */
+
+/* The Bluetooth service our blasters advertise while waiting for WiFi
+ * setup (firmware provision.c); the template's provision_ble step names it
+ * too ("ble_service"). */
+const BLE_SERVICE: &str = "1f2b9c64-3a5e-4c1d-9f0a-5b6e7d8c9a01";
+
+/* After joining the WiFi the blaster needs a moment before its TLS server
+ * answers: pairing is tried this many times, this far apart. */
+const PAIR_TRIES: u32 = 10;
+const PAIR_RETRY: Duration = Duration::from_secs(2);
+
+/* The wizard's provision_ble step: the WiFi over Bluetooth, then pairing
+ * over the WiFi -- with the one pairing code the person typed. */
+async fn provision(values: &SetupValues) -> Result<SetupValues, SetupError> {
+    let code = values
+        .secret
+        .get("pairing_code")
+        .and_then(|c| normalise_code(c.expose()))
+        .ok_or_else(|| SetupError::new(ErrorKind::Refused, "the pairing code has 16 letters and digits (XXXX-XXXX-XXXX-XXXX)"))?;
+    let ssid = values
+        .plain
+        .get("wifi_ssid")
+        .ok_or_else(|| SetupError::new(ErrorKind::Refused, "no WiFi name"))?;
+    let password = values.secret.get("wifi_password").map(|p| p.expose().to_string()).unwrap_or_default();
+    let service = values.plain.get("ble_service").map(String::as_str).unwrap_or(BLE_SERVICE);
+    let service = bluer::Uuid::parse_str(service).map_err(|e| SetupError::new(ErrorKind::Unsupported, format!("service: {e}")))?;
+
+    use super::esp_prov::ProvError;
+    let (name, ip) = super::esp_prov::ble::provision_nearby(service, &code, ssid, &password)
+        .await
+        .map_err(|e| match e {
+            ProvError::WrongCode => SetupError::new(ErrorKind::Refused, "wrong pairing code"),
+            ProvError::WifiPassword => SetupError::new(ErrorKind::Refused, "the WiFi password is wrong"),
+            ProvError::WifiNotFound => SetupError::new(
+                ErrorKind::Unreachable,
+                format!("the blaster doesn't see the WiFi \"{ssid}\" (it needs a 2.4 GHz network)"),
+            ),
+            ProvError::Timeout => SetupError::new(ErrorKind::Timeout, e.to_string()),
+            ProvError::Link(why) => SetupError::new(ErrorKind::Unreachable, why),
+        })?;
+    println!("ir-blaster: {name} joined the WiFi at {ip}, pairing");
+
+    /* Now on the WiFi: pair as for a blaster found there. */
+    let mut values = values.clone();
+    values.plain.insert("host".into(), ip.clone());
+    let mut tries = 0;
+    let paired = loop {
+        match pair(&values).await {
+            Ok(paired) => break paired,
+            Err(e) if matches!(e.kind, ErrorKind::Unreachable | ErrorKind::Timeout) && tries < PAIR_TRIES => {
+                tries += 1;
+                tokio::time::sleep(PAIR_RETRY).await;
+            }
+            Err(e) => return Err(e),
+        }
+    };
+    let mut result = paired;
+    result.plain.insert("host".into(), ip);
     Ok(result)
 }
 

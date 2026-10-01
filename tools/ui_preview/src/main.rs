@@ -66,7 +66,7 @@ const PAGES: [(&str, Option<i32>); 12] = [
 
 /// The wizard page (10) in each kind of step (issue #40): the step's
 /// sample data is set just before its render.
-const WIZARD_STEPS: [(&str, fn(&AppWindow)); 18] = [
+const WIZARD_STEPS: [(&str, fn(&AppWindow)); 19] = [
     // The remote (issue #44), page 12, in its views.
     ("remote", |ui| {
         ui.set_page(12);
@@ -136,6 +136,12 @@ const WIZARD_STEPS: [(&str, fn(&AppWindow)); 18] = [
         ui.set_wizard_edit_secret(true);
         ui.set_wizard_edit_text("5MCN-WM19-04C".into());
         ui.set_wizard_reveal(true);
+    }),
+    // A new IR blaster being set up over Bluetooth (issue #42).
+    ("wizard-provision", |ui| {
+        wizard(ui, "Add: IR remote device", "provision_ble", 3,
+               "Setting up the blaster: WiFi over Bluetooth, then pairing. This takes up to a minute.", true);
+        ui.set_wizard_seconds(150);
     }),
     ("wizard-discover", |ui| {
         wizard(ui, "Add: WLED light", "discover", 1, "", false);

@@ -21,6 +21,7 @@
 #include "esp_timer.h"
 #include "esp_wifi.h"
 #include "identity.h"
+#include "provision.h"
 
 static const char *TAG = "wifi";
 
@@ -52,7 +53,7 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
   if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
     if (has_network()) {
       esp_wifi_connect();
-    } else {
+    } else if (!provision_active()) {
       ESP_LOGW(TAG, "no network configured -- type: wifi <name> <password>");
     }
   } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
@@ -61,10 +62,14 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
       ESP_LOGW(TAG, "connection lost (reason %d)", event->reason);
     }
     connected = false;
-    /* Try again later (a timer, so this event task isn't blocked). */
+    /* Try again later (a timer, so this event task isn't blocked). During
+     * Bluetooth setup quickly, without back-off: the setup counts the
+     * attempts and tells the hub "wrong password" after a few. */
     esp_timer_stop(retry_timer);
-    esp_timer_start_once(retry_timer, (uint64_t)retry_ms * 1000);
-    retry_ms = retry_ms * 2 > RETRY_MAX_MS ? RETRY_MAX_MS : retry_ms * 2;
+    esp_timer_start_once(retry_timer, (uint64_t)(provision_active() ? RETRY_FIRST_MS : retry_ms) * 1000);
+    if (!provision_active()) {
+      retry_ms = retry_ms * 2 > RETRY_MAX_MS ? RETRY_MAX_MS : retry_ms * 2;
+    }
   } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
     ip_event_got_ip_t *event = data;
     ESP_LOGI(TAG, "connected, address " IPSTR, IP2STR(&event->ip_info.ip));
@@ -94,13 +99,27 @@ esp_err_t wifi_start(void)
   ESP_RETURN_ON_ERROR(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, on_event, NULL), TAG, "events");
   ESP_RETURN_ON_ERROR(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, on_event, NULL), TAG, "events");
 
-  ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_STA), TAG, "mode");
-  ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "start");
-
-  /* The blaster is mains-powered and must answer the hub quickly: no WiFi
-   * power saving (which can add 100+ ms of delay to every message). */
-  esp_wifi_set_ps(WIFI_PS_NONE);
+  /* No network yet: Bluetooth setup starts WiFi itself (and gets the
+   * network). Else start and join it now. */
+  bool provisioning = false;
+  ESP_RETURN_ON_ERROR(provision_start_if_needed(&provisioning), TAG, "Bluetooth setup");
+  if (!provisioning) {
+    ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_STA), TAG, "mode");
+    ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "start");
+    wifi_no_power_save();
+  }
   return ESP_OK;
+}
+
+void wifi_no_power_save(void)
+{
+  /* The blaster is mains-powered and must answer the hub quickly: no WiFi
+   * power saving (which can add 100+ ms of delay to every message). Not
+   * while Bluetooth runs: sharing the radio needs power saving, and
+   * ESP-IDF halts the chip if it's off then. */
+  if (!provision_active()) {
+    esp_wifi_set_ps(WIFI_PS_NONE);
+  }
 }
 
 esp_err_t wifi_set_network(const char *ssid, const char *password)
@@ -117,6 +136,8 @@ esp_err_t wifi_set_network(const char *ssid, const char *password)
    * network with the same name can't lure the blaster in. */
   config.sta.threshold.authmode = password[0] ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
 
+  /* Set on the console while Bluetooth setup waits: stop that first. */
+  provision_stop();
   esp_wifi_disconnect();
   connected = false;
   retry_ms = RETRY_FIRST_MS;

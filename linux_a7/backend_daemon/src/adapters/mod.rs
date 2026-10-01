@@ -27,6 +27,7 @@
  * understands.
  */
 pub mod channels;
+pub mod esp_prov;
 pub mod ir_blaster;
 pub mod lg_webos;
 pub mod m4_led;

@@ -12,6 +12,7 @@
  *   identity.c    who this blaster is: key, certificate, pairing code, and
  *                 which hub it belongs to (kept in flash)
  *   wifi.c        joins the home network, reconnects by itself
+ *   provision.c   WiFi setup over Bluetooth (no network yet / BOOT held)
  *   ir_service.c  owns the IR hardware (ir_tx.c sends, ir_rx.c receives,
  *                 ir_nec.c knows the NEC protocol)
  *   hub_link.c    the encrypted connection to the hub (PROTOCOL.md)
@@ -20,7 +21,9 @@
  * Console commands (type `help` for the full list):
  *
  *   status                     WiFi, hub connection, firmware version
- *   wifi <name> <password>     join a network (once; kept in flash)
+ *   wifi <name> <password>     join a network (development; normally the
+ *                              hub sets it over Bluetooth)
+ *   wifi forget                forget it, restart into Bluetooth setup
  *   pairing                    show the pairing code the hub asks for
  *   unpair                     forget the hub
  *   nec <address> <command> [repeats]
@@ -46,6 +49,7 @@
 #include "ir_service.h"
 #include "ir_tx.h"
 #include "nvs.h"
+#include "provision.h"
 #include "nvs_flash.h"
 #include "version.h"
 #include "wifi.h"
@@ -130,7 +134,11 @@ static bool parse_number(const char *text, unsigned long max, unsigned long *out
 static int cmd_status(int argc, char **argv)
 {
   printf("IR blaster %s, firmware %s\n", identity_device_id(), FW_VERSION);
-  wifi_print_status();
+  if (provision_active()) {
+    printf("WiFi: not set up. Bluetooth setup is waiting (the hub's wizard, pairing code: `pairing`)\n");
+  } else {
+    wifi_print_status();
+  }
   if (!identity_hub_fingerprint()) {
     printf("Hub: not paired yet (the hub's wizard asks for the code: type `pairing`)\n");
   } else {
@@ -147,15 +155,19 @@ static int cmd_wifi(int argc, char **argv)
     return 0;
   }
   if (argc == 2 && strcmp(argv[1], "forget") == 0) {
+    /* Like holding BOOT: Bluetooth setup needs a restart (its memory was
+     * released once the WiFi was set up). */
     esp_err_t err = wifi_forget();
-    printf("WiFi network forgotten: %s\n", esp_err_to_name(err));
-    return err == ESP_OK ? 0 : 1;
+    printf("WiFi network forgotten (%s), restarting into Bluetooth setup...\n", esp_err_to_name(err));
+    vTaskDelay(pdMS_TO_TICKS(200));
+    esp_restart();
+    return 0;
   }
   if (argc != 2 && argc != 3) {
     printf("usage: wifi <name> <password>   join a network\n"
            "       wifi <name>              join an open network\n"
            "       wifi                     show the connection\n"
-           "       wifi forget              forget the network\n"
+           "       wifi forget              forget the network, restart into Bluetooth setup\n"
            "A name with spaces goes in quotes: wifi \"My Network\" secret123\n");
     return 1;
   }
@@ -329,6 +341,7 @@ void app_main(void)
   ESP_ERROR_CHECK(ir_service_start(IR_TX_GPIO, IR_RX_GPIO));
   ir_service_add_listener(print_heard);
   ESP_ERROR_CHECK(wifi_start());
+  ESP_ERROR_CHECK(provision_watch_button());
   ESP_ERROR_CHECK(hub_link_start());
 
   /* Interactive console on the COM port (UART0, through the board's
