@@ -519,6 +519,15 @@ fn replace<T: Capability>(
  *                   taught again
  *           forget {"button": "Power"}
  *           rename {"button": "Power", "to": "On/Off"}
+ *     and the IR code library (#82, ir_library.rs), for a lost remote:
+ *           library {}            -> {"types": [{"id", "name"}]}
+ *           library {"type": "tv"} -> {"brands": [{"name", "sets"}]}
+ *           finder {"type", "brand"?}
+ *                -> {"candidates": [{"button", "sets": [{"id", "name",
+ *                   "brand", "button", "check"}]}]}  sets grouped by the
+ *                   code of their test button, most common first
+ *           try {"type", "set", "button"}   send one button of a set
+ *           use_set {"type", "set"} -> {"added": N}  copy its buttons
  *   media   apps {}      -> {"apps": [{"id", "label"}]}
  *           launch {"app": "<id>"}
  *           channels {"query"?, "offset"?, "limit"?}
@@ -536,6 +545,16 @@ pub fn check_action(device: &Device, capability: &str, name: &str, args: &serde_
     let text_arg = |key: &str, max: usize| -> Result<(), String> {
         let text = args[key].as_str().ok_or_else(|| format!("{capability} {name} needs {{\"{key}\": \"...\"}}"))?;
         if text.is_empty() || text.chars().count() > max || text.chars().any(char::is_control) {
+            return Err(format!("{capability} {name}: {key} must be 1-{max} characters, no control characters"));
+        }
+        Ok(())
+    };
+    /* An IR library argument: text, 1-max characters, no control
+     * characters (an empty brand means "any brand"). */
+    let library_arg = |key: &str, max: usize| -> Result<(), String> {
+        let text = args[key].as_str().ok_or_else(|| format!("{capability} {name} needs {{\"{key}\": \"...\"}}"))?;
+        let empty_ok = key == "brand";
+        if (text.is_empty() && !empty_ok) || text.chars().count() > max || text.chars().any(char::is_control) {
             return Err(format!("{capability} {name}: {key} must be 1-{max} characters, no control characters"));
         }
         Ok(())
@@ -558,7 +577,32 @@ pub fn check_action(device: &Device, capability: &str, name: &str, args: &serde_
                     _ => Err("remote delete needs {\"count\": 1-256}".into()),
                 },
                 "submit" => no_args(),
-                "learn" | "forget" | "rename" if !remote.learn => Err(format!("{id} can't learn buttons")),
+                "learn" | "forget" | "rename" | "library" | "finder" | "try" | "use_set" if !remote.learn => {
+                    Err(format!("{id} can't learn buttons"))
+                }
+                /* The IR code library (issue #82, ir_library.rs). Only the
+                 * shape is checked here; the library itself says whether a
+                 * type, brand or set exists. */
+                "library" => match args.get("type") {
+                    None => no_args(),
+                    Some(_) => library_arg("type", 32),
+                },
+                "finder" => {
+                    library_arg("type", 32)?;
+                    match args.get("brand") {
+                        None => Ok(()),
+                        Some(_) => library_arg("brand", 64),
+                    }
+                }
+                "try" => {
+                    library_arg("type", 32)?;
+                    library_arg("set", 200)?;
+                    library_arg("button", 64)
+                }
+                "use_set" => {
+                    library_arg("type", 32)?;
+                    library_arg("set", 200)
+                }
                 "learn" => {
                     let button = args["button"].as_str().ok_or("remote learn needs {\"button\": \"Power\"}")?;
                     if !valid_button_name(button) {
@@ -589,7 +633,9 @@ pub fn check_action(device: &Device, capability: &str, name: &str, args: &serde_
                     }
                     Ok(())
                 }
-                other => Err(format!("remote has no action {other:?} (press, type, delete, submit, learn, forget, rename)")),
+                other => Err(format!(
+                    "remote has no action {other:?} (press, type, delete, submit, learn, forget, rename, library, finder, try, use_set)"
+                )),
             }
         }
         "media" => {
@@ -849,6 +895,17 @@ mod tests {
         assert_eq!(ok("rename", json!({"button": "Red", "to": "Colour"})), Ok(()));
         assert!(ok("rename", json!({"button": "Red", "to": "Power"})).unwrap_err().contains("already"));
         assert!(ok("type", json!({"text": "a"})).is_err());
+        /* Issue #82: the code library's actions. */
+        assert_eq!(ok("library", json!({})), Ok(()));
+        assert_eq!(ok("library", json!({"type": "tv"})), Ok(()));
+        assert!(ok("library", json!({"type": ""})).is_err());
+        assert_eq!(ok("finder", json!({"type": "tv", "brand": ""})), Ok(()));
+        assert_eq!(ok("finder", json!({"type": "tv", "brand": "LG"})), Ok(()));
+        assert!(ok("finder", json!({})).is_err());
+        assert_eq!(ok("try", json!({"type": "tv", "set": "TVs/LG/x", "button": "Power"})), Ok(()));
+        assert!(ok("try", json!({"type": "tv", "set": "TVs/LG/x"})).is_err());
+        assert_eq!(ok("use_set", json!({"type": "tv", "set": "TVs/LG/x"})), Ok(()));
+        assert!(ok("use_set", json!({"type": "tv", "set": "a\nb"})).is_err());
         /* Taught names are fine in its state; twice the same isn't. */
         let state = |buttons: serde_json::Value| {
             set_capability(&ir, "remote", json!({"buttons": buttons, "learn": true}), Origin::Device)

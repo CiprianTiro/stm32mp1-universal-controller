@@ -16,6 +16,8 @@ mod health;
 mod helper;
 mod hotspot;
 mod ir_codes;
+mod ir_encode;
+mod ir_library;
 mod mqtt;
 mod network;
 mod rpmsg;

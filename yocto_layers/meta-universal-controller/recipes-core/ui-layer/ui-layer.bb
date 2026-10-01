@@ -66,6 +66,8 @@ SRC_URI = " \
     file://fonts/DejaVuSans.ttf \
     file://src/main.rs \
     file://src/display.rs \
+    file://src/ir_finder.rs \
+    file://src/ir_layout.rs \
     file://src/pointer.rs \
     file://src/setup.rs \
     file://src/theme.rs \

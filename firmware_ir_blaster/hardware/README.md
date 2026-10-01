@@ -7,7 +7,8 @@ This file is the source of truth for the hardware; the wiki page [IR-Blaster-Har
 Breadboard circuit for the ESP32-S3 IR blaster add-on
 ([#42](https://github.com/CiprianTiro/stm32mp1-universal-controller/issues/42)):
 two IR LEDs to **send** codes and a 38 kHz IR receiver to **learn** them from
-an original remote. An optional temperature/humidity sensor can be added later.
+an original remote. IR only: a temperature sensor belongs on its own module
+(#86), away from the ESP32's warmth.
 
 > **Status (2026-10-01): verified on hardware.** Sends NEC codes to an LG TV,
 > an IR LED strip and a small NEC projector (~2 m range), and receives/decodes the
@@ -31,7 +32,6 @@ an original remote. An optional temperature/humidity sensor can be added later.
 | U1 | IR receiver | CHQ1838 (38 kHz, VS1838B class) | active-low output |
 | R4 | resistor | 100 Ω | receiver supply filter |
 | C2 | ceramic capacitor | 100 nF | receiver supply filter, no polarity |
-| U2 | GY-SHT21 module | I²C temperature/humidity | **optional**, not supported yet (#86) |
 
 Colours in the drawings: **red** = 5V, **orange** = 3.3V, **blue** = GND,
 **green** = signal to/from the ESP32, **black** = wire between parts.
@@ -112,10 +112,6 @@ current sized from their datasheet.
 | CHQ1838 VCC | C2 100 nF | `GND` |
 | CHQ1838 GND | wire | `GND` |
 | CHQ1838 OUT | wire | `GPIO5` |
-| GY-SHT21 VIN / GND / SDA / SCL *(optional, later)* | wires | `3V3` / `GND` / `GPIO8` / `GPIO9` |
-
-**The SHT21 goes on 3V3 too.** Some GY-21 modules pull SDA/SCL up to their VIN
-pin; on 5V that would put 5 V on the ESP32's pins.
 
 ### Why these GPIOs
 
@@ -128,8 +124,8 @@ On the N16R8 board these pins are **off-limits**:
 | GPIO 19, 20 | USB |
 | GPIO 43, 44 | serial console (UART0) |
 
-GPIO 4, 5, 8 and 9 have no special function. Use the pins **printed** `4`,
-`5`, `8`, `9` on the board (sometimes `IO4` / `GPIO4`). Don't count positions
+GPIO 4 and 5 have no special function. Use the pins **printed** `4` and
+`5` on the board (sometimes `IO4` / `GPIO4`). Don't count positions
 along the header.
 
 ## 4. Which leg is which
@@ -184,6 +180,40 @@ DevKitC-1 with two USB-C ports). Two things about it:
 **Breadboard tip:** a DevKitC-sized ESP32-S3 is wide and covers almost all the
 holes of an 830 breadboard. Placing it across the gap between two breadboards
 leaves free holes on both sides.
+
+## 7. Soldered version: the IR add-on board (perfboard)
+
+> **Status (2026-10-01): built and verified.** Soldered from this layout
+> and [BUILD.md](BUILD.md); all checks passed and the blaster sends and
+> receives as on the breadboard.
+
+The same circuit as above, soldered on a **2 x 8 cm perfboard**: 6 x 28
+holes, a separate copper ring per hole, the long side lettered A..Z then
+A' B' (the print starts again at A and B), the short side numbered 01..06.
+The ESP32 dev board doesn't fit on it (its pin rows are 10 holes apart), so
+the perfboard is an **add-on board** joined to the ESP32 by 5 wires: either
+part can be replaced alone. **IR only**: a temperature sensor is its own
+module (#86), away from the ESP32's warmth.
+
+**Building it, step by step with checkboxes: [BUILD.md](BUILD.md).**
+
+![Perfboard layout, part side and copper side](images/perfboard.svg)
+
+- **IR LEDs** out of the **A end** (toward the device), the **receiver's
+  lens** out of the **B' end** (toward the room, where the original remote
+  is pressed).
+- **Resistors lying flat**, legs 4 holes apart (B01-F01, ...).
+- **17 solder bridges** between neighbouring holes on the copper side and a
+  **GND line** (bare wire) along the 03 holes from B03 to B'03. No other
+  wires on the board.
+- **Wires to the ESP32:** G01 = 5Vin, I03 = GND, H05 = GPIO4, V05 = 3V3,
+  A'02 = GPIO5.
+
+The drawing and the hole names come from `tools/perfboard.py`, which also
+**checks** the layout: it follows every bridge, the GND line and the links,
+and confirms each of the 10 nets joins exactly the legs the circuit says.
+Change the layout there (and `python3 tools/perfboard.py --list` prints
+every hole in printed names), never by hand in the SVG.
 
 ## Related
 
