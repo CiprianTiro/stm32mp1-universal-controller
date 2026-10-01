@@ -14,6 +14,8 @@
 //      monitor being plugged in or out.
 
 mod display;
+mod ir_finder;
+mod ir_layout;
 mod pointer;
 mod setup;
 mod theme;
@@ -326,6 +328,36 @@ fn main() {
         act("remote", "rename", serde_json::json!({ "button": button.as_str(), "to": to.trim() }))
     });
 
+    // Its code finder for a lost remote (issue #82, ir_finder.rs): the
+    // finder keeps where it is; each tap gives the next action to send.
+    let ir_items = std::rc::Rc::new(slint::VecModel::<RemoteItem>::default());
+    ui.set_ir_items(ir_items.clone().into());
+    let finder = std::rc::Rc::new(std::cell::RefCell::new(ir_finder::Finder::default()));
+    let (act, ui_weak, f, items) = (remote_action.clone(), ui.as_weak(), finder.clone(), ir_items.clone());
+    ui.on_ir_find(move || {
+        let (name, args) = f.borrow_mut().start(&ui_weak.unwrap(), &items);
+        act("remote", name, args);
+    });
+    let (act, ui_weak, f, items) = (remote_action.clone(), ui.as_weak(), finder.clone(), ir_items.clone());
+    ui.on_ir_pick(move |id, label| {
+        if let Some((name, args)) = f.borrow_mut().pick(&ui_weak.unwrap(), &items, &id, &label) {
+            act("remote", name, args);
+        }
+    });
+    let (act, ui_weak, f) = (remote_action.clone(), ui.as_weak(), finder.clone());
+    ui.on_ir_answer(move |yes| {
+        if let Some((name, args)) = f.borrow_mut().answer(&ui_weak.unwrap(), yes) {
+            act("remote", name, args);
+        }
+    });
+    let (act, ui_weak, f) = (remote_action.clone(), ui.as_weak(), finder.clone());
+    ui.on_ir_resend(move || {
+        if let Some((name, args)) = f.borrow().resend(&ui_weak.unwrap()) {
+            act("remote", name, args);
+        }
+    });
+    let finder_act = remote_action.clone();
+
     // A device's details page, and what can be done from it.
     let (ui_weak, r, w) = (ui.as_weak(), rows.clone(), wizard.clone());
     ui.on_open_device(move |id| {
@@ -559,6 +591,14 @@ fn main() {
                     device_message_until = Some(std::time::Instant::now() + DEVICE_MESSAGE_TIME);
                 }
                 ws_client::Update::Removed(Err(message)) => ui.set_dev_message(message.into()),
+                // The code finder's actions (issue #82): its next step.
+                ws_client::Update::DeviceAction { name, args, result }
+                    if ui.get_page() == PAGE_IR_REMOTE && matches!(name.as_str(), "library" | "finder" | "try" | "use_set") =>
+                {
+                    if let Some((name, args)) = finder.borrow_mut().result(&ui, &ir_items, &name, &args, &result) {
+                        finder_act("remote", name, args);
+                    }
+                }
                 // An IR device's action (issue #42): what happened, in one
                 // line. The buttons themselves follow as DeviceChanged.
                 ws_client::Update::DeviceAction { name, args, result } if ui.get_page() == PAGE_IR_REMOTE => {
@@ -990,6 +1030,16 @@ fn show_ir_remote(ui: &AppWindow, device: &ws_client::Device) {
         .as_ref()
         .map(|r| r.buttons.iter().map(|b| b.into()).collect())
         .unwrap_or_default();
+    // As a remote's rows where the names are the hub's standard ones
+    // (issue #82: a TV found in the code library).
+    let names: Vec<String> = buttons.iter().map(|b| b.to_string()).collect();
+    let (rows, others) = ir_layout::layout(&names);
+    ui.set_ir_layout(std::rc::Rc::new(slint::VecModel::from(rows)).into());
+    let others: Vec<slint::SharedString> = others.into_iter().map(Into::into).collect();
+let labelled: Vec<IrKeyItem> =
+        names.iter().map(|n| IrKeyItem { name: n.as_str().into(), label: ir_layout::label(n).into() }).collect();
+    ui.set_ir_labelled(std::rc::Rc::new(slint::VecModel::from(labelled)).into());
+        ui.set_ir_others(std::rc::Rc::new(slint::VecModel::from(others)).into());
     ui.set_ir_buttons(std::rc::Rc::new(slint::VecModel::from(buttons)).into());
     ui.set_ir_status(
         match device.online.as_deref() {

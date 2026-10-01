@@ -43,6 +43,11 @@
  * codes themselves stay on the hub (ir_codes.rs), keyed by button name;
  * clients only ever see the names. forget / rename only change that store,
  * so they also work while the blaster is offline.
+ *
+ * THE CODE LIBRARY (issue #82, ir_library.rs), for a device without its
+ * remote: library / finder look up code sets, try sends one button of a
+ * set, use_set copies a set's buttons into the store (after the taught
+ * ones). Only `try` needs the blaster.
  */
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -56,6 +61,8 @@ use super::net::{self, NetError};
 use super::{Adapter, BoxFuture, DeviceCmd, DeviceHandle, Hub, Probe, SetupError, SetupValues};
 use crate::device::{Device, Health, Remote};
 use crate::templates::ErrorKind;
+use crate::ir_encode;
+use crate::ir_library::{self, IrLibrary};
 use crate::tls;
 
 /* The blaster's TCP port (PROTOCOL.md). */
@@ -455,7 +462,7 @@ impl Task {
             println!("ir-blaster: {} has no address or pairing: pair it again", self.id);
             self.hub.set_online(&self.id, Health::Unauthorized).await;
             while let Some(cmd) = commands.recv().await {
-                self.offline_command(cmd);
+                self.offline_command(cmd).await;
             }
             return;
         };
@@ -500,7 +507,7 @@ impl Task {
                     cmd = commands.recv() => match cmd {
                         None => return,
                         Some(cmd) => {
-                            if self.offline_command(cmd) {
+                            if self.offline_command(cmd).await {
                                 break;
                             }
                         }
@@ -514,19 +521,10 @@ impl Task {
 
     /* A command while there's no connection. Returns true if it needed
      * the blaster (so: try to reconnect now). */
-    fn offline_command(&self, cmd: DeviceCmd) -> bool {
+    async fn offline_command(&self, cmd: DeviceCmd) -> bool {
         match cmd {
-            DeviceCmd::Action { capability, name, args, reply } if capability == "remote" && matches!(name.as_str(), "forget" | "rename") => {
-                let result = self.edit_buttons(&name, &args);
-                /* report_buttons is async; the store is the truth, so a
-                 * spawned report is fine here. */
-                if let Ok(names) = &result {
-                    let hub = self.hub.clone();
-                    let id = self.id.clone();
-                    let names = names.clone();
-                    tokio::spawn(async move { report_buttons(&hub, &id, names).await });
-                }
-                let _ = reply.send(result.map(|_| json!({})));
+            DeviceCmd::Action { capability, name, args, reply } if capability == "remote" && is_hub_only(&name) => {
+                let _ = reply.send(self.hub_only_action(&name, &args).await);
                 false
             }
             cmd => {
@@ -536,12 +534,52 @@ impl Task {
         }
     }
 
-    /* forget / rename: only the hub's store changes. */
-    fn edit_buttons(&self, name: &str, args: &Value) -> Result<Vec<String>, String> {
-        let button = args["button"].as_str().unwrap_or_default();
+    /* The remote actions that only need the hub's own data -- its stored
+     * buttons (ir_codes.rs) and the code library (ir_library.rs) -- so
+     * they work while the blaster is offline too. */
+    async fn hub_only_action(&self, name: &str, args: &Value) -> Result<Value, String> {
+        let text = |key: &str| args[key].as_str().unwrap_or_default().to_string();
         match name {
-            "forget" => self.hub.ir_codes().forget(&self.id, button),
-            _ => self.hub.ir_codes().rename(&self.id, button, args["to"].as_str().unwrap_or_default()),
+            "forget" | "rename" => {
+                let button = text("button");
+                let names = match name {
+                    "forget" => self.hub.ir_codes().forget(&self.id, &button)?,
+                    _ => self.hub.ir_codes().rename(&self.id, &button, &text("to"))?,
+                };
+                self.report_buttons(names).await;
+                Ok(json!({}))
+            }
+            "library" => {
+                let type_id = args.get("type").map(|_| text("type"));
+                library(move |lib| match type_id {
+                    None => Ok(json!({"types": lib.types()?})),
+                    Some(type_id) => Ok(json!({"brands": lib.brands(&type_id)?})),
+                })
+                .await
+            }
+            "finder" => {
+                let (type_id, brand) = (text("type"), text("brand"));
+                library(move |lib| Ok(json!({"candidates": lib.candidates(&type_id, &brand)?}))).await
+            }
+            "use_set" => {
+                let (type_id, set_id) = (text("type"), text("set"));
+                let set = library(move |lib| lib.set(&type_id, &set_id)).await?;
+                /* Only what this hub can send: a button it can't would
+                 * just fail when pressed. Stored as the library has it
+                 * ({"proto": "rc5", ...} is a few bytes, its raw form
+                 * hundreds) and encoded at every press (ir_encode.rs:
+                 * RC5/RC6 change a bit on every press). */
+                let buttons: Vec<(String, Value)> =
+                    set.buttons.into_iter().filter(|(_, code)| ir_encode::to_blaster(code).is_some()).collect();
+                /* A TV's buttons by the hub's standard names: the screen
+                 * then lays them out as a remote. */
+                let buttons = ir_library::standard_names(&text("type"), buttons);
+                let (names, added) = self.hub.ir_codes().add_set(&self.id, buttons);
+                self.report_buttons(names).await;
+                println!("ir-blaster: {}: {added} buttons from the library ({})", self.id, set.id);
+                Ok(json!({"added": added}))
+            }
+            other => Err(format!("ir-blaster can't {other} without the blaster")),
         }
     }
 
@@ -610,6 +648,11 @@ impl Task {
                     let _ = reply.send(Err(format!("{button:?} isn't taught yet")));
                     return Ok(());
                 };
+                /* Taught codes pass through; library ones are encoded. */
+                let Some(code) = ir_encode::for_sending(&code) else {
+                    let _ = reply.send(Err(format!("this hub can't send {button:?} ({})", code["proto"])));
+                    return Ok(());
+                };
                 send_request(conn, "send", json!({"code": code}), PendingKind::Send(reply), REPLY_TIMEOUT).await
             }
             "learn" => {
@@ -623,12 +666,30 @@ impl Task {
                 let limit = Duration::from_secs(seconds) + REPLY_TIMEOUT;
                 send_request(conn, "learn", json!({"timeout_ms": seconds * 1000}), kind, limit).await
             }
-            "forget" | "rename" => {
-                let result = self.edit_buttons(&name, &args);
-                if let Ok(names) = &result {
-                    self.report_buttons(names.clone()).await;
+            "try" => {
+                /* One button of a library set, for the code finder: sent,
+                 * not stored. */
+                let (type_id, set_id, button) = (
+                    args["type"].as_str().unwrap_or_default().to_string(),
+                    args["set"].as_str().unwrap_or_default().to_string(),
+                    args["button"].as_str().unwrap_or_default().to_string(),
+                );
+                let code = library(move |lib| {
+                    let set = lib.set(&type_id, &set_id)?;
+                    let (_, code) = set.buttons.iter().find(|(name, _)| *name == button).ok_or_else(|| format!("{set_id} has no button {button:?}"))?;
+                    ir_encode::for_sending(code).ok_or_else(|| format!("this hub can't send {}", code["proto"]))
+                })
+                .await;
+                match code {
+                    Ok(code) => send_request(conn, "send", json!({"code": code}), PendingKind::Send(reply), REPLY_TIMEOUT).await,
+                    Err(why) => {
+                        let _ = reply.send(Err(why));
+                        Ok(())
+                    }
                 }
-                let _ = reply.send(result.map(|_| json!({})));
+            }
+            name if is_hub_only(name) => {
+                let _ = reply.send(self.hub_only_action(name, &args).await);
                 Ok(())
             }
             other => {
@@ -738,6 +799,20 @@ fn fail(kind: PendingKind, why: &str) {
             let _ = reply.send(Err(why.to_string()));
         }
     }
+}
+
+/* Remote actions the hub answers from its own data (hub_only_action). */
+fn is_hub_only(name: &str) -> bool {
+    matches!(name, "forget" | "rename" | "library" | "finder" | "use_set")
+}
+
+/* Runs a code library lookup on a blocking thread: reading and parsing a
+ * type file (up to ~1 MB) takes a moment on the board, and the async
+ * threads that serve every device and client must not wait for it. */
+async fn library<T: Send + 'static>(f: impl FnOnce(&IrLibrary) -> Result<T, String> + Send + 'static) -> Result<T, String> {
+    tokio::task::spawn_blocking(move || f(ir_library::shared()))
+        .await
+        .map_err(|e| format!("IR code library: {e}"))?
 }
 
 #[cfg(test)]

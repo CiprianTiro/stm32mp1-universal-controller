@@ -15,9 +15,9 @@
 #
 # Dev only: the change lives on the board's rootfs until the next flash,
 # and it needs SSH (so not on the production image). Besides the binary
-# and its units, only the device templates and the tmpfiles rules are
-# copied (issue #40); anything else the recipe installs is NOT -- for
-# that, do a normal build-hw + flash-hw.
+# and its units, only the device templates, the IR code library (#82) and
+# the tmpfiles rules are copied (issue #40); anything else the recipe
+# installs is NOT -- for that, do a normal build-hw + flash-hw.
 # =============================================================================
 set -euo pipefail
 
@@ -62,6 +62,18 @@ if [ -d "$TEMPLATES" ]; then
     scp -q "$TEMPLATES"/*.json "root@$BOARD_HOST:/usr/share/universal-controller/templates/"
 fi
 
+# The IR code library (backend-daemon, issue #82): its own recipe
+# (ir-library.bb), built from the pinned database and copied as a whole
+# folder. Rebuilt by bitbake only when the converter or the commit changes.
+if [ "$RECIPE" = backend-daemon ]; then
+    docker compose exec -T yocto-builder bash -c \
+        "cd /home/builder/workspace && source poky/oe-init-build-env build >/dev/null && bitbake ir-library"
+    LIBRARY=$(ls -d build/tmp/work/*/ir-library/*/image/usr/share/universal-controller/ir-library 2>/dev/null | head -1)
+    if [ -n "$LIBRARY" ]; then
+        ssh "root@$BOARD_HOST" "rm -rf /usr/share/universal-controller/ir-library && mkdir -p /usr/share/universal-controller/ir-library"
+        scp -q "$LIBRARY"/*.json "root@$BOARD_HOST:/usr/share/universal-controller/ir-library/"
+    fi
+fi
 # Its tmpfiles rules (the folders it owns, e.g. #40's secrets folder):
 # backend-daemon applies them itself before every start.
 for rules in "$IMAGE_DIR"/usr/lib/tmpfiles.d/*.conf; do

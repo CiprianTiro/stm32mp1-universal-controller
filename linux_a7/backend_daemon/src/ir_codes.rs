@@ -20,14 +20,17 @@
  * Shape: { "<device id>": [ {"button": "Power", "code": {...}}, ... ] }.
  * A LIST, not a map: the order is the order the buttons were taught, which
  * is the order a screen shows them in. `code` is the blaster's own JSON
- * (firmware_ir_blaster/PROTOCOL.md, "Codes"), kept as it came: the hub
- * never needs to look inside, it only hands it back to the blaster.
+ * (firmware_ir_blaster/PROTOCOL.md, "Codes") for a taught button, kept as
+ * it came; for a button from the code library (#82) it's the library's
+ * code, e.g. {"proto": "rc5", "address": 0, "command": 12}, which
+ * ir_encode.rs turns into the blaster's at every press.
  */
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 use tokio::sync::watch;
 
+use crate::device::{valid_button_name, MAX_REMOTE_BUTTONS};
 use crate::state::DeviceId;
 
 pub const IR_CODES_SCHEMA: u32 = 1;
@@ -91,6 +94,32 @@ impl IrCodes {
         let names = names_of(buttons);
         self.save(&all);
         names
+    }
+
+    /* Adds a code set's buttons from the library (issue #82) after the
+     * device's own. A button already there keeps its code (what was
+     * taught wins), names a remote can't have are left out, and at most
+     * MAX_REMOTE_BUTTONS in all. Returns the button names and how many
+     * were added. */
+    pub fn add_set(&self, device: &str, set: Vec<(String, serde_json::Value)>) -> (Vec<String>, usize) {
+        let mut all = self.all.lock().unwrap();
+        let buttons = all.entry(device.to_string()).or_default();
+        let mut added = 0;
+        for (button, code) in set {
+            if buttons.len() >= MAX_REMOTE_BUTTONS {
+                break;
+            }
+            if !valid_button_name(&button) || buttons.iter().any(|b| b.button == button) {
+                continue;
+            }
+            buttons.push(LearnedButton { button, code });
+            added += 1;
+        }
+        let names = names_of(buttons);
+        if added > 0 {
+            self.save(&all);
+        }
+        (names, added)
     }
 
     /* Forgets one button. Err if the device has no such button. */
@@ -193,6 +222,29 @@ mod tests {
         assert_eq!(c.forget("astro", "Power"), Ok(vec!["Colour".to_string()]));
         assert!(c.forget("astro", "Power").is_err());
         assert!(c.forget("lamp", "Power").is_err());
+    }
+
+    #[test]
+    fn add_set_keeps_taught_buttons() {
+        let (c, mut saved) = codes();
+        c.learn("strip", "Power", nec(0x45));
+        saved.borrow_and_update();
+        let set = vec![
+            ("Power".to_string(), nec(0x40)),
+            ("Red".to_string(), nec(0x58)),
+            (" bad name".to_string(), nec(0x01)),
+        ];
+        assert_eq!(c.add_set("strip", set), (vec!["Power".to_string(), "Red".to_string()], 1));
+        /* The taught Power keeps its code. */
+        assert_eq!(c.code("strip", "Power"), Some(nec(0x45)));
+        assert!(saved.has_changed().unwrap());
+        /* Nothing new: nothing saved. */
+        saved.borrow_and_update();
+        assert_eq!(c.add_set("strip", vec![("Red".to_string(), nec(0x58))]).1, 0);
+        assert!(!saved.has_changed().unwrap());
+        /* The limit holds. */
+        let many = (0..120).map(|i| (format!("B{i}"), nec(0))).collect();
+        assert_eq!(c.add_set("strip", many).0.len(), MAX_REMOTE_BUTTONS);
     }
 
     #[test]

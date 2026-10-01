@@ -31,6 +31,9 @@ mod theme;
 // without libinput's development files.
 #[path = "../../../linux_a7/ui_layer/src/zones.rs"]
 mod zones;
+// The IR remote's layout (issue #82), as the hub's UI makes it.
+#[path = "../../../linux_a7/ui_layer/src/ir_layout.rs"]
+mod ir_layout;
 
 thread_local! {
     /// The sample devices, kept to split them into rows for each size.
@@ -66,7 +69,7 @@ const PAGES: [(&str, Option<i32>); 12] = [
 
 /// The wizard page (10) in each kind of step (issue #40): the step's
 /// sample data is set just before its render.
-const WIZARD_STEPS: [(&str, fn(&AppWindow)); 19] = [
+const WIZARD_STEPS: [(&str, fn(&AppWindow)); 25] = [
     // The remote (issue #44), page 12, in its views.
     ("remote", |ui| {
         ui.set_page(12);
@@ -121,6 +124,44 @@ const WIZARD_STEPS: [(&str, fn(&AppWindow)); 19] = [
     ("ir-waiting", |ui| {
         ir_remote(ui, &["Power"], 3);
         ui.set_ir_selected("Brighter".into());
+    }),
+    // The code finder for a lost remote (issue #82), views 5-8.
+    ("ir-find-type", |ui| {
+        ir_remote(ui, &[], 5);
+        ir_items(ui, &[("led_lighting", "LED lights and strips", ""), ("tv", "TVs", ""), ("projector", "Projectors", ""), ("fan", "Fans", ""), ("heater", "Heaters", ""), ("soundbar", "Soundbars", "")]);
+    }),
+    ("ir-find-brand", |ui| {
+        ir_remote(ui, &[], 6);
+        ir_items(ui, &[
+            ("", "Not listed / don't know", "all brands"),
+            ("Generic (no brand)", "Generic (no brand)", "34 remotes"),
+            ("Govee", "Govee", "4 remotes"),
+            ("Philips", "Philips", "3 remotes"),
+            ("Sylvania", "Sylvania", "1 remote"),
+        ]);
+    }),
+    ("ir-find-test", |ui| {
+        ir_remote(ui, &[], 7);
+        ui.set_ir_question("Did the device react?".into());
+        ui.set_ir_detail("Sent \u{201C}POWER\u{201D}: code 1 of 88. Point the IR blaster at the device, from close by.".into());
+    }),
+    ("ir-find-check", |ui| {
+        ir_remote(ui, &[], 8);
+        ui.set_ir_question("Did it react again?".into());
+        ui.set_ir_detail("Sent \u{201C}Red\u{201D} from \u{201C}LED 44Key\u{201D} (remote 1 of 7 that share this Power code).".into());
+    }),
+    ("ir-tv-layout", |ui| {
+        let buttons = [
+            "Power", "HOME", "BACK", "MENU", "UP", "LEFT", "OK", "RIGHT", "DOWN", "VOLUME_DOWN", "MUTE", "VOLUME_UP",
+            "CHANNEL_DOWN", "CHANNEL_UP", "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "Netflix", "Input", "Subtitle",
+        ];
+        ir_remote(ui, &buttons, 0);
+        ui.set_remote_name("Living room TV".into());
+    }),
+    ("ir-find-done", |ui| {
+        ir_remote(ui, &["POWER", "Light UP", "Light DOWN", "Play / Pause", "Red", "Green", "Blue", "White", "Flash", "Fade 3", "Jump 7", "Quick"], 0);
+        ui.set_ir_message_ok(true);
+        ui.set_ir_message("Added 43 buttons from \u{201C}LED 44Key\u{201D}. Tap one to try it.".into());
     }),
     // The IR blaster's pairing code (issue #42): a secret field, hidden,
     // then shown while typing.
@@ -194,11 +235,28 @@ fn ir_remote(ui: &AppWindow, buttons: &[&str], view: i32) {
     ui.set_page(13);
     ui.set_remote_name("Astronaut".into());
     let buttons: Vec<slint::SharedString> = buttons.iter().map(|&b| b.into()).collect();
+    let names: Vec<String> = buttons.iter().map(|b| b.to_string()).collect();
+    let (rows, others) = ir_layout::layout(&names);
+    ui.set_ir_layout(Rc::new(VecModel::from(rows)).into());
+    let others: Vec<slint::SharedString> = others.into_iter().map(Into::into).collect();
+let labelled: Vec<IrKeyItem> =
+        names.iter().map(|n| IrKeyItem { name: n.as_str().into(), label: ir_layout::label(n).into() }).collect();
+    ui.set_ir_labelled(std::rc::Rc::new(slint::VecModel::from(labelled)).into());
+        ui.set_ir_others(Rc::new(VecModel::from(others)).into());
     ui.set_ir_buttons(Rc::new(VecModel::from(buttons)).into());
     ui.set_ir_status("".into());
     ui.set_ir_message("".into());
     ui.set_ir_text("".into());
+    ui.set_ir_loading(false);
     ui.set_ir_view(view);
+}
+
+/// The finder's type or brand list (issue #82): (id, label, detail).
+fn ir_items(ui: &AppWindow, rows: &[(&str, &str, &str)]) {
+    let rows: Vec<RemoteItem> =
+        rows.iter().map(|(id, label, detail)| RemoteItem { id: (*id).into(), label: (*label).into(), detail: (*detail).into() }).collect();
+    ui.set_ir_items(Rc::new(VecModel::from(rows)).into());
+    ui.set_ir_loading(false);
 }
 
 /// Resets the wizard page to one step.

@@ -16,10 +16,25 @@
 //   2  naming a new button (keyboard)
 //   3  waiting for the button on the original remote
 //   4  renaming a button (keyboard)
+// and the code finder for a lost remote (issue #82, main.rs ir_finder.rs):
+//   5  pick the device's type      6  pick its brand
+//   7  "Did the device react?" after its Power
+//   8  "Did it react again?" after a second button
 
 import { Theme } from "theme.slint";
 import { PageHeader, ActionButton } from "common.slint";
 import { Keyboard } from "keyboard.slint";
+import { RemoteItem } from "remote.slint";
+
+// A device's buttons laid out as a remote (issue #82, main.rs
+// ir_layout.rs): rows of keys; a key without a name is a gap.
+export struct IrKeyItem {
+    name: string,
+    label: string,
+}
+export struct IrRow {
+    keys: [IrKeyItem],
+}
 
 // One taught button: as wide as the grid gives it, thumb-sized.
 component IrKey inherits Rectangle {
@@ -40,6 +55,41 @@ component IrKey inherits Rectangle {
         vertical-alignment: center;
         wrap: word-wrap;
         overflow: elide;
+    }
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// A row of the finder's type or brand list.
+component ListRow inherits Rectangle {
+    in property <string> label;
+    in property <string> detail;
+    callback clicked();
+
+    border-radius: Theme.radius-medium;
+    background: touch.pressed ? Theme.surface-pressed : Theme.surface;
+    HorizontalLayout {
+        padding-left: Theme.space-l;
+        padding-right: Theme.space-l;
+        spacing: Theme.space-s;
+        Text {
+            text: root.label;
+            color: Theme.text;
+            font-size: Theme.font-subtitle;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+        Text {
+            text: root.detail;
+            color: Theme.text-muted;
+            font-size: Theme.font-body;
+            vertical-alignment: center;
+            overflow: elide;
+        }
     }
     touch := TouchArea {
         clicked => {
@@ -70,6 +120,13 @@ component NameField inherits Rectangle {
 export component IrRemotePage inherits Rectangle {
     in property <string> device-name;
     in property <[string]> buttons;
+    // The same buttons as a remote's rows, and the ones not in them (no
+    // rows: just the grid of `buttons`).
+    in property <[IrRow]> layout;
+    in property <[string]> others;
+    // Every button with what it shows ("VOLUME_UP" as "Vol +"), for the
+    // edit view.
+    in property <[IrKeyItem]> labelled;
     // "" when the blaster can be used, else a sentence saying why not.
     in property <string> status;
     // One line under the title: what just happened (ok) or went wrong.
@@ -80,12 +137,22 @@ export component IrRemotePage inherits Rectangle {
     in-out property <string> text;
     // The button being taught (view 3) or renamed (view 4).
     in-out property <string> selected;
+    // The finder (views 5-8): the list on show, waiting for the hub, and
+    // the question after a code was sent.
+    in property <[RemoteItem]> items;
+    in property <bool> loading;
+    in property <string> question;
+    in property <string> detail;
     callback back();
     callback press(string);
     callback learn(string);
     callback forget(string);
     callback rename(string, string);
     callback backspace();
+    callback find();
+    callback pick(string, string);
+    callback answer(bool);
+    callback resend();
 
     // Edit view: the button whose Delete was tapped once ("Delete?").
     property <string> confirm-delete;
@@ -105,10 +172,17 @@ export component IrRemotePage inherits Rectangle {
                 : view == 2 ? "Teach a button"
                 : view == 3 ? "Teach \u{201C}" + root.selected + "\u{201D}"
                 : view == 4 ? "Rename \u{201C}" + root.selected + "\u{201D}"
+                : view == 5 ? "What kind of device?"
+                : view == 6 ? "Which brand?"
+                : view == 7 || view == 8 ? "Finding the codes"
                 : root.device-name;
             back => {
                 if (view == 4) {
                     view = 1;
+                } else if (view == 6) {
+                    view = 5;
+                } else if (view == 7 || view == 8) {
+                    view = 6;
                 } else if (view != 0) {
                     view = 0;
                 } else {
@@ -122,7 +196,7 @@ export component IrRemotePage inherits Rectangle {
             font-size: Theme.font-body;
             wrap: word-wrap;
         }
-        if message != "" && view != 3: Text {
+        if message != "" && view != 3 && view != 5 && view != 6: Text {
             text: message;
             color: message-ok ? Theme.ok : Theme.error;
             font-size: Theme.font-body;
@@ -132,14 +206,54 @@ export component IrRemotePage inherits Rectangle {
         // ---- 0: the buttons ----
         if view == 0 && buttons.length == 0: Text {
             vertical-stretch: 1;
-            text: "No buttons yet.\n\nTap \u{201C}Teach a button\u{201D}, give it a name, then press that button on the device's original remote, pointed at the IR blaster.";
+            text: "No buttons yet.\n\nTap \u{201C}Teach a button\u{201D}, give it a name, then press that button on the device's original remote, pointed at the IR blaster.\n\nNo remote? The hub knows the codes of many devices: tap \u{201C}Find its codes\u{201D}.";
             color: Theme.text-muted;
             font-size: Theme.font-subtitle;
             wrap: word-wrap;
             vertical-alignment: center;
             horizontal-alignment: center;
         }
-        if view == 0 && buttons.length > 0: Flickable {
+        if view == 0 && layout.length > 0: Flickable {
+            vertical-stretch: 1;
+            VerticalLayout {
+                spacing: Theme.space-s;
+                for row in layout: HorizontalLayout {
+                    spacing: Theme.space-s;
+                    height: key-height;
+                    for key in row.keys: Rectangle {
+                        horizontal-stretch: 1;
+                        if key.name != "": IrKey {
+                            width: parent.width;
+                            height: parent.height;
+                            text: key.label;
+                            clicked => {
+                                root.press(key.name);
+                            }
+                        }
+                    }
+                }
+                if others.length > 0: Text {
+                    text: "More buttons";
+                    color: Theme.text-muted;
+                    font-size: Theme.font-body;
+                }
+                // The rest as the usual grid.
+                if others.length > 0: Rectangle {
+                    height: ceil(others.length / columns) * (key-height + Theme.space-s);
+                    for name[i] in others: IrKey {
+                        x: (i - floor(i / columns) * columns) * (parent.width + Theme.space-s) / columns;
+                        y: floor(i / columns) * (key-height + Theme.space-s);
+                        width: (parent.width + Theme.space-s) / columns - Theme.space-s;
+                        height: key-height;
+                        text: name;
+                        clicked => {
+                            root.press(name);
+                        }
+                    }
+                }
+            }
+        }
+        if view == 0 && layout.length == 0 && buttons.length > 0: Flickable {
             vertical-stretch: 1;
             content-height: ceil(buttons.length / columns) * (key-height + Theme.space-s);
             for name[i] in buttons: IrKey {
@@ -177,17 +291,25 @@ export component IrRemotePage inherits Rectangle {
             }
         }
 
+        if view == 0: ActionButton {
+            text: buttons.length == 0 ? "No remote? Find its codes" : "Add buttons from the code library";
+            enabled: status == "";
+            clicked => {
+                root.find();
+            }
+        }
+
         // ---- 1: edit ----
         if view == 1: Flickable {
             vertical-stretch: 1;
-            content-height: buttons.length * (Theme.touch-height + Theme.space-s);
-            for name[i] in buttons: HorizontalLayout {
+            content-height: labelled.length * (Theme.touch-height + Theme.space-s);
+            for item[i] in labelled: HorizontalLayout {
                 y: i * (Theme.touch-height + Theme.space-s);
                 width: parent.width;
                 height: Theme.touch-height;
                 spacing: Theme.space-s;
                 Text {
-                    text: name;
+                    text: item.label;
                     color: Theme.text;
                     font-size: Theme.font-subtitle;
                     vertical-alignment: center;
@@ -197,8 +319,8 @@ export component IrRemotePage inherits Rectangle {
                 ActionButton {
                     text: "Rename";
                     clicked => {
-                        root.selected = name;
-                        root.text = name;
+                        root.selected = item.name;
+                        root.text = item.name;
                         view = 4;
                     }
                 }
@@ -206,20 +328,20 @@ export component IrRemotePage inherits Rectangle {
                     text: "Teach again";
                     enabled: status == "";
                     clicked => {
-                        root.selected = name;
-                        root.learn(name);
+                        root.selected = item.name;
+                        root.learn(item.name);
                         view = 3;
                     }
                 }
                 ActionButton {
-                    text: confirm-delete == name ? "Delete?" : "Delete";
+                    text: confirm-delete == item.name ? "Delete?" : "Delete";
                     destructive: true;
                     clicked => {
-                        if (confirm-delete == name) {
+                        if (confirm-delete == item.name) {
                             confirm-delete = "";
-                            root.forget(name);
+                            root.forget(item.name);
                         } else {
-                            confirm-delete = name;
+                            confirm-delete = item.name;
                         }
                     }
                 }
@@ -292,6 +414,84 @@ export component IrRemotePage inherits Rectangle {
             text: "Cancel";
             clicked => {
                 view = 0;
+            }
+        }
+
+        // ---- 5 / 6: the finder's type and brand lists ----
+        if (view == 5 || view == 6) && loading: Text {
+            vertical-stretch: 1;
+            text: "Loading\u{2026}";
+            color: Theme.text-muted;
+            font-size: Theme.font-subtitle;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+        if (view == 5 || view == 6) && !loading && message != "": Text {
+            text: message;
+            color: message-ok ? Theme.ok : Theme.error;
+            font-size: Theme.font-body;
+            wrap: word-wrap;
+        }
+        if (view == 5 || view == 6) && !loading: Flickable {
+            vertical-stretch: 1;
+            content-height: items.length * (Theme.touch-height + Theme.space-s);
+            for item[i] in items: ListRow {
+                y: i * (Theme.touch-height + Theme.space-s);
+                width: parent.width;
+                height: Theme.touch-height;
+                label: item.label;
+                detail: item.detail;
+                clicked => {
+                    root.pick(item.id, item.label);
+                }
+            }
+        }
+
+        // ---- 7 / 8: did it react? ----
+        if view == 7 || view == 8: VerticalLayout {
+            vertical-stretch: 1;
+            alignment: center;
+            spacing: Theme.space-xl;
+            Text {
+                text: loading && question == "" ? "Looking up the codes\u{2026}" : question;
+                color: Theme.text;
+                font-size: Theme.font-title;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+            if !(loading && question == ""): Text {
+                text: detail;
+                color: Theme.text-muted;
+                font-size: Theme.font-body;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+        }
+        if (view == 7 || view == 8) && question != "": HorizontalLayout {
+            spacing: Theme.space-s;
+            ActionButton {
+                text: "No";
+                horizontal-stretch: 1;
+                enabled: !loading;
+                clicked => {
+                    root.answer(false);
+                }
+            }
+            ActionButton {
+                text: "Yes, it did";
+                primary: true;
+                horizontal-stretch: 1;
+                enabled: !loading;
+                clicked => {
+                    root.answer(true);
+                }
+            }
+        }
+        if (view == 7 || view == 8) && question != "": ActionButton {
+            text: "Send again";
+            enabled: !loading;
+            clicked => {
+                root.resend();
             }
         }
     }

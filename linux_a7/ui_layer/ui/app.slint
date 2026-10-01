@@ -24,7 +24,7 @@ import { HeaderButton } from "common.slint";
 import { DeviceItem, MediaInputItem, DeviceList } from "devices.slint";
 import { TemplateItem, FoundItem, FieldItem, ChoiceItem, VariantItem, AddDevicePage, WizardPage, DevicePage } from "wizard.slint";
 import { RemoteItem, RemotePage } from "remote.slint";
-import { IrRemotePage } from "ir_remote.slint";
+import { IrRemotePage, IrKeyItem, IrRow } from "ir_remote.slint";
 import { ClientItem, SettingsPage, ClientsPage, PairingPage } from "settings.slint";
 import { NetStatus, WifiNetwork, NetIndicator, NetworkPage, PasswordPage, CountryPage } from "network.slint";
 import { AccentItem, ZoneItem, AppearancePage, TimeZonePage } from "appearance.slint";
@@ -32,7 +32,7 @@ import { AccentItem, ZoneItem, AppearancePage, TimeZonePage } from "appearance.s
 // Re-exported so main.rs can use these types (the Rust side only sees what
 // the main file exports).
 export { NetStatus, WifiNetwork, DeviceItem, MediaInputItem, ClientItem, AccentItem, ZoneItem }
-export { TemplateItem, FoundItem, FieldItem, ChoiceItem, VariantItem, RemoteItem }
+export { TemplateItem, FoundItem, FieldItem, ChoiceItem, VariantItem, RemoteItem, IrKeyItem, IrRow }
 // The design tokens (issue #39): main.rs's theme.rs sets them.
 export { Theme }
 
@@ -306,6 +306,9 @@ export component AppWindow inherits Window {
     // An IR blaster device's remote (issue #42, ir_remote.slint): the
     // taught buttons. Taps go out through the same remote-id.
     in property <[string]> ir-buttons;
+    in property <[IrRow]> ir-layout;
+    in property <[string]> ir-others;
+    in property <[IrKeyItem]> ir-labelled;
     in property <string> ir-status;
     in property <string> ir-message;
     in property <bool> ir-message-ok;
@@ -316,6 +319,15 @@ export component AppWindow inherits Window {
     callback ir-learn(string);
     callback ir-forget(string);
     callback ir-rename(string, string);
+    // Its code finder for a lost remote (issue #82, ir_finder.rs).
+    in property <[RemoteItem]> ir-items;
+    in property <bool> ir-loading;
+    in property <string> ir-question;
+    in property <string> ir-detail;
+    callback ir-find();
+    callback ir-pick(string, string);
+    callback ir-answer(bool);
+    callback ir-resend();
     callback open-device(string);
     callback device-reauth(string);
     callback device-reconfigure(string);
@@ -456,17 +468,36 @@ export component AppWindow inherits Window {
         height: parent.height;
         device-name: root.remote-name;
         buttons: root.ir-buttons;
+        layout: root.ir-layout;
+        others: root.ir-others;
+        labelled: root.ir-labelled;
         status: root.ir-status;
         message: root.ir-message;
         message-ok: root.ir-message-ok;
         view <=> root.ir-view;
         text <=> root.ir-text;
         selected <=> root.ir-selected;
+        items: root.ir-items;
+        loading: root.ir-loading;
+        question: root.ir-question;
+        detail: root.ir-detail;
         back => {
             page = 0;
         }
         press(button) => {
             root.ir-press(button);
+        }
+        find => {
+            root.ir-find();
+        }
+        pick(id, label) => {
+            root.ir-pick(id, label);
+        }
+        answer(yes) => {
+            root.ir-answer(yes);
+        }
+        resend => {
+            root.ir-resend();
         }
         learn(button) => {
             root.ir-learn(button);

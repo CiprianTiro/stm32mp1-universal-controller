@@ -68,6 +68,8 @@ SRC_URI = " \
     file://src/helper.rs \
     file://src/hotspot.rs \
     file://src/ir_codes.rs \
+    file://src/ir_encode.rs \
+    file://src/ir_library.rs \
     file://src/main.rs \
     file://src/mqtt.rs \
     file://src/network.rs \
@@ -205,3 +207,7 @@ FILES:${PN} += " \
     ${nonarch_libdir}/tmpfiles.d/backend-daemon.conf \
     ${datadir}/universal-controller/templates \
 "
+
+# The IR code library (issue #82, src/ir_library.rs): data from its own
+# recipe, always installed with the daemon that reads it.
+RDEPENDS:${PN} += "ir-library"
