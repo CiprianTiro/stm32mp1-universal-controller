@@ -52,6 +52,11 @@ SRC_URI = " \
     file://src/adapters/channels.rs \
     file://src/adapters/lg_webos.rs \
     file://src/adapters/m4_led.rs \
+    file://src/adapters/esp_prov/mod.rs \
+    file://src/adapters/esp_prov/ble.rs \
+    file://src/adapters/esp_prov/pb.rs \
+    file://src/adapters/esp_prov/srp.rs \
+    file://src/adapters/ir_blaster.rs \
     file://src/adapters/net.rs \
     file://src/adapters/wled.rs \
     file://src/auth.rs \
@@ -62,6 +67,7 @@ SRC_URI = " \
     file://src/health.rs \
     file://src/helper.rs \
     file://src/hotspot.rs \
+    file://src/ir_codes.rs \
     file://src/main.rs \
     file://src/mqtt.rs \
     file://src/network.rs \

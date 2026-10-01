@@ -259,11 +259,18 @@ pub struct Channel {
     pub name: String,
 }
 
-/* A remote control's buttons (issue #44): TVs now, the IR blaster (#42)
- * later. There's no state to set -- a button is PRESSED, an action (see
+/* A remote control's buttons (issue #44): TVs, and the IR blaster (#42).
+ * There's no state to set -- a button is PRESSED, an action (see
  * check_action) -- so the state only says which buttons this device has,
- * and only the device reports it. Names are the hub's own, the same for
- * every brand (REMOTE_BUTTONS); an adapter translates them. */
+ * and only the device reports it.
+ *
+ * Two kinds of button names:
+ *   - the hub's own (REMOTE_BUTTONS), the same for every brand: a TV's
+ *     adapter translates them, and a screen can lay them out as a real
+ *     remote (arrows around OK, ...);
+ *   - on a remote that LEARNS (an IR blaster), also names the person gave
+ *     when teaching a button ("Power", "Red", "Brighter"): a screen shows
+ *     those as a grid of labelled buttons. */
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 #[serde(deny_unknown_fields)]
 pub struct Remote {
@@ -271,6 +278,25 @@ pub struct Remote {
     /* Text can be typed into the device (a TV's on-screen keyboard). */
     #[serde(default)]
     pub keyboard: bool,
+    /* Buttons are taught by pressing them on the original remote (the
+     * learn / forget / rename actions), and may have any name. */
+    #[serde(default)]
+    pub learn: bool,
+}
+
+/* The most buttons one remote may have (a big TV remote has ~50). */
+pub const MAX_REMOTE_BUTTONS: usize = 100;
+
+/* A taught button's name: what fits on a button on a phone screen. */
+const MAX_BUTTON_NAME: usize = 24;
+
+/* A name for a taught button: 1-24 characters, no control characters,
+ * no spaces around it (so "Power" and "Power " can't both exist). */
+pub fn valid_button_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.trim() == name
+        && name.chars().count() <= MAX_BUTTON_NAME
+        && !name.chars().any(char::is_control)
 }
 
 /* Every button name a remote may have. The first rows are what a screen
@@ -378,9 +404,16 @@ impl Capability for Remote {
     /* Buttons are pressed (an action), not set. */
     const SETTABLE: bool = false;
     fn check(&self) -> Result<(), String> {
-        for button in &self.buttons {
-            if !REMOTE_BUTTONS.contains(&button.as_str()) {
+        if self.buttons.len() > MAX_REMOTE_BUTTONS {
+            return Err(format!("a remote has at most {MAX_REMOTE_BUTTONS} buttons"));
+        }
+        for (i, button) in self.buttons.iter().enumerate() {
+            let known = REMOTE_BUTTONS.contains(&button.as_str());
+            if !known && !(self.learn && valid_button_name(button)) {
                 return Err(format!("unknown remote button {button:?}"));
+            }
+            if self.buttons[..i].contains(button) {
+                return Err(format!("remote button {button:?} listed twice"));
             }
         }
         Ok(())
@@ -479,6 +512,13 @@ fn replace<T: Capability>(
  *           type {"text": "netflix"}        into the active text field
  *           delete {"count": 1}             characters before the cursor
  *           submit {}                       the keyboard's Enter
+ *     on a remote that learns (IR blaster, #42):
+ *           learn {"button": "Power", "timeout_s"?: 5-60}
+ *                -> {"code": {...}} once the original remote's button was
+ *                   pressed; a new name adds a button, an existing one is
+ *                   taught again
+ *           forget {"button": "Power"}
+ *           rename {"button": "Power", "to": "On/Off"}
  *   media   apps {}      -> {"apps": [{"id", "label"}]}
  *           launch {"app": "<id>"}
  *           channels {"query"?, "offset"?, "limit"?}
@@ -518,7 +558,38 @@ pub fn check_action(device: &Device, capability: &str, name: &str, args: &serde_
                     _ => Err("remote delete needs {\"count\": 1-256}".into()),
                 },
                 "submit" => no_args(),
-                other => Err(format!("remote has no action {other:?} (press, type, delete, submit)")),
+                "learn" | "forget" | "rename" if !remote.learn => Err(format!("{id} can't learn buttons")),
+                "learn" => {
+                    let button = args["button"].as_str().ok_or("remote learn needs {\"button\": \"Power\"}")?;
+                    if !valid_button_name(button) {
+                        return Err(format!("button names: 1-{MAX_BUTTON_NAME} characters, no spaces around them"));
+                    }
+                    if !remote.buttons.iter().any(|b| b == button) && remote.buttons.len() >= MAX_REMOTE_BUTTONS {
+                        return Err(format!("{id} has {MAX_REMOTE_BUTTONS} buttons already"));
+                    }
+                    match args.get("timeout_s") {
+                        None => Ok(()),
+                        Some(t) if t.as_u64().is_some_and(|t| (5..=60).contains(&t)) => Ok(()),
+                        Some(_) => Err("remote learn: timeout_s must be 5-60".into()),
+                    }
+                }
+                "forget" | "rename" => {
+                    let button = args["button"].as_str().ok_or_else(|| format!("remote {name} needs {{\"button\": \"...\"}}"))?;
+                    if !remote.buttons.iter().any(|b| b == button) {
+                        return Err(format!("{id} has no button {button:?}"));
+                    }
+                    if name == "rename" {
+                        let to = args["to"].as_str().ok_or("remote rename needs {\"to\": \"new name\"}")?;
+                        if !valid_button_name(to) {
+                            return Err(format!("button names: 1-{MAX_BUTTON_NAME} characters, no spaces around them"));
+                        }
+                        if to != button && remote.buttons.iter().any(|b| b == to) {
+                            return Err(format!("{id} has a button {to:?} already"));
+                        }
+                    }
+                    Ok(())
+                }
+                other => Err(format!("remote has no action {other:?} (press, type, delete, submit, learn, forget, rename)")),
             }
         }
         "media" => {
@@ -731,6 +802,7 @@ mod tests {
         tv.capabilities.remote = Some(Remote {
             buttons: vec!["UP".into(), "OK".into()],
             keyboard: true,
+            learn: false,
         });
         let ok = |cap: &str, name: &str, args: serde_json::Value| check_action(&tv, cap, name, &args);
         assert_eq!(ok("remote", "press", json!({"button": "UP"})), Ok(()));
@@ -751,6 +823,38 @@ mod tests {
         assert!(check_action(&tv, "remote", "type", &json!({"text": "a"})).is_err());
         /* A lamp has no remote. */
         assert!(check_action(&lamp(), "remote", "press", &json!({"button": "UP"})).is_err());
+        /* A TV's remote doesn't learn. */
+        assert!(check_action(&tv, "remote", "learn", &json!({"button": "Power"})).unwrap_err().contains("can't learn"));
+    }
+
+    /* Issue #42: an IR blaster's remote learns buttons with any name. */
+    #[test]
+    fn learning_remote_actions_are_checked() {
+        let mut ir = lamp();
+        ir.capabilities.remote = Some(Remote {
+            buttons: vec!["Power".into(), "Red".into()],
+            keyboard: false,
+            learn: true,
+        });
+        let ok = |name: &str, args: serde_json::Value| check_action(&ir, "remote", name, &args);
+        assert_eq!(ok("press", json!({"button": "Power"})), Ok(()));
+        assert_eq!(ok("learn", json!({"button": "Brighter"})), Ok(()));
+        assert_eq!(ok("learn", json!({"button": "Power", "timeout_s": 30})), Ok(()));
+        assert!(ok("learn", json!({"button": "Power", "timeout_s": 600})).is_err());
+        assert!(ok("learn", json!({"button": " Power"})).is_err());
+        assert!(ok("learn", json!({"button": ""})).is_err());
+        assert!(ok("learn", json!({"button": "a very long button name, too long"})).is_err());
+        assert_eq!(ok("forget", json!({"button": "Red"})), Ok(()));
+        assert!(ok("forget", json!({"button": "Blue"})).is_err());
+        assert_eq!(ok("rename", json!({"button": "Red", "to": "Colour"})), Ok(()));
+        assert!(ok("rename", json!({"button": "Red", "to": "Power"})).unwrap_err().contains("already"));
+        assert!(ok("type", json!({"text": "a"})).is_err());
+        /* Taught names are fine in its state; twice the same isn't. */
+        let state = |buttons: serde_json::Value| {
+            set_capability(&ir, "remote", json!({"buttons": buttons, "learn": true}), Origin::Device)
+        };
+        assert!(state(json!(["Power", "UP", "Brighter"])).is_ok());
+        assert!(state(json!(["Power", "Power"])).unwrap_err().contains("twice"));
     }
 
     /* A remote's buttons come from the device; clients can't set them. */

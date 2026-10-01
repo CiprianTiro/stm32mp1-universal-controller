@@ -138,6 +138,7 @@ dependencies = [
  "hyper-util",
  "libc",
  "mdns-sd",
+ "num-bigint",
  "rcgen",
  "ring",
  "rumqttc",

@@ -217,6 +217,15 @@ fn main() {
     ui.on_open_remote(move |id| {
         let ui = ui_weak.unwrap();
         if let Some(device) = r.borrow().devices.get(id.as_str()) {
+            // A remote that learns (an IR blaster, issue #42) has its own
+            // page: taught buttons instead of a TV's fixed layout.
+            if device.capabilities.remote.as_ref().is_some_and(|r| r.learn) {
+                show_ir_remote(&ui, device);
+                ui.set_ir_view(0);
+                ui.set_ir_message("".into());
+                ui.set_page(PAGE_IR_REMOTE);
+                return;
+            }
             show_remote(&ui, device);
             ui.set_remote_view(0);
             ui.set_remote_message("".into());
@@ -298,6 +307,23 @@ fn main() {
         }
         ui.set_remote_text("".into());
         ui.set_remote_view(0);
+    });
+
+    // ---- An IR device's remote (issue #42, ir_remote.slint) --------------
+    // The same device_action as the TV's remote (remote-id), with the
+    // learning actions. Answers come back as Update::DeviceAction below.
+    let act = remote_action.clone();
+    ui.on_ir_press(move |button| act("remote", "press", serde_json::json!({ "button": button.as_str() })));
+    let (act, ui_weak) = (remote_action.clone(), ui.as_weak());
+    ui.on_ir_learn(move |button| {
+        ui_weak.unwrap().set_ir_message("".into());
+        act("remote", "learn", serde_json::json!({ "button": button.as_str(), "timeout_s": IR_LEARN_SECONDS }));
+    });
+    let act = remote_action.clone();
+    ui.on_ir_forget(move |button| act("remote", "forget", serde_json::json!({ "button": button.as_str() })));
+    let act = remote_action.clone();
+    ui.on_ir_rename(move |button, to| {
+        act("remote", "rename", serde_json::json!({ "button": button.as_str(), "to": to.trim() }))
     });
 
     // A device's details page, and what can be done from it.
@@ -495,6 +521,10 @@ fn main() {
                     if ui.get_page() == PAGE_REMOTE && ui.get_remote_id() == device.id.as_str() {
                         show_remote(&ui, &device);
                     }
+                    // ...and an IR device's (its buttons, issue #42).
+                    if ui.get_page() == PAGE_IR_REMOTE && ui.get_remote_id() == device.id.as_str() {
+                        show_ir_remote(&ui, &device);
+                    }
                     rows.borrow_mut().changed(device);
                 }
                 ws_client::Update::DeviceRemoved(id) => rows.borrow_mut().removed(&id),
@@ -529,6 +559,24 @@ fn main() {
                     device_message_until = Some(std::time::Instant::now() + DEVICE_MESSAGE_TIME);
                 }
                 ws_client::Update::Removed(Err(message)) => ui.set_dev_message(message.into()),
+                // An IR device's action (issue #42): what happened, in one
+                // line. The buttons themselves follow as DeviceChanged.
+                ws_client::Update::DeviceAction { name, args, result } if ui.get_page() == PAGE_IR_REMOTE => {
+                    let button = text_of(&args["button"]);
+                    let (ok, message) = match (&result, name.as_str()) {
+                        (Ok(_), "learn") => (true, format!("Learned \u{201C}{button}\u{201D}. Tap it to try it.")),
+                        (Ok(_), "forget") => (true, format!("Deleted \u{201C}{button}\u{201D}.")),
+                        (Ok(_), "rename") => (true, format!("Renamed to \u{201C}{}\u{201D}.", text_of(&args["to"]))),
+                        (Ok(_), _) => (true, String::new()),
+                        (Err(why), _) => (false, why.clone()),
+                    };
+                    // A learn's answer ends the waiting view, either way.
+                    if name == "learn" && ui.get_ir_view() == 3 {
+                        ui.set_ir_view(0);
+                    }
+                    ui.set_ir_message_ok(ok);
+                    ui.set_ir_message(message.into());
+                }
                 // A remote action's answer (issue #44): a list to show, or
                 // why it failed.
                 ws_client::Update::DeviceAction { name, args, result } => match result {
@@ -914,6 +962,13 @@ impl DeviceRows {
 /// The remote page (issue #44). Not a setup page: its number lives here.
 const PAGE_REMOTE: i32 = 12;
 
+/// An IR device's remote (issue #42).
+const PAGE_IR_REMOTE: i32 = 13;
+
+/// How long the hub waits for a button on the original remote when
+/// teaching (ir_remote.slint says it: "up to 30 seconds").
+const IR_LEARN_SECONDS: u64 = 30;
+
 /// Channels per page of the remote's list (the hub caps it at 500).
 const CHANNEL_PAGE: u32 = 100;
 
@@ -923,6 +978,27 @@ fn show_remote(ui: &AppWindow, device: &ws_client::Device) {
     ui.set_remote_name(device.name.clone().into());
     ui.set_remote_playing(now_playing(device).into());
     ui.set_remote_keyboard(device.capabilities.remote.as_ref().is_some_and(|r| r.keyboard));
+}
+
+/// Fills an IR device's remote page (issue #42).
+fn show_ir_remote(ui: &AppWindow, device: &ws_client::Device) {
+    ui.set_remote_id(device.id.clone().into());
+    ui.set_remote_name(device.name.clone().into());
+    let buttons: Vec<slint::SharedString> = device
+        .capabilities
+        .remote
+        .as_ref()
+        .map(|r| r.buttons.iter().map(|b| b.into()).collect())
+        .unwrap_or_default();
+    ui.set_ir_buttons(std::rc::Rc::new(slint::VecModel::from(buttons)).into());
+    ui.set_ir_status(
+        match device.online.as_deref() {
+            Some("offline") => "The IR blaster is offline: buttons can't be sent or taught right now. Is it plugged in and on the WiFi?",
+            Some("unauthorized") => "The IR blaster needs pairing again: open the device's details and choose Pair again.",
+            _ => "",
+        }
+        .into(),
+    );
 }
 
 /// What's on a TV's screen, in words: "Live TV \u{2022} 5 Pro TV",
@@ -976,6 +1052,9 @@ fn show_device_page(ui: &AppWindow, device: &ws_client::Device, wizard: &setup::
         Some("online") => "Online",
         _ => status_text(device),
     }.into());
+    let remote = device.capabilities.remote.as_ref();
+    ui.set_dev_has_remote(remote.is_some());
+    ui.set_dev_remote_learns(remote.is_some_and(|r| r.learn));
     ui.set_dev_can_reauth(template.is_some_and(|t| t.can_reauth));
     ui.set_dev_can_reconfigure(template.is_some_and(|t| t.can_reconfigure));
     // Built into the hub (the board's LED): hardware whose type the wizard

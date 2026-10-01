@@ -867,10 +867,21 @@ async fn handle_message(
  * other messages wait meanwhile (up to a step's timeout); other clients
  * aren't affected. */
 async fn handle_wizard(req: ClientRequest, wizard: &mut Option<wizard::Session>, app_state: &AppState) -> ServerMessage {
+    /* Only a start pre-fills the WiFi name (#42): ask the network actor
+     * then, not on every step. */
+    let hub_wifi = match &req {
+        ClientRequest::WizardStart { .. } => ask_network(&app_state.network_tx, |reply| network::Cmd::GetStatus { reply })
+            .await
+            .ok()
+            .filter(|s| s.wifi.connected)
+            .and_then(|s| s.wifi.ssid),
+        _ => None,
+    };
     let ctx = wizard::Context {
         templates: &app_state.templates,
         control: &app_state.control,
         discovery: &app_state.discovery,
+        hub_wifi,
     };
     /* A step's reply, or its error for this session. */
     let reply = |id: &str, result: Result<wizard::StepView, wizard::WizardError>| match result {

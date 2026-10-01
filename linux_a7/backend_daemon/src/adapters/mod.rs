@@ -27,6 +27,8 @@
  * understands.
  */
 pub mod channels;
+pub mod esp_prov;
+pub mod ir_blaster;
 pub mod lg_webos;
 pub mod m4_led;
 pub mod net;
@@ -116,6 +118,11 @@ impl Hub {
 
     pub fn secrets(&self, id: &str) -> DeviceSecrets {
         self.control.secrets().get(id)
+    }
+
+    /* An IR blaster's learned codes (issue #42, ir_codes.rs). */
+    pub fn ir_codes(&self) -> &crate::ir_codes::IrCodes {
+        self.control.ir_codes()
     }
 
     /* E.g. a TV that issued a new pairing key. */

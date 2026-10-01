@@ -54,9 +54,15 @@
  * "Found on your network" (discovery.rs's inbox) starts a wizard with
  * `found`: the device is already chosen, and the discover step is skipped.
  *
- * Not yet supported: vendor_login (#74) and the WiFi onboarding steps
- * provision_softap / provision_ble / smartconfig (#71). Templates using
- * them aren't offered (list) and can't be started.
+ *   provision_ble     (#42) a hint while the adapter sets the device's
+ *                     WiFi over Bluetooth; answer {} to start, like
+ *                     confirm_on_device. Inputs named wifi_* (the WiFi
+ *                     name and password it sends) are forgotten right after
+ *                     it: the device keeps them, the hub has no use for them.
+ *
+ * Not yet supported: vendor_login (#74) and the other WiFi onboarding
+ * steps provision_softap / smartconfig (#71). Templates using them aren't
+ * offered (list) and can't be started.
  */
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -84,7 +90,14 @@ pub struct Context<'a> {
     pub templates: &'a Templates,
     pub control: &'a Control,
     pub discovery: &'a Discovery,
+    /* The WiFi the hub itself is on, if any: pre-filled as the network a
+     * device set up over Bluetooth should join (input "wifi_ssid"). */
+    pub hub_wifi: Option<String>,
 }
+
+/* How long a provision_ble step may take: finding the device, the
+ * Bluetooth session, the device joining the WiFi, pairing over it. */
+const PROVISION_LIMIT: Duration = Duration::from_secs(150);
 
 /* ------------------------------------------------------------------ */
 /* What clients see                                                    */
@@ -147,6 +160,10 @@ pub enum StepKind {
     ConfirmOnDevice {
         hint: String,
         hints: Vec<String>,
+        timeout_s: u32,
+    },
+    ProvisionBle {
+        hint: String,
         timeout_s: u32,
     },
     CodeFromDevice {
@@ -263,9 +280,7 @@ fn supported(template: &Template) -> Result<(), String> {
         for step in steps {
             match step {
                 Step::VendorLogin { .. } => return Err("a vendor account login"),
-                Step::ProvisionSoftap { .. } | Step::ProvisionBle { .. } | Step::Smartconfig { .. } => {
-                    return Err("setting up the device's WiFi")
-                }
+                Step::ProvisionSoftap { .. } | Step::Smartconfig { .. } => return Err("setting up the device's WiFi"),
                 Step::Choice { then, .. } => {
                     for branch in then.values() {
                         check(branch)?;
@@ -377,6 +392,13 @@ impl Session {
         if let Some(found) = found {
             session.take_found(found);
         }
+        /* The network a device set up over Bluetooth joins: the hub's own,
+         * unless the person types another. */
+        if let Some(ssid) = &ctx.hub_wifi {
+            if session.template.inputs.iter().any(|i| i.id == "wifi_ssid") {
+                session.values.plain.insert("wifi_ssid".into(), ssid.clone());
+            }
+        }
         session.skip_answered();
         let view = session.view(ctx).await;
         Ok((session, view))
@@ -484,7 +506,18 @@ impl Session {
             }
             Step::Test => self.test(ctx).await?,
             /* Refused at start (supported). */
-            Step::VendorLogin { .. } | Step::ProvisionSoftap { .. } | Step::ProvisionBle { .. } | Step::Smartconfig { .. } => {
+            Step::ProvisionBle { service_uuid, action, .. } => {
+                /* The adapter needs to know which Bluetooth service to look
+                 * for; a value for this step only. */
+                self.values.plain.insert("ble_service".into(), service_uuid);
+                let result = self.run_action(ctx, &action, PROVISION_LIMIT, ErrorKind::Timeout).await;
+                self.values.plain.remove("ble_service");
+                result?;
+                /* The device has the WiFi details now; the hub forgets them. */
+                self.values.plain.retain(|k, _| !k.starts_with("wifi_"));
+                self.values.secret.retain(|k, _| !k.starts_with("wifi_"));
+            }
+            Step::VendorLogin { .. } | Step::ProvisionSoftap { .. } | Step::Smartconfig { .. } => {
                 return Err(WizardError::plain("this step isn't supported yet"));
             }
         }
@@ -608,6 +641,14 @@ impl Session {
                 None => StepKind::Test,
             },
             Some(Step::Test) => StepKind::Test,
+            Some(Step::ProvisionBle { hint, .. }) => StepKind::ProvisionBle {
+                hint: if hint.is_empty() {
+                    "Setting the device up over Bluetooth\u{2026}".into()
+                } else {
+                    hint.clone()
+                },
+                timeout_s: PROVISION_LIMIT.as_secs() as u32,
+            },
             Some(_) => StepKind::Test, /* unsupported: refused at start */
         };
         StepView {
@@ -845,7 +886,16 @@ fn action_steps(template: &Template, actions: &[String]) -> Vec<Step> {
  * "change settings" shows. */
 fn form_fields(template: &Template) -> Vec<String> {
     let mut fields: Vec<String> = Vec::new();
-    for variant in &template.setup {
+    /* Not from a way in that sets the device's WiFi up (#42): its fields
+     * (the WiFi name and password, the code for that session) only mean
+     * something together with that step, which "change settings" doesn't
+     * run -- the password would be stored on the hub for nothing. */
+    let onboarding = |steps: &[Step]| {
+        steps
+            .iter()
+            .any(|s| matches!(s, Step::ProvisionBle { .. } | Step::ProvisionSoftap { .. } | Step::Smartconfig { .. }))
+    };
+    for variant in template.setup.iter().filter(|v| !onboarding(&v.steps)) {
         for step in &variant.steps {
             if let Step::Form { fields: these } = step {
                 for field in these {
@@ -1140,6 +1190,7 @@ mod tests {
                 templates: &self.templates,
                 control: &self.control,
                 discovery: &self.discovery,
+                hub_wifi: None,
             }
         }
     }
@@ -1168,6 +1219,22 @@ mod tests {
             control,
             discovery: Discovery::new(),
         }
+    }
+
+    /* Issue #42: "change settings" of an IR blaster offers its address,
+     * never the WiFi name/password or code of the Bluetooth setup. */
+    #[test]
+    fn change_settings_leaves_out_the_bluetooth_setup_fields() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("templates");
+        let (templates, problems) = Templates::load(
+            &dir,
+            &Known {
+                adapters: &["m4-led", "wled", "lg-webos", "ir-blaster"],
+                capabilities: &device::CAPABILITY_NAMES,
+            },
+        );
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(form_fields(templates.get("ir-blaster").unwrap()), vec!["host"]);
     }
 
     #[tokio::test]

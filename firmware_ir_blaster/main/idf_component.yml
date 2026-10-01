@@ -1,0 +1,13 @@
+## Components from Espressif's registry (downloaded at the first build into
+## managed_components/, pinned in dependencies.lock).
+dependencies:
+  # mDNS: how the hub finds the blaster (_uc-irblaster._tcp). It used to be
+  # part of ESP-IDF itself; since v5 it lives in the registry.
+  espressif/mdns: "^1.8.0"
+  # cJSON: the JSON messages to and from the hub (PROTOCOL.md). Also moved
+  # out of ESP-IDF into the registry in v6.
+  espressif/cjson: "^1.7.0"
+  # WiFi setup over Bluetooth (#42, as issue #71 plans it): Espressif's
+  # standard provisioning (security 2: SRP6a with the pairing code). The
+  # successor of ESP-IDF's old built-in wifi_provisioning component.
+  espressif/network_provisioning: "^1.3.0"

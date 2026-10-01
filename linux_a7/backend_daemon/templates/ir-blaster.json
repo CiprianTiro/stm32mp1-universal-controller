@@ -1,0 +1,147 @@
+{
+  "$comment": "The hub's own IR blaster add-on (issue #42, firmware_ir_blaster/): a new one gets the WiFi over Bluetooth, protected by the code on its label (Espressif provisioning, security 2); one already on the WiFi is found by mDNS and paired with the same code. Placed next to ONE device with an IR remote, it becomes that device; its buttons are taught afterwards on the device's remote screen. Format: wiki Device-Templates.",
+  "format": 1,
+  "id": "ir-blaster",
+  "version": 1,
+  "name": "IR remote device",
+  "category": "other",
+  "description": "Anything with an infrared remote (LED strips, projectors, fans, audio), controlled through the hub's IR blaster placed next to it. You teach it the remote's buttons after adding it.",
+  "adapter": "ir-blaster",
+  "capabilities": [
+    "remote"
+  ],
+  "inputs": [
+    {
+      "id": "host",
+      "type": "text",
+      "label": "Blaster address",
+      "hint": "The blaster's console shows it: type `status`, e.g. 192.168.1.143",
+      "validate": {
+        "pattern": "host"
+      }
+    },
+    {
+      "id": "pairing_code",
+      "type": "secret",
+      "label": "Pairing code",
+      "hint": "On the blaster's label, or type `pairing` in its console: XXXX-XXXX-XXXX-XXXX (small letters are fine)",
+      "validate": {
+        "min_length": 16,
+        "max_length": 24
+      }
+    },
+    {
+      "id": "wifi_ssid",
+      "type": "text",
+      "label": "WiFi name",
+      "hint": "The network the blaster joins (2.4 GHz). The hub's own network is filled in.",
+      "validate": {
+        "min_length": 1,
+        "max_length": 32
+      }
+    },
+    {
+      "id": "wifi_password",
+      "type": "secret",
+      "label": "WiFi password",
+      "hint": "Leave empty for an open network. Only sent to the blaster, not kept on the hub.",
+      "required": false,
+      "validate": {
+        "max_length": 63
+      }
+    }
+  ],
+  "discovery": [
+    {
+      "method": "mdns",
+      "service": "_uc-irblaster._tcp",
+      "fill": {
+        "host": "{address}",
+        "name": "{name}",
+        "blaster_id": "{txt.id}"
+      }
+    }
+  ],
+  "setup": [
+    {
+      "id": "new",
+      "label": "New blaster (set up over Bluetooth)",
+      "steps": [
+        {
+          "type": "info",
+          "text": "Plug the new IR blaster in, within a few metres of the hub. It waits for setup over Bluetooth: new, or after holding its BOOT button for 5 seconds."
+        },
+        {
+          "type": "form",
+          "fields": [
+            "pairing_code",
+            "wifi_ssid",
+            "wifi_password"
+          ]
+        },
+        {
+          "type": "provision_ble",
+          "service_uuid": "1f2b9c64-3a5e-4c1d-9f0a-5b6e7d8c9a01",
+          "action": "provision",
+          "hint": "Setting up the blaster: WiFi over Bluetooth, then pairing. This takes up to a minute."
+        },
+        {
+          "type": "test"
+        }
+      ]
+    },
+    {
+      "id": "guided",
+      "label": "Already on the WiFi: find it",
+      "steps": [
+        {
+          "type": "info",
+          "text": "Plug the IR blaster in next to the device it will control, and make sure it's on the WiFi."
+        },
+        {
+          "type": "discover"
+        },
+        {
+          "type": "code_from_device",
+          "action": "pair",
+          "field": "pairing_code"
+        },
+        {
+          "type": "test"
+        }
+      ]
+    },
+    {
+      "id": "advanced",
+      "label": "Enter the address",
+      "steps": [
+        {
+          "type": "form",
+          "fields": [
+            "host"
+          ]
+        },
+        {
+          "type": "code_from_device",
+          "action": "pair",
+          "field": "pairing_code"
+        },
+        {
+          "type": "test"
+        }
+      ]
+    }
+  ],
+  "errors": {
+    "refused": "The blaster refused: {message}.",
+    "unreachable": "Couldn't reach the blaster: {message}."
+  },
+  "identity": "{blaster_id}",
+  "tls": "tofu",
+  "reauth": [
+    "pair"
+  ],
+  "defaults": {
+    "name": "IR device"
+  }
+}

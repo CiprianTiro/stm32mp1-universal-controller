@@ -307,7 +307,14 @@ pub enum Step {
     Test,
     /* Onboarding a factory-fresh device (later, #71). */
     ProvisionSoftap { ssid_pattern: String, action: String },
-    ProvisionBle { service_uuid: String, action: String },
+    /* Implemented for the IR blaster (#42): the adapter's action sets the
+     * device's WiFi over Bluetooth; `hint` is shown while it runs. */
+    ProvisionBle {
+        service_uuid: String,
+        action: String,
+        #[serde(default)]
+        hint: String,
+    },
     Smartconfig { flavour: String },
 }
 
@@ -660,7 +667,7 @@ mod tests {
     /* The hub's own list: a template using a new capability is checked
      * against what device.rs really has. */
     const ALL_CAPS: [&str; crate::device::CAPABILITY_NAMES.len()] = crate::device::CAPABILITY_NAMES;
-    const ADAPTERS: [&str; 3] = ["m4-led", "wled", "lg-webos"];
+    const ADAPTERS: [&str; 4] = ["m4-led", "wled", "lg-webos", "ir-blaster"];
 
     fn known() -> Known<'static> {
         Known {
@@ -692,7 +699,7 @@ mod tests {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("templates");
         let (templates, problems) = Templates::load(&dir, &known());
         assert!(problems.is_empty(), "{problems:?}");
-        for id in ["m4-led", "wled", "lg-webos-tv"] {
+        for id in ["m4-led", "wled", "lg-webos-tv", "ir-blaster"] {
             assert!(templates.get(id).is_some(), "{id} missing");
         }
         let tv = templates.get("lg-webos-tv").unwrap();

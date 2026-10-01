@@ -153,6 +153,8 @@ impl Setup {
             return;
         }
         let kind = text(&get("step"));
+        // A secret revealed on the last step is hidden again on this one.
+        ui.set_wizard_reveal(false);
         self.session = text(&get("session"));
         self.template = text(&get("template"));
         self.variant = text(&get("variant"));
@@ -172,7 +174,9 @@ impl Setup {
                 }
             }
             "choice" | "code_from_device" => self.fields = vec![field_of(&get("field"))],
-            "confirm_on_device" => body = text(&get("hint")),
+            // Both wait for the device (#42: provision_ble sets up its WiFi
+            // over Bluetooth), with a hint and a countdown.
+            "confirm_on_device" | "provision_ble" => body = text(&get("hint")),
             "name" => {
                 body = text(&get("summary"));
                 primary = "Add";
@@ -231,7 +235,7 @@ impl Setup {
         self.show_fields(ui);
         ui.set_page(PAGE_WIZARD);
 
-        if kind == "test" || kind == "confirm_on_device" {
+        if kind == "test" || kind == "confirm_on_device" || kind == "provision_ble" {
             self.answer(ui, tx, Map::new());
         }
         ui.set_wizard_busy(self.busy);

@@ -3,7 +3,7 @@
 # Target Architecture: STMicroelectronics STM32MP1 (Cortex-A7 + Cortex-M4)
 # =============================================================================
 
-.PHONY: help build-hw build-hw-prod build-qemu shell-yocto clean-yocto build-m4 build-a7 test-qemu verify-qemu flash-hw flash-hw-prod flash-m4 deploy-ui deploy-backend netboot restore-userfs audit
+.PHONY: help build-hw build-hw-prod build-qemu shell-yocto clean-yocto build-m4 build-a7 test-qemu verify-qemu flash-hw flash-hw-prod flash-m4 deploy-ui deploy-backend netboot restore-userfs audit build-ir flash-ir monitor-ir
 
 # Zephyr workspace used to build the M4 firmware: a normal `west init` +
 # `west update` checkout at the Zephyr version pinned in firmware_m4/west.yml
@@ -15,6 +15,12 @@ ZEPHYR_WORKSPACE ?= $(HOME)/zephyrproject
 # ssh-root-key recipe). stm32mp1.local resolves via mDNS; override with an IP
 # if it doesn't on your network: `make flash-m4 BOARD_HOST=192.168.1.130`.
 BOARD_HOST ?= stm32mp1.local
+
+# ESP-IDF checkout used to build the ESP32-S3 IR blaster firmware (#42), and
+# the USB serial port the blaster shows up on. See firmware_ir_blaster/README.md.
+# Override per machine, e.g. `make flash-ir IR_PORT=/dev/ttyACM1`.
+IDF_PATH ?= $(HOME)/esp/esp-idf
+IR_PORT ?= /dev/ttyACM0
 
 # Default target when just typing 'make'
 help:
@@ -39,6 +45,9 @@ help:
 	@echo "-----------------------------------------------------------------------------"
 	@echo "  make build-m4      - Compile only the Cortex-M4 Zephyr firmware"
 	@echo "  make build-a7      - Compile Cortex-A7 Linux native daemons (Rust/Cargo)"
+	@echo "  make build-ir      - Compile the ESP32-S3 IR blaster firmware (ESP-IDF)"
+	@echo "  make flash-ir      - Build + flash the IR blaster over USB, then open its console (Ctrl+] quits)"
+	@echo "  make monitor-ir    - Open the IR blaster's console without flashing"
 	@echo "  make audit         - Check all Rust crates for known vulnerabilities + licenses (cargo audit/deny)"
 	@echo "============================================================================="
 
@@ -132,6 +141,21 @@ build-m4:
 	@echo "⚡ Compiling Cortex-M4 Zephyr Firmware..."
 	@cd $(ZEPHYR_WORKSPACE) && . .venv/bin/activate && \
 		west build -p always -b stm32mp157c_dk2 $(CURDIR)/firmware_m4 -d $(CURDIR)/firmware_m4/build
+
+# ESP32-S3 IR blaster (#42). export.sh puts ESP-IDF's tools on PATH for this
+# one shell; `bash -c` because export.sh needs bash, not make's /bin/sh.
+IDF_ENV = bash -c '. $(IDF_PATH)/export.sh >/dev/null && cd firmware_ir_blaster &&
+
+build-ir:
+	@echo "📡 Compiling ESP32-S3 IR blaster firmware..."
+	@$(IDF_ENV) idf.py build'
+
+flash-ir:
+	@echo "📡 Flashing IR blaster on $(IR_PORT)..."
+	@$(IDF_ENV) idf.py -p $(IR_PORT) flash monitor'
+
+monitor-ir:
+	@$(IDF_ENV) idf.py -p $(IR_PORT) monitor'
 
 build-a7:
 	@echo "🦀 Compiling Cortex-A7 Application Daemons via Cargo Matrix..."
