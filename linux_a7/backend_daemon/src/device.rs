@@ -21,8 +21,9 @@
  * device from its capabilities alone: switch -> toggle, dimmer -> slider.
  *
  * WHAT'S HERE: switch, dimmer, color and sensor -- the general ones almost
- * every device type uses -- and media (a TV's volume, mute and input,
- * issue #40). The other specialised ones (vacuum, camera_stream,
+ * every device type uses -- media (a TV's volume, mute and input, issue
+ * #40), remote (#44), and cover, climate, lock and energy (issue #77:
+ * blinds, air conditioners, door locks, metering plugs). The other specialised ones (vacuum, camera_stream,
  * ir_remote) come with their devices (#42-#45). Adding one
  * means: a struct for its state, `impl Capability` (its rules), a field in
  * `Capabilities`, and one line in `set_capability`. Nothing else changes.
@@ -171,10 +172,20 @@ pub struct Capabilities {
     pub media: Option<Media>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote: Option<Remote>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cover: Option<Cover>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub climate: Option<Climate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lock: Option<Lock>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub energy: Option<Energy>,
 }
 
 /* The names, e.g. for error messages and the protocol's "hello". */
-pub const CAPABILITY_NAMES: [&str; 6] = ["switch", "dimmer", "color", "sensor", "media", "remote"];
+pub const CAPABILITY_NAMES: [&str; 10] = [
+    "switch", "dimmer", "color", "sensor", "media", "remote", "cover", "climate", "lock", "energy",
+];
 
 /* On/off: lamps, plugs, relays, a TV's power. */
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -309,6 +320,147 @@ pub const REMOTE_BUTTONS: [&str; 34] = [
     "RED", "GREEN", "YELLOW", "BLUE",
 ];
 
+/* ---- Issue #77 ---- */
+
+/* Blinds, shutters, curtains, garage doors:
+ *   {"position": 40, "moving": "stopped", "can_position": true}
+ * `position`: 0 = closed, 100 = fully open; null = not known (a motor that
+ * doesn't report it). `moving` and `can_position` only come FROM the
+ * device: a client sends {"position": N} -- and only to a device that can
+ * go to any position (can_position); others (a garage door) are only
+ * opened, closed and stopped, with the ACTIONS open / close / stop (see
+ * check_action), which every cover has. */
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Cover {
+    #[serde(default)]
+    pub position: Option<u8>,
+    #[serde(default)]
+    pub moving: Moving,
+    #[serde(default)]
+    pub can_position: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Moving {
+    Opening,
+    Closing,
+    #[default]
+    Stopped,
+}
+
+/* Air conditioners, heat pumps, thermostats:
+ *   {"mode": "heat", "target": 21.5, "current": 22.8, "fan": "auto",
+ *    "modes": ["off", "heat", "cool", "auto"], "fans": ["auto", "low"],
+ *    "min": 16, "max": 30, "step": 0.5}
+ * A client sends mode, target and fan; the rest is what the DEVICE
+ * offers (like a TV's inputs): its modes and fan speeds, its temperature
+ * range and step, and the room temperature it measures (`current`, null
+ * if it doesn't). A command is checked against what the device offers. */
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Climate {
+    pub mode: String,
+    /* °C. */
+    pub target: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current: Option<f64>,
+    /* null: the device has no fan setting. */
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fan: Option<String>,
+    #[serde(default = "Climate::default_modes")]
+    pub modes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fans: Vec<String>,
+    #[serde(default = "Climate::default_min")]
+    pub min: f64,
+    #[serde(default = "Climate::default_max")]
+    pub max: f64,
+    #[serde(default = "Climate::default_step")]
+    pub step: f64,
+}
+
+/* The modes and fan speeds the hub knows. A device offers some of them. */
+pub const CLIMATE_MODES: [&str; 6] = ["off", "heat", "cool", "auto", "dry", "fan"];
+pub const CLIMATE_FANS: [&str; 6] = ["auto", "quiet", "low", "medium", "high", "turbo"];
+
+impl Climate {
+    fn default_modes() -> Vec<String> {
+        ["off", "heat", "cool", "auto"].map(String::from).to_vec()
+    }
+    fn default_min() -> f64 {
+        16.0
+    }
+    fn default_max() -> f64 {
+        30.0
+    }
+    fn default_step() -> f64 {
+        0.5
+    }
+}
+
+impl Default for Climate {
+    fn default() -> Self {
+        Climate {
+            mode: "off".into(),
+            target: 21.0,
+            current: None,
+            fan: None,
+            modes: Climate::default_modes(),
+            fans: Vec::new(),
+            min: Climate::default_min(),
+            max: Climate::default_max(),
+            step: Climate::default_step(),
+        }
+    }
+}
+
+/* Door locks: {"state": "locked"}. "jammed" (it tried, something's in the
+ * way) and "unknown" only come from the device; a client sends "locked" or
+ * "unlocked".
+ *
+ * THE UNLOCK RULE (issue #77): opening a door must never happen by
+ * accident -- a stray tap, a confused automation, a replayed cloud
+ * message. So a command that UNLOCKS must say {"state": "unlocked",
+ * "confirmed": true}: every client asks the person first ("Unlock Front
+ * door?") and only then sends it; anything that doesn't is refused. An
+ * automation (#47) may only unlock where the person allowed it for that
+ * lock. `confirmed` belongs to the command only, never to the state. */
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Lock {
+    pub state: LockState,
+    #[serde(default, skip_serializing)]
+    pub confirmed: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum LockState {
+    Locked,
+    Unlocked,
+    Jammed,
+    Unknown,
+}
+
+/* What a metering plug, an energy meter or an inverter measures:
+ *   {"power_w": 40.2, "energy_kwh": 1.234, "voltage_v": 230.1, "current_a": 0.18}
+ * Only power is required (a device reporting nothing else still shows
+ * what it draws). Negative power is allowed: an inverter or a meter
+ * measuring what goes back to the grid. Only the device reports it. */
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct Energy {
+    pub power_w: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub energy_kwh: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voltage_v: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_a: Option<f64>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct MediaInput {
@@ -328,6 +480,18 @@ trait Capability: DeserializeOwned {
     /* false: only the device itself reports this state (sensors). */
     const SETTABLE: bool = true;
     fn check(&self) -> Result<(), String>;
+    /* A CLIENT's command, before it replaces the state (issue #77): the
+     * parts only the device reports (a climate's modes and range, a
+     * cover's `moving`) are kept from `current`, and rules about the
+     * change itself (the unlock rule) are checked. Default: the command
+     * is the new state. */
+    fn from_client(current: &Self, new: Self) -> Result<Self, String>
+    where
+        Self: Sized,
+    {
+        let _ = current;
+        Ok(new)
+    }
 }
 
 impl Capability for Switch {
@@ -436,6 +600,112 @@ impl Capability for Sensor {
     }
 }
 
+impl Capability for Cover {
+    const NAME: &'static str = "cover";
+    fn check(&self) -> Result<(), String> {
+        match self.position {
+            Some(p) if p > 100 => Err(format!("cover position must be 0-100, got {p}")),
+            _ => Ok(()),
+        }
+    }
+    fn from_client(current: &Self, new: Self) -> Result<Self, String> {
+        let Some(position) = new.position else {
+            return Err("cover: send {\"position\": 0-100}, or use the actions open, close, stop".into());
+        };
+        if !current.can_position {
+            return Err("this cover can't go to a position: use the actions open, close, stop".into());
+        }
+        Ok(Cover {
+            position: Some(position),
+            ..current.clone()
+        })
+    }
+}
+
+impl Capability for Climate {
+    const NAME: &'static str = "climate";
+    fn check(&self) -> Result<(), String> {
+        let known = |list: &[&str], name: &str| list.contains(&name);
+        if self.modes.is_empty() || self.modes.len() > CLIMATE_MODES.len() {
+            return Err("climate modes: 1-6 of off, heat, cool, auto, dry, fan".into());
+        }
+        for (i, mode) in self.modes.iter().enumerate() {
+            if !known(&CLIMATE_MODES, mode) || self.modes[..i].contains(mode) {
+                return Err(format!("climate modes: {mode:?} unknown or listed twice"));
+            }
+        }
+        if !self.modes.contains(&self.mode) {
+            return Err(format!("climate mode {:?}: this device offers {}", self.mode, self.modes.join(", ")));
+        }
+        for (i, fan) in self.fans.iter().enumerate() {
+            if !known(&CLIMATE_FANS, fan) || self.fans[..i].contains(fan) {
+                return Err(format!("climate fans: {fan:?} unknown or listed twice ({})", CLIMATE_FANS.join(", ")));
+            }
+        }
+        match &self.fan {
+            Some(fan) if !self.fans.contains(fan) => {
+                return Err(format!("climate fan {fan:?}: this device offers {}", self.fans.join(", ")));
+            }
+            None if !self.fans.is_empty() => return Err("climate: a device with fan speeds reports one".into()),
+            _ => {}
+        }
+        let all_finite = [self.target, self.min, self.max, self.step].iter().all(|v| v.is_finite())
+            && self.current.is_none_or(f64::is_finite);
+        if !all_finite || !(-50.0..=100.0).contains(&self.min) || !(-50.0..=100.0).contains(&self.max) || self.min >= self.max {
+            return Err("climate: min and max must be numbers from -50 to 100, min below max".into());
+        }
+        if !(0.1..=5.0).contains(&self.step) {
+            return Err("climate step must be 0.1-5".into());
+        }
+        if !(self.min..=self.max).contains(&self.target) {
+            return Err(format!("climate target must be {}-{} °C, got {}", self.min, self.max, self.target));
+        }
+        Ok(())
+    }
+    fn from_client(current: &Self, new: Self) -> Result<Self, String> {
+        Ok(Climate {
+            mode: new.mode,
+            target: new.target,
+            /* Not every client knows the fan: left out = unchanged. */
+            fan: new.fan.or_else(|| current.fan.clone()),
+            ..current.clone()
+        })
+    }
+}
+
+impl Capability for Lock {
+    const NAME: &'static str = "lock";
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+    fn from_client(current: &Self, new: Self) -> Result<Self, String> {
+        match new.state {
+            LockState::Locked => {}
+            LockState::Unlocked if new.confirmed || current.state == LockState::Unlocked => {}
+            LockState::Unlocked => {
+                return Err("unlocking needs a confirmation: ask the person, then send \"confirmed\": true".into())
+            }
+            LockState::Jammed | LockState::Unknown => return Err("a lock can only be set to locked or unlocked".into()),
+        }
+        Ok(Lock {
+            state: new.state,
+            confirmed: false,
+        })
+    }
+}
+
+impl Capability for Energy {
+    const NAME: &'static str = "energy";
+    const SETTABLE: bool = false;
+    fn check(&self) -> Result<(), String> {
+        let ok = |v: Option<f64>| v.is_none_or(|v| v.is_finite() && v >= 0.0);
+        if !self.power_w.is_finite() || !ok(self.energy_kwh) || !ok(self.voltage_v) || !ok(self.current_a) {
+            return Err("energy: numbers only, and only power may be negative".into());
+        }
+        Ok(())
+    }
+}
+
 /* Who is changing a capability. A client (the touchscreen, the app, a
  * cloud command) asks for a change; the device itself (the hardware, via
  * its driver) reports what IS. Only the device may report read-only
@@ -467,6 +737,10 @@ pub fn set_capability(
         "sensor" => replace(&mut caps.sensor, id, value, origin)?,
         "media" => replace(&mut caps.media, id, value, origin)?,
         "remote" => replace(&mut caps.remote, id, value, origin)?,
+        "cover" => replace(&mut caps.cover, id, value, origin)?,
+        "climate" => replace(&mut caps.climate, id, value, origin)?,
+        "lock" => replace(&mut caps.lock, id, value, origin)?,
+        "energy" => replace(&mut caps.energy, id, value, origin)?,
         other => {
             return Err(format!(
                 "unknown capability {other:?} (known: {})",
@@ -490,7 +764,10 @@ fn replace<T: Capability>(
     if origin == Origin::Client && !T::SETTABLE {
         return Err(format!("{:?} is read-only: its values come from the device", T::NAME));
     }
-    let new: T = serde_json::from_value(value).map_err(|e| format!("invalid {} value: {e}", T::NAME))?;
+    let mut new: T = serde_json::from_value(value).map_err(|e| format!("invalid {} value: {e}", T::NAME))?;
+    if let (Origin::Client, Some(current)) = (origin, slot.as_ref()) {
+        new = T::from_client(current, new)?;
+    }
     new.check()?;
     *slot = Some(new);
     Ok(())
@@ -533,7 +810,8 @@ fn replace<T: Capability>(
  *           channels {"query"?, "offset"?, "limit"?}
  *                -> {"channels": [{"id", "number", "name"}], "total": N}
  *                   one page of the matching channels (adapters/channels.rs)
- *           tune {"channel": "<id>"}                                    */
+ *           tune {"channel": "<id>"}
+ *   cover   open {}  close {}  stop {}       (issue #77)                */
 pub fn check_action(device: &Device, capability: &str, name: &str, args: &serde_json::Value) -> Result<(), String> {
     let id = &device.id;
     let caps = &device.capabilities;
@@ -666,6 +944,15 @@ pub fn check_action(device: &Device, capability: &str, name: &str, args: &serde_
                 other => Err(format!("media has no action {other:?} (apps, launch, channels, tune)")),
             }
         }
+        "cover" => {
+            if caps.cover.is_none() {
+                return Err(format!("{id} has no capability \"cover\""));
+            }
+            match name {
+                "open" | "close" | "stop" => no_args(),
+                other => Err(format!("cover has no action {other:?} (open, close, stop)")),
+            }
+        }
         other if CAPABILITY_NAMES.contains(&other) => Err(format!("{other} has no actions")),
         other => Err(format!("unknown capability {other:?}")),
     }
@@ -709,6 +996,24 @@ impl Capabilities {
             "sensor" => fill(&mut self.sensor, Sensor::default()),
             "media" => fill(&mut self.media, Media::default()),
             "remote" => fill(&mut self.remote, Remote::default()),
+            /* Not known yet: position null, until the device says. */
+            "cover" => fill(
+                &mut self.cover,
+                Cover {
+                    position: None,
+                    moving: Moving::Stopped,
+                    can_position: false,
+                },
+            ),
+            "climate" => fill(&mut self.climate, Climate::default()),
+            "lock" => fill(
+                &mut self.lock,
+                Lock {
+                    state: LockState::Unknown,
+                    confirmed: false,
+                },
+            ),
+            "energy" => fill(&mut self.energy, Energy::default()),
             other => return Err(format!("unknown capability {other:?}")),
         })
     }
@@ -738,6 +1043,22 @@ impl Capabilities {
             any = true;
         }
         if let Some(c) = &self.remote {
+            c.check()?;
+            any = true;
+        }
+        if let Some(c) = &self.cover {
+            c.check()?;
+            any = true;
+        }
+        if let Some(c) = &self.climate {
+            c.check()?;
+            any = true;
+        }
+        if let Some(c) = &self.lock {
+            c.check()?;
+            any = true;
+        }
+        if let Some(c) = &self.energy {
             c.check()?;
             any = true;
         }
@@ -839,6 +1160,99 @@ pub fn migrate_v1(id: &str, properties: &HashMap<String, serde_json::Value>) -> 
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /* ---- Issue #77 ---- */
+
+    fn with(caps: serde_json::Value) -> Device {
+        serde_json::from_value(json!({"id": "d", "name": "D", "capabilities": caps})).unwrap()
+    }
+
+    #[test]
+    fn covers_move_to_positions_only_if_they_can() {
+        let blind = with(json!({"cover": {"position": 0, "moving": "stopped", "can_position": true}}));
+        let caps = set_capability(&blind, "cover", json!({"position": 40}), Origin::Client).unwrap();
+        /* What the device reports is kept. */
+        assert_eq!(caps.cover.unwrap(), Cover { position: Some(40), moving: Moving::Stopped, can_position: true });
+        assert!(set_capability(&blind, "cover", json!({"position": 101}), Origin::Client).is_err());
+        assert!(set_capability(&blind, "cover", json!({}), Origin::Client).unwrap_err().contains("position"));
+        /* A client can't claim it's moving, or make it positionable. */
+        let caps = set_capability(&blind, "cover", json!({"position": 10, "moving": "opening", "can_position": false}), Origin::Client).unwrap();
+        assert_eq!(caps.cover.unwrap(), Cover { position: Some(10), moving: Moving::Stopped, can_position: true });
+
+        let garage = with(json!({"cover": {"position": 100}}));
+        assert!(set_capability(&garage, "cover", json!({"position": 0}), Origin::Client).unwrap_err().contains("open, close, stop"));
+        /* The device itself reports anything valid. */
+        let caps = set_capability(&garage, "cover", json!({"position": null, "moving": "closing"}), Origin::Device).unwrap();
+        assert_eq!(caps.cover.unwrap().moving, Moving::Closing);
+
+        for action in ["open", "close", "stop"] {
+            assert_eq!(check_action(&garage, "cover", action, &json!({})), Ok(()));
+        }
+        assert!(check_action(&garage, "cover", "tilt", &json!({})).is_err());
+        assert!(check_action(&garage, "cover", "open", &json!({"fast": true})).is_err());
+    }
+
+    #[test]
+    fn climate_commands_are_checked_against_what_the_device_offers() {
+        let ac = with(json!({"climate": {"mode": "off", "target": 21, "current": 23.4, "fan": "auto",
+            "modes": ["off", "cool", "dry"], "fans": ["auto", "low", "high"], "min": 17, "max": 30, "step": 1}}));
+        let caps = set_capability(&ac, "climate", json!({"mode": "cool", "target": 24}), Origin::Client).unwrap();
+        let c = caps.climate.unwrap();
+        assert_eq!((c.mode.as_str(), c.target, c.fan.as_deref()), ("cool", 24.0, Some("auto")), "fan left out = unchanged");
+        assert_eq!((c.current, c.min, c.step, c.modes.len()), (Some(23.4), 17.0, 1.0, 3), "the device's offer is kept");
+
+        let err = |v| set_capability(&ac, "climate", v, Origin::Client).unwrap_err();
+        assert!(err(json!({"mode": "heat", "target": 24})).contains("offers off, cool, dry"));
+        assert!(err(json!({"mode": "cool", "target": 31})).contains("17-30"));
+        assert!(err(json!({"mode": "cool", "target": 24, "fan": "turbo"})).contains("offers auto, low, high"));
+        /* A client can't widen the range. */
+        let c = set_capability(&ac, "climate", json!({"mode": "cool", "target": 20, "min": 5}), Origin::Client).unwrap().climate.unwrap();
+        assert_eq!(c.min, 17.0);
+
+        /* What a device may report. */
+        let bad = |v| set_capability(&ac, "climate", v, Origin::Device).is_err();
+        assert!(bad(json!({"mode": "cool", "target": 20, "modes": ["cool", "warp"]})));
+        assert!(bad(json!({"mode": "cool", "target": 20, "modes": ["cool"], "min": 30, "max": 16})));
+        assert!(bad(json!({"mode": "cool", "target": 20, "modes": ["cool"], "fans": ["low"]})), "fan speeds but no fan");
+        assert!(!bad(json!({"mode": "cool", "target": 20, "modes": ["cool"]})));
+    }
+
+    #[test]
+    fn unlocking_needs_a_confirmation() {
+        let door = with(json!({"lock": {"state": "locked"}}));
+        let err = set_capability(&door, "lock", json!({"state": "unlocked"}), Origin::Client).unwrap_err();
+        assert!(err.contains("confirmation"), "{err}");
+        let caps = set_capability(&door, "lock", json!({"state": "unlocked", "confirmed": true}), Origin::Client).unwrap();
+        assert_eq!(caps.lock.as_ref().unwrap().state, LockState::Unlocked);
+        /* "confirmed" is never part of the state. */
+        assert_eq!(serde_json::to_value(&caps).unwrap(), json!({"lock": {"state": "unlocked"}}));
+        /* Locking needs none; a client can't set "jammed". */
+        assert!(set_capability(&door, "lock", json!({"state": "locked"}), Origin::Client).is_ok());
+        assert!(set_capability(&door, "lock", json!({"state": "jammed"}), Origin::Client).is_err());
+        /* The lock itself reports anything, and opened by hand needs no confirmation. */
+        assert!(set_capability(&door, "lock", json!({"state": "unlocked"}), Origin::Device).is_ok());
+        let open = with(json!({"lock": {"state": "unlocked"}}));
+        assert!(set_capability(&open, "lock", json!({"state": "unlocked"}), Origin::Client).is_ok());
+    }
+
+    #[test]
+    fn energy_is_read_only_and_checked() {
+        let plug = with(json!({"energy": {"power_w": 0}}));
+        assert!(set_capability(&plug, "energy", json!({"power_w": 5}), Origin::Client).unwrap_err().contains("read-only"));
+        let caps = set_capability(&plug, "energy", json!({"power_w": -1200.5, "energy_kwh": 3.2}), Origin::Device).unwrap();
+        assert_eq!(caps.energy.unwrap().power_w, -1200.5, "an inverter feeding the grid");
+        assert!(set_capability(&plug, "energy", json!({"power_w": 1, "voltage_v": -230}), Origin::Device).is_err());
+    }
+
+    #[test]
+    fn new_capabilities_have_defaults() {
+        let names: Vec<String> = ["cover", "climate", "lock", "energy"].map(String::from).to_vec();
+        let caps = Capabilities::with_defaults(&names).unwrap();
+        assert_eq!(caps.cover.unwrap().position, None);
+        assert_eq!(caps.climate.unwrap().mode, "off");
+        assert_eq!(caps.lock.unwrap().state, LockState::Unknown);
+        assert_eq!(caps.energy.unwrap().power_w, 0.0);
+    }
 
     /* Issue #44: which actions exist, and their arguments. */
     #[test]

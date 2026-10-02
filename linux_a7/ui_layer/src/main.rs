@@ -155,6 +155,51 @@ fn main() {
         });
     });
 
+    // ---- Issue #77: covers, climate, locks ------------------------------
+    // A cover's open / close / stop are actions; its position, a
+    // climate's mode / target / fan and a lock's state are commands. A
+    // failed one shows under the list (Update::CommandFailed, or the
+    // action's answer below).
+    let tx = request_tx.clone();
+    ui.on_cover_action(move |id, action| {
+        let _ = tx.send(ws_client::Request::DeviceAction {
+            id: id.to_string(),
+            capability: "cover".into(),
+            name: action.to_string(),
+            args: serde_json::json!({}),
+        });
+    });
+    let tx = request_tx.clone();
+    ui.on_set_cover_position(move |id, position| {
+        let _ = tx.send(ws_client::Request::Command {
+            id: id.to_string(),
+            capability: "cover".into(),
+            value: serde_json::json!({ "position": position }),
+        });
+    });
+    let tx = request_tx.clone();
+    ui.on_set_climate(move |id, mode, target, fan| {
+        // - / + add the step to a float: round to 0.1 so 21.5 + 0.5 is 22,
+        // not 21.999999.
+        let target = (f64::from(target) * 10.0).round() / 10.0;
+        let mut value = serde_json::json!({ "mode": mode.as_str(), "target": target });
+        if !fan.is_empty() {
+            value["fan"] = fan.as_str().into();
+        }
+        let _ = tx.send(ws_client::Request::Command { id: id.to_string(), capability: "climate".into(), value });
+    });
+    // Unlocking only comes from the card's "Unlock …?" question, so it's
+    // sent as confirmed -- backend_daemon refuses an unlock without it.
+    let tx = request_tx.clone();
+    ui.on_set_lock(move |id, locked| {
+        let value = if locked {
+            serde_json::json!({ "state": "locked" })
+        } else {
+            serde_json::json!({ "state": "unlocked", "confirmed": true })
+        };
+        let _ = tx.send(ws_client::Request::Command { id: id.to_string(), capability: "lock".into(), value });
+    });
+
     // ---- Adding and setting up devices (issue #40) ----------------------
     // Each callback hands the tap to setup.rs (which sends the request);
     // backend_daemon's answer arrives as an Update in the loop below.
@@ -616,6 +661,15 @@ fn main() {
                     }
                     ui.set_ir_message_ok(ok);
                     ui.set_ir_message(message.into());
+                }
+                // A cover's open / close / stop (issue #77) that failed:
+                // said under the device list, like a failed command.
+                ws_client::Update::DeviceAction { name, result: Err(message), .. }
+                    if matches!(name.as_str(), "open" | "close" | "stop") =>
+                {
+                    ui.set_device_message_ok(false);
+                    ui.set_device_message(message.into());
+                    device_message_until = Some(std::time::Instant::now() + DEVICE_MESSAGE_TIME);
                 }
                 // A remote action's answer (issue #44): a list to show, or
                 // why it failed.
@@ -1151,12 +1205,65 @@ fn device_item(device: &ws_client::Device, templates: &[ws_client::Template]) ->
         input: caps.media.as_ref().map_or(String::new(), |m| m.input.clone()).into(),
         has_remote: caps.remote.is_some(),
         now_playing: now_playing(device).into(),
+        has_cover: caps.cover.is_some(),
+        cover_position: caps.cover.as_ref().and_then(|c| c.position).map_or(-1, i32::from),
+        cover_can_position: caps.cover.as_ref().is_some_and(|c| c.can_position),
+        cover_moving: match caps.cover.as_ref().map(|c| c.moving.as_str()) {
+            Some("opening") => "Opening",
+            Some("closing") => "Closing",
+            _ => "",
+        }
+        .into(),
+        has_climate: caps.climate.is_some(),
+        climate_mode: caps.climate.as_ref().map_or(String::new(), |c| c.mode.clone()).into(),
+        climate_modes: string_model(caps.climate.as_ref().map_or(&[][..], |c| &c.modes)),
+        climate_target: caps.climate.as_ref().map_or(0.0, |c| c.target as f32),
+        climate_target_text: caps.climate.as_ref().map_or(String::new(), |c| celsius(c.target)).into(),
+        climate_min: caps.climate.as_ref().map_or(0.0, |c| c.min as f32),
+        climate_max: caps.climate.as_ref().map_or(0.0, |c| c.max as f32),
+        climate_step: caps.climate.as_ref().map_or(1.0, |c| c.step as f32),
+        climate_current_text: caps.climate.as_ref().and_then(|c| c.current).map_or(String::new(), celsius).into(),
+        climate_fan: caps.climate.as_ref().and_then(|c| c.fan.clone()).unwrap_or_default().into(),
+        climate_fans: string_model(caps.climate.as_ref().map_or(&[][..], |c| &c.fans)),
+        has_lock: caps.lock.is_some(),
+        lock_state: caps.lock.as_ref().map_or(String::new(), |l| l.state.clone()).into(),
+        energy_text: caps.energy.as_ref().map_or(String::new(), energy_text).into(),
         inputs: std::rc::Rc::new(slint::VecModel::from(
             caps.media
                 .as_ref()
                 .map_or(vec![], |m| m.inputs.iter().map(|i| MediaInputItem { id: i.id.clone().into(), label: i.label.clone().into() }).collect()),
         ))
         .into(),
+    }
+}
+
+/// A list of texts for Slint (a climate's modes, its fan speeds).
+fn string_model(items: &[String]) -> slint::ModelRc<slint::SharedString> {
+    std::rc::Rc::new(slint::VecModel::from(items.iter().map(|i| i.as_str().into()).collect::<Vec<slint::SharedString>>())).into()
+}
+
+/// 21.5 -> "21.5 °C", 22.0 -> "22 °C".
+fn celsius(value: f64) -> String {
+    let rounded = (value * 10.0).round() / 10.0;
+    if rounded.fract() == 0.0 {
+        format!("{rounded:.0} °C")
+    } else {
+        format!("{rounded:.1} °C")
+    }
+}
+
+/// What a metering device draws, as the card's one line: power first
+/// (the number people look at), then the total: "40.2 W \u{2022} 1.23 kWh".
+/// Voltage and current are left out on the card -- too much for one line.
+fn energy_text(energy: &ws_client::Energy) -> String {
+    let power = if energy.power_w.abs() >= 1000.0 {
+        format!("{:.2} kW", energy.power_w / 1000.0)
+    } else {
+        format!("{:.1} W", energy.power_w)
+    };
+    match energy.energy_kwh {
+        Some(kwh) => format!("{power} \u{2022} {kwh:.2} kWh"),
+        None => power,
     }
 }
 

@@ -2,12 +2,12 @@
   "$comment": "Shelly Plug S Gen3 (and other Shelly Gen2+ plugs with one switch): open local HTTP API (pattern P1), run by the GENERIC http adapter -- this file is all there is. Format: wiki Device-Templates.",
   "format": 1,
   "id": "shelly-plug-gen3",
-  "version": 1,
+  "version": 2,
   "name": "Shelly plug",
   "category": "plugs",
   "description": "Shelly Plug S Gen3 smart plug, with power metering. It must already be on your WiFi (Shelly app, or its own web page), with no password set on the device.",
   "adapter": "http",
-  "capabilities": ["switch", "sensor"],
+  "capabilities": ["switch", "energy", "sensor"],
   "inputs": [
     {
       "id": "host",
@@ -41,10 +41,10 @@
         "path": "/rpc/Switch.GetStatus?id=0",
         "read": {
           "switch.on": "output",
-          "sensor.power": { "path": "apower", "unit": "W" },
-          "sensor.voltage": { "path": "voltage", "unit": "V" },
-          "sensor.current": { "path": "current", "unit": "A" },
-          "sensor.energy": { "path": "aenergy.total", "unit": "Wh" },
+          "energy.power_w": "apower",
+          "energy.voltage_v": "voltage",
+          "energy.current_a": "current",
+          "energy.energy_kwh": { "path": "aenergy.total", "scale": 0.001 },
           "sensor.temperature": { "path": "temperature.tC", "unit": "°C" }
         }
       }

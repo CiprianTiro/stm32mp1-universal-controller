@@ -392,6 +392,11 @@ fn save_png(window: &MinimalSoftwareWindow, width: u32, height: u32, path: &str)
 
 /// Believable content: a handful of devices in rooms, a WiFi list, two
 /// paired phones -- enough to see how each page fills up.
+/// A list of texts for a sample device (a climate's modes).
+fn strings(items: &[&str]) -> slint::ModelRc<slint::SharedString> {
+    Rc::new(VecModel::from(items.iter().map(|&i| i.into()).collect::<Vec<slint::SharedString>>())).into()
+}
+
 fn fill_sample_data(ui: &AppWindow, appearance: &theme::Appearance) {
     ui.set_connected(true);
     let device = |id: &str, name: &str, room: &str| DeviceItem {
@@ -421,7 +426,20 @@ fn fill_sample_data(ui: &AppWindow, appearance: &theme::Appearance) {
         DeviceItem { has_switch: true, on: false, status: "Needs pairing again".into(), can_reauth: true,
                      ..device("tv2", "Bedroom TV", "Bedroom") },
         DeviceItem { sensor_text: "temperature 21.5 °C   humidity 48 %".into(), ..device("climate", "Climate sensor", "Bedroom") },
-        DeviceItem { has_switch: true, on: false, ..device("kettle", "Kettle", "Kitchen") },
+        DeviceItem { has_switch: true, on: true, energy_text: "1.86 kW \u{2022} 12.40 kWh".into(),
+                     ..device("kettle", "Kettle", "Kitchen") },
+        // Issue #77: a blind, a garage door, an air conditioner, a lock.
+        DeviceItem { has_cover: true, cover_position: 40, cover_can_position: true,
+                     ..device("blind", "Living room blind", "Living room") },
+        DeviceItem { has_cover: true, cover_position: 0, cover_moving: "Opening".into(),
+                     ..device("garage", "Garage door", "Garage") },
+        DeviceItem { has_climate: true, climate_mode: "cool".into(),
+                     climate_modes: strings(&["off", "heat", "cool", "auto", "dry"]),
+                     climate_target: 22.5, climate_target_text: "22.5 °C".into(), climate_min: 16.0, climate_max: 30.0,
+                     climate_step: 0.5, climate_current_text: "26.1 °C".into(), climate_fan: "auto".into(),
+                     climate_fans: strings(&["auto", "low", "medium", "high"]),
+                     ..device("ac", "Bedroom AC", "Bedroom") },
+        DeviceItem { has_lock: true, lock_state: "locked".into(), ..device("door", "Front door", "Hall") },
     ];
     // Split into rows the way main.rs's DeviceRows does, for the column
     // count app.slint computes -- which depends on the window size, so the
