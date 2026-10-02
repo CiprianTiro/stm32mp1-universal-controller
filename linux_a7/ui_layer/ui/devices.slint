@@ -10,7 +10,6 @@
 // commands; like everything in ui_layer, nothing here changes a device's
 // state by itself -- it only shows what the backend reports.
 
-import { ListView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { ActionButton, Choice } from "common.slint";
 
@@ -227,8 +226,12 @@ component LevelBar inherits Rectangle {
     }
 }
 
-component DeviceRow inherits Rectangle {
+export component DeviceRow inherits Rectangle {
     in property <DeviceItem> item;
+    // Issue #95: shown on a device's controls page, under its own name,
+    // state, power button and brightness -- which this card then leaves
+    // out.
+    in property <bool> in-sheet;
     callback set-switch(string, bool);
     callback set-level(string, int);
     // Issue #40: the TV's volume/mute/input -- all three, as the media
@@ -250,7 +253,7 @@ component DeviceRow inherits Rectangle {
     // The lock's "Unlock Front door?" question is showing.
     property <bool> asking-unlock: false;
 
-    border-radius: Theme.radius-medium;
+    border-radius: in-sheet ? Theme.radius-medium * 2 : Theme.radius-medium;
     background: Theme.surface;
     // Not reachable: dimmed (its values may be stale).
     opacity: item.status == "" ? 1 : 0.6;
@@ -263,7 +266,7 @@ component DeviceRow inherits Rectangle {
         // top instead of spreading out.
         alignment: start;
 
-        HorizontalLayout {
+        if !in-sheet: HorizontalLayout {
             spacing: Theme.space-m;
             // The name: tap for the device's details (issue #40). The
             // TouchArea is a sibling OVER the texts, not inside their
@@ -322,7 +325,7 @@ component DeviceRow inherits Rectangle {
             }
         }
 
-        if item.has-dimmer: HorizontalLayout {
+        if item.has-dimmer && !in-sheet: HorizontalLayout {
             spacing: Theme.space-l;
             bar := LevelBar {
                 horizontal-stretch: 1;
@@ -659,94 +662,6 @@ component DeviceRow inherits Rectangle {
         running: asking-unlock;
         triggered => {
             asking-unlock = false;
-        }
-    }
-}
-
-// The devices as a grid of cards (issue #38); scrolls when there are more
-// than fit. `rows` comes from main.rs, already split into rows of at most
-// `columns` cards: 1 column on the touchscreen (the list it always was), 2
-// or 3 on a monitor (app.slint decides by the window's width).
-//
-// Why main.rs does the splitting: Slint's layouts can't wrap a list into
-// rows by themselves, and main.rs already keeps the devices -- so it keeps
-// the rows too, and still updates only the one card that changed.
-export component DeviceList inherits Rectangle {
-    in property <[[DeviceItem]]> rows;
-    in property <int> columns: 1;
-    callback set-switch(string, bool);
-    callback set-level(string, int);
-    callback set-media(string, int, bool, string);
-    callback open(string);
-    callback reauth(string);
-    callback open-remote(string);
-    callback cover-action(string, string);
-    callback set-cover-position(string, int);
-    callback set-climate(string, string, float, string);
-    callback set-lock(string, bool);
-    callback set-color(string, string);
-    callback press(string, string);
-
-    if rows.length == 0: Text {
-        text: "No devices yet";
-        color: Theme.text-muted;
-        font-size: Theme.font-subtitle;
-    }
-
-    ListView {
-        for row in rows: HorizontalLayout {
-            padding-bottom: Theme.space-s;
-            spacing: Theme.space-s;
-            for d in row: DeviceRow {
-                // Exactly 1/columns of the width (minus the gaps), for
-                // every card and every gap filler below: the columns line
-                // up row after row. (Stretching instead shares out only the
-                // SPARE width, after each card's own preferred width -- a
-                // card with a slider came out wider than one without.)
-                width: (parent.width - (columns - 1) * parent.spacing) / columns;
-                item: d;
-                set-switch(id, on) => {
-                    root.set-switch(id, on);
-                }
-                set-level(id, level) => {
-                    root.set-level(id, level);
-                }
-                set-media(id, volume, muted, input) => {
-                    root.set-media(id, volume, muted, input);
-                }
-                open(id) => {
-                    root.open(id);
-                }
-                reauth(id) => {
-                    root.reauth(id);
-                }
-                open-remote(id) => {
-                    root.open-remote(id);
-                }
-                cover-action(id, action) => {
-                    root.cover-action(id, action);
-                }
-                set-cover-position(id, position) => {
-                    root.set-cover-position(id, position);
-                }
-                set-climate(id, mode, target, fan) => {
-                    root.set-climate(id, mode, target, fan);
-                }
-                set-lock(id, locked) => {
-                    root.set-lock(id, locked);
-                }
-                set-color(id, hex) => {
-                    root.set-color(id, hex);
-                }
-                press(id, button) => {
-                    root.press(id, button);
-                }
-            }
-            // The last row may have fewer cards: empty places keep them at
-            // the normal width instead of stretching them.
-            for i in columns - row.length: Rectangle {
-                width: (parent.width - (columns - 1) * parent.spacing) / columns;
-            }
         }
     }
 }

@@ -94,6 +94,12 @@ pub enum Request {
     WizardReauth { device: String },
     WizardReconfigure { device: String },
     RemoveDevice { id: String },
+    /// Issue #95: star a device (name and room could follow).
+    UpdateDeviceInfo {
+        id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        favourite: Option<bool>,
+    },
     /// A one-off action (issue #44): a remote's button, typed text, a TV's
     /// app or channel list.
     DeviceAction {
@@ -195,6 +201,9 @@ pub struct Device {
      * and "colour_order". */
     #[serde(default)]
     pub config: std::collections::BTreeMap<String, String>,
+    /* Issue #95: starred (the Devices page's Favourites). */
+    #[serde(default)]
+    pub favourite: bool,
     pub capabilities: Capabilities,
 }
 

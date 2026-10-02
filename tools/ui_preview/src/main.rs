@@ -39,27 +39,60 @@ mod ir_layout;
 #[path = "../../../linux_a7/ui_layer/src/automation_text.rs"]
 #[allow(dead_code)]
 mod automation_text;
+// The Devices page's tiles, chips and groups (issue #95), on the devices
+// as backend_daemon reports them (ws_client.rs's types): its unit tests
+// run here too.
+#[path = "../../../linux_a7/ui_layer/src/ws_client.rs"]
+#[allow(dead_code)]
+mod ws_client;
+#[path = "../../../linux_a7/ui_layer/src/tiles.rs"]
+mod tiles;
 
 thread_local! {
-    /// The sample devices, kept to split them into rows for each size.
-    static DEVICES: std::cell::RefCell<Vec<DeviceItem>> = Default::default();
+    /// The sample devices (issue #95: as backend_daemon sends them).
+    static DEVICES: std::cell::RefCell<Vec<ws_client::Device>> = Default::default();
 }
 
-/// Sets the window size, then the device rows for that size's column count.
-fn set_size_and_rows(ui: &AppWindow, window: &MinimalSoftwareWindow, width: u32, height: u32) {
+/// Sets the window size.
+fn set_size(window: &MinimalSoftwareWindow, width: u32, height: u32) {
     window.set_size(PhysicalSize::new(width, height));
-    let columns = ui.get_columns().max(1) as usize;
-    let rows: Vec<slint::ModelRc<DeviceItem>> = DEVICES.with(|d| {
-        d.borrow().chunks(columns).map(|row| Rc::new(VecModel::from(row.to_vec())).into()).collect()
-    });
-    ui.set_device_rows(Rc::new(VecModel::from(rows)).into());
 }
+
+/// The Devices page's chips and tiles for `filter`, at the current size --
+/// built by tiles.rs exactly as ui_layer's main.rs does.
+fn set_tiles(ui: &AppWindow, filter: &str) {
+    let columns = ui.get_tile_columns().max(1) as usize;
+    let accent = ui.global::<Theme>().get_accent();
+    DEVICES.with(|d| {
+        let devices = d.borrow();
+        let all: Vec<&ws_client::Device> = devices.iter().collect();
+        ui.set_filter_chips(Rc::new(VecModel::from(tiles::chips(&all, &[]))).into());
+        ui.set_device_filter(filter.into());
+        let mut rows = Vec::new();
+        for (heading, group) in tiles::groups(&all, filter, &[], accent, 1_790_000_000) {
+            if !heading.is_empty() {
+                rows.push(TileRow { header: heading.into(), tiles: Default::default() });
+            }
+            for chunk in group.chunks(columns) {
+                rows.push(TileRow { header: "".into(), tiles: Rc::new(VecModel::from(chunk.to_vec())).into() });
+            }
+        }
+        ui.set_tile_rows(Rc::new(VecModel::from(rows)).into());
+    });
+}
+
+/// Issue #95: the Devices page with each kind of chip selected, and one
+/// device's controls page.
+const DEVICE_VIEWS: [(&str, &str); 4] =
+    [("devices", "all"), ("devices-favourites", "fav"), ("devices-lights", "lights"), ("devices-room", "room:Living room")];
 
 /// The pages worth looking at, with the number app.slint uses for each.
 /// None: the welcome screen (shown until the backend first answers).
 const PAGES: [(&str, Option<i32>); 18] = [
     ("welcome", None),
-    ("devices", Some(0)),
+    // Issue #95: the device's controls page (the Devices page itself is
+    // in DEVICE_VIEWS).
+    ("controls", Some(20)),
     ("network", Some(1)),
     ("password", Some(2)),
     ("country", Some(3)),
@@ -370,7 +403,16 @@ fn main() {
     ui.show().unwrap();
 
     for (width, height) in sizes {
-        set_size_and_rows(&ui, &window, width, height);
+        set_size(&window, width, height);
+        ui.set_ever_connected(true);
+        ui.set_page(0);
+        for (name, filter) in DEVICE_VIEWS {
+            set_tiles(&ui, filter);
+            let path = format!("{out_dir}/{width}x{height}-{name}{suffix}.png");
+            save_png(&window, width, height, &path);
+            println!("{path}");
+        }
+        set_tiles(&ui, "all");
         for (name, page) in PAGES {
             ui.set_ever_connected(page.is_some());
             ui.set_page(page.unwrap_or(0));
@@ -479,11 +521,10 @@ fn fill_sample_data(ui: &AppWindow, appearance: &theme::Appearance) {
                      ..device("ac", "Bedroom AC", "Bedroom") },
         DeviceItem { has_lock: true, lock_state: "locked".into(), ..device("door", "Front door", "Hall") },
     ];
-    // Issue #47: scenes (the first two are the Devices page's quick ones on
-    // the touchscreen), and the devices "Save current state" offers.
+    // Issue #47: scenes (all of them are the home screen's chips since
+    // #95), and the devices "Save current state" offers.
     let scene = |id: &str, name: &str, detail: &str| SceneItem { id: id.into(), name: name.into(), detail: detail.into() };
     let scenes = vec![scene("cozy", "Cozy", "1 device"), scene("movie", "Movie night", "3 devices"), scene("all-off", "All off", "6 devices")];
-    ui.set_quick_scenes(Rc::new(VecModel::from(scenes[..2].to_vec())).into());
     ui.set_scenes(Rc::new(VecModel::from(scenes)).into());
     ui.set_scenes_message("Cozy: done".into());
     let pick = |id: &str, name: &str, detail: &str, selected| PickItem { id: id.into(), name: name.into(), detail: detail.into(), selected };
@@ -512,10 +553,51 @@ fn fill_sample_data(ui: &AppWindow, appearance: &theme::Appearance) {
     ui.set_has_location(true);
     ui.set_location_current("44.43, 26.10".into());
     ui.set_location_text("44.43, 26.10".into());
-    // Split into rows the way main.rs's DeviceRows does, for the column
-    // count app.slint computes -- which depends on the window size, so the
-    // rows are made again for every size (see set_size_and_rows).
-    DEVICES.with(|d| *d.borrow_mut() = devices);
+    // The controls page (issue #95) shows one of these full cards: the IR
+    // LED strip's.
+    ui.set_controls_item(devices[1].clone());
+    ui.set_controls_favourite(true);
+    // The tiles (issue #95) are made from devices as backend_daemon sends
+    // them -- the DK2's own test devices, and a few more kinds.
+    let json = serde_json::json!([
+        {"id": "ld7", "name": "Board LED (LD7)", "room": "Hub", "template": "m4-led", "online": "online",
+         "capabilities": {"switch": {"on": true}}},
+        {"id": "tv", "name": "Shelf LED strip", "room": "Living room", "template": "ir-blaster", "online": "online", "favourite": true,
+         "capabilities": {"switch": {"on": true}, "color": {"hex": "#FF0000", "palette": ["#FF0000", "#00FF00", "#0000FF"]},
+                          "remote": {"buttons": ["power", "red", "green", "blue"], "learn": true}}},
+        {"id": "wiz-light", "name": "Hall bulb", "room": "Hall", "template": "wiz", "online": "online", "favourite": true,
+         "capabilities": {"switch": {"on": true}, "dimmer": {"level": 42}, "color": {"kelvin": 2700}}},
+        {"id": "led-strip", "name": "Desk strip", "room": "Office", "template": "wled", "online": "online",
+         "capabilities": {"switch": {"on": true}, "dimmer": {"level": 80}, "color": {"hex": "#8000FF"}}},
+        {"id": "led-strip-2", "name": "Bed strip", "room": "Bedroom", "template": "wled", "online": "online",
+         "capabilities": {"switch": {"on": false}, "dimmer": {"level": 30}, "color": {"hex": "#FF8000"}}},
+        {"id": "lg-tv-webos", "name": "Living room TV", "room": "Living room", "template": "lg-webos-tv", "online": "online", "favourite": true,
+         "capabilities": {"switch": {"on": true}, "media": {"volume": 12, "muted": false, "input": "TV",
+                          "app": {"id": "livetv", "label": "Live TV"}, "channel": {"id": "5", "number": "5", "name": "Pro TV"}},
+                          "remote": {"buttons": ["UP"]}}},
+        {"id": "shelly-plug", "name": "Kettle", "room": "Kitchen", "template": "shelly-plug-gen3", "online": "online",
+         "capabilities": {"switch": {"on": true}, "energy": {"power_w": 1860.0, "energy_kwh": 12.4}}},
+        {"id": "dk2-test-wled", "name": "Test WLED", "room": "Office", "template": "wled-mqtt", "online": "offline",
+         "capabilities": {"switch": {"on": false}, "dimmer": {"level": 0}, "color": {"hex": "#1FFFC7"}}},
+        {"id": "air", "name": "Bedroom air", "room": "Bedroom", "template": "tasmota-sensor-battery", "last_seen": 1_789_999_820u64,
+         "capabilities": {"sensor": {"readings": {"temperature": {"value": 21.5, "unit": "°C"}, "humidity": {"value": 48.0, "unit": "%"}}}}},
+        {"id": "blind", "name": "Living room blind", "room": "Living room", "template": "virtual",
+         "capabilities": {"cover": {"position": 40, "moving": "stopped", "can_position": true}}},
+        {"id": "ac", "name": "Bedroom AC", "room": "Bedroom", "template": "virtual",
+         "capabilities": {"climate": {"mode": "cool", "target": 22.5, "current": 26.1, "modes": ["off", "cool"], "fans": [], "min": 16.0, "max": 30.0, "step": 0.5}}},
+        {"id": "door", "name": "Front door", "room": "Hall", "template": "virtual",
+         "capabilities": {"lock": {"state": "locked", "confirmed": false}}},
+        {"id": "projector", "name": "Projector", "room": "Office", "template": "ir-blaster", "online": "unauthorized",
+         "capabilities": {"remote": {"buttons": ["Power", "Menu"], "learn": true}}}
+    ]);
+    let samples: Vec<ws_client::Device> = serde_json::from_value(json).expect("sample devices");
+    // The controls page's top part: the IR strip's tile.
+    ui.set_controls_tile(tiles::tile(&samples[1], &[], ui.global::<Theme>().get_accent(), 1_790_000_000));
+    // The home screen's clock, as zones.rs makes it.
+    let (time, date) = zones::clock("Europe/Bucharest", 1_790_969_460);
+    ui.set_clock_time(time.into());
+    ui.set_clock_date(date.into());
+    DEVICES.with(|d| *d.borrow_mut() = samples);
 
     ui.set_net(NetStatus {
         uplink: "wifi".into(),

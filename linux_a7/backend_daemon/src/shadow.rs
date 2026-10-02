@@ -203,6 +203,7 @@ pub fn reported(device: &Device) -> Value {
         "name": device.name,
         "room": device.room,
         "template": device.template,
+        "favourite": device.favourite,
         "online": device.online,
         "capabilities": device.capabilities,
     })
@@ -538,7 +539,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             reported(&device),
-            json!({"name": "Lamp", "room": "Office", "template": "t", "online": null,
+            json!({"name": "Lamp", "room": "Office", "template": "t", "favourite": false, "online": null,
                    "capabilities": {"switch": {"on": true}}})
         );
         let mut device = device;

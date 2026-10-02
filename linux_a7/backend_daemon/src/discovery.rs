@@ -248,18 +248,19 @@ pub async fn run(discovery: Arc<Discovery>, templates: Arc<Templates>, control: 
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
         .collect();
-    if !mdns_types.is_empty() {
+    /* The daemon runs on its own thread. The browses themselves are
+     * (re)started by every search round, below. */
+    let mdns = if mdns_types.is_empty() {
+        None
+    } else {
         match mdns_sd::ServiceDaemon::new() {
-            Ok(daemon) => {
-                for service in mdns_types {
-                    spawn_mdns_browse(&daemon, service, seen_tx.clone());
-                }
-                /* The daemon runs on its own thread; keep it alive. */
-                std::mem::forget(daemon);
+            Ok(daemon) => Some(daemon),
+            Err(e) => {
+                println!("discovery: mDNS unavailable: {e}");
+                None
             }
-            Err(e) => println!("discovery: mDNS unavailable: {e}"),
         }
-    }
+    };
 
     /* SSDP search targets, and the rounds. */
     let ssdp_targets: Vec<String> = templates
@@ -301,7 +302,24 @@ pub async fn run(discovery: Arc<Discovery>, templates: Arc<Templates>, control: 
         let discovery = discovery.clone();
         let seen_tx = seen_tx.clone();
         tokio::spawn(async move {
+            let mut browsing = false;
             loop {
+                /* mDNS: browse again every round. A device announces itself
+                 * once (when it starts, or answering the first browse); a
+                 * single browse never reports it again, so 15 min later it
+                 * expired from the inbox for good -- seen with two WLEDs
+                 * after their devices were removed (#95). A new browse
+                 * reports what the daemon has cached at once, and asks the
+                 * network again. */
+                if let Some(daemon) = &mdns {
+                    for service in &mdns_types {
+                        if browsing {
+                            let _ = daemon.stop_browse(&format!("{service}.local."));
+                        }
+                        spawn_mdns_browse(daemon, service.clone(), seen_tx.clone());
+                    }
+                    browsing = true;
+                }
                 if !ssdp_targets.is_empty() {
                     if let Err(e) = ssdp_round(&ssdp_targets, &seen_tx).await {
                         println!("discovery: SSDP search failed: {e}");

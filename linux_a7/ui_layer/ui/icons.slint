@@ -1,0 +1,236 @@
+// icons.slint -- the hub's icons (issue #95): Material Design Icons
+// (https://pictogrammers.com, Pictogrammers Free License: free to use,
+// also commercially), version 7.4.47, as SVG files in ui/icons/.
+//
+// Images, not Path elements: the software renderer redraws a Path from its
+// curves on every frame, and twenty of them cost the DK2's CPU ~10 % while
+// idle (each device update redraws the page). The build rasterizes these
+// SVGs once (48 x 48, so they stay sharp at the sizes used); at run time
+// an image is only copied, in the theme's colour (`colorize`). To add one,
+// put its 24 x 24 path in ui/icons/<kind>.svg (white fill, 48 x 48) and a
+// line below.
+
+export component Icon {
+    // Which icon: one of the `kind ==` names below ("light", "plug",
+    // "settings", ...).
+    in property <string> kind;
+    in property <color> color;
+    width: 24px;
+    height: 24px;
+    if kind == "light": Image {
+        width: parent.width;
+        height: parent.height;
+        source: @image-url("icons/light.svg");
+        colorize: root.color;
+    }
+    if kind == "light-off": Image {
+        width: parent.width;
+        height: parent.height;
+        source: @image-url("icons/light-off.svg");
+        colorize: root.color;
+    }
+    if kind == "strip": Image {
+        width: parent.width;
+        height: parent.height;
+        source: @image-url("icons/strip.svg");
+        colorize: root.color;
+    }
+    if kind == "plug": Image {
+        width: parent.width;
+        height: parent.height;
+        source: @image-url("icons/plug.svg");
+        colorize: root.color;
+    }
+    if kind == "tv": Image {
+        width: parent.width;
+        height: parent.height;
+        source: @image-url("icons/tv.svg");
+        colorize: root.color;
+    }
+    if kind == "blind": Image {
+        width: parent.width;
+        height: parent.height;
+        source: @image-url("icons/blind.svg");
+        colorize: root.color;
+    }
+    if kind == "climate": Image {
+        width: parent.width;
+        height: parent.height;
+        source: @image-url("icons/climate.svg");
+        colorize: root.color;
+    }
+    if kind == "lock": Image {
+        width: parent.width;
+        height: parent.height;
+        source: @image-url("icons/lock.svg");
+        colorize: root.color;
+    }
+    if kind == "unlocked": Image {
+        width: parent.width;
+        height: parent.height;
+        source: @image-url("icons/unlocked.svg");
+        colorize: root.color;
+    }
+    if kind == "sensor": Image {
+        width: parent.width;
+        height: parent.height;
+        source: @image-url("icons/sensor.svg");
+        colorize: root.color;
+    }
+    if kind == "humidity": Image {
+        width: parent.width;
+        height: parent.height;
+        source: @image-url("icons/humidity.svg");
+        colorize: root.color;
+    }
+    if kind == "remote": Image {
+        width: parent.width;
+        height: parent.height;
+        source: @image-url("icons/remote.svg");
+        colorize: root.color;
+    }
+    if kind == "switch": Image {
+        width: parent.width;
+        height: parent.height;
+        source: @image-url("icons/switch.svg");
+        colorize: root.color;
+    }
+    if kind == "star": Image {
+        width: parent.width;
+        height: parent.height;
+        source: @image-url("icons/star.svg");
+        colorize: root.color;
+    }
+    if kind == "star-outline": Image {
+        width: parent.width;
+        height: parent.height;
+        source: @image-url("icons/star-outline.svg");
+        colorize: root.color;
+    }
+    if kind == "chevron": Image {
+        width: parent.width;
+        height: parent.height;
+        source: @image-url("icons/chevron.svg");
+        colorize: root.color;
+    }
+    if kind == "power": Image {
+        width: parent.width;
+        height: parent.height;
+        source: @image-url("icons/power.svg");
+        colorize: root.color;
+    }
+    if kind == "alert": Image {
+        width: parent.width;
+        height: parent.height;
+        source: @image-url("icons/alert.svg");
+        colorize: root.color;
+    }
+    if kind == "home": Image {
+        width: parent.width;
+        height: parent.height;
+        source: @image-url("icons/home.svg");
+        colorize: root.color;
+    }
+    if kind == "device": Image {
+        width: parent.width;
+        height: parent.height;
+        source: @image-url("icons/device.svg");
+        colorize: root.color;
+    }
+    if kind == "settings": Image {
+        width: parent.width;
+        height: parent.height;
+        source: @image-url("icons/settings.svg");
+        colorize: root.color;
+    }
+    if kind == "add": Image {
+        width: parent.width;
+        height: parent.height;
+        source: @image-url("icons/add.svg");
+        colorize: root.color;
+    }
+    if kind == "wifi": Image {
+        width: parent.width;
+        height: parent.height;
+        source: @image-url("icons/wifi.svg");
+        colorize: root.color;
+    }
+    if kind == "wifi-off": Image {
+        width: parent.width;
+        height: parent.height;
+        source: @image-url("icons/wifi-off.svg");
+        colorize: root.color;
+    }
+    if kind == "ethernet": Image {
+        width: parent.width;
+        height: parent.height;
+        source: @image-url("icons/ethernet.svg");
+        colorize: root.color;
+    }
+    if kind == "hotspot": Image {
+        width: parent.width;
+        height: parent.height;
+        source: @image-url("icons/hotspot.svg");
+        colorize: root.color;
+    }
+    if kind == "play": Image {
+        width: parent.width;
+        height: parent.height;
+        source: @image-url("icons/play.svg");
+        colorize: root.color;
+    }
+    if kind == "automation": Image {
+        width: parent.width;
+        height: parent.height;
+        source: @image-url("icons/automation.svg");
+        colorize: root.color;
+    }
+    if kind == "scenes": Image {
+        width: parent.width;
+        height: parent.height;
+        source: @image-url("icons/scenes.svg");
+        colorize: root.color;
+    }
+    if kind == "power-button": Image {
+        width: parent.width;
+        height: parent.height;
+        source: @image-url("icons/power-button.svg");
+        colorize: root.color;
+    }
+    if kind == "palette": Image {
+        width: parent.width;
+        height: parent.height;
+        source: @image-url("icons/palette.svg");
+        colorize: root.color;
+    }
+    if kind == "brightness": Image {
+        width: parent.width;
+        height: parent.height;
+        source: @image-url("icons/brightness.svg");
+        colorize: root.color;
+    }
+    if kind == "night": Image {
+        width: parent.width;
+        height: parent.height;
+        source: @image-url("icons/night.svg");
+        colorize: root.color;
+    }
+    if kind == "sun": Image {
+        width: parent.width;
+        height: parent.height;
+        source: @image-url("icons/sun.svg");
+        colorize: root.color;
+    }
+    if kind == "back": Image {
+        width: parent.width;
+        height: parent.height;
+        source: @image-url("icons/back.svg");
+        colorize: root.color;
+    }
+    if kind == "info": Image {
+        width: parent.width;
+        height: parent.height;
+        source: @image-url("icons/info.svg");
+        colorize: root.color;
+    }
+}

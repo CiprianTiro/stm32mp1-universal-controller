@@ -20,6 +20,7 @@ mod ir_layout;
 mod pointer;
 mod setup;
 mod theme;
+mod tiles;
 mod ws_client;
 mod zones;
 
@@ -191,6 +192,41 @@ fn main() {
     });
     // Unlocking only comes from the card's "Unlock …?" question, so it's
     // sent as confirmed -- backend_daemon refuses an unlock without it.
+    // Issue #95: the Devices page's filter chips, a tile's controls page,
+    // "Turn all off", the star.
+    let (ui_weak, r) = (ui.as_weak(), rows.clone());
+    ui.on_pick_filter(move |id| {
+        ui_weak.unwrap().set_device_filter(id);
+        r.borrow_mut().refresh();
+    });
+    let (ui_weak, r) = (ui.as_weak(), rows.clone());
+    ui.on_open_controls(move |id| {
+        let ui = ui_weak.unwrap();
+        if r.borrow().show_controls(&ui, id.as_str()) {
+            ui.set_device_message("".into());
+            ui.set_device_back(PAGE_CONTROLS);
+            ui.set_page(PAGE_CONTROLS);
+        }
+    });
+    let (tx, r) = (request_tx.clone(), rows.clone());
+    ui.on_all_off(move || {
+        let rows = r.borrow();
+        for device in rows.devices.values() {
+            let on = device.capabilities.switch.as_ref().is_some_and(|s| s.on);
+            if on && tiles::reachable(device) && tiles::is_light(device, &rows.templates) {
+                let _ = tx.send(ws_client::Request::Command {
+                    id: device.id.clone(),
+                    capability: "switch".into(),
+                    value: serde_json::json!({ "on": false }),
+                });
+            }
+        }
+    });
+    let tx = request_tx.clone();
+    ui.on_set_favourite(move |id, favourite| {
+        let _ = tx.send(ws_client::Request::UpdateDeviceInfo { id: id.to_string(), favourite: Some(favourite) });
+    });
+
     // Issue #85: an IR light's colour chip, and its brightness -/+ (a
     // press of one of its remote's buttons, for that card's device).
     let tx = request_tx.clone();
@@ -764,6 +800,21 @@ fn main() {
     // every 30 s (only the ones that changed are redrawn).
     let rows_for_ages = rows.clone();
     let ages_timer = slint::Timer::default();
+    // Issue #95: the home screen's clock, in the hub's time zone. Checked
+    // every 2 s; the screen only redraws when the minute changes.
+    let (clock_ui, clock_settings) = (ui.as_weak(), hub_settings.clone());
+    let clock_timer = slint::Timer::default();
+    clock_timer.start(slint::TimerMode::Repeated, std::time::Duration::from_secs(2), move || {
+        let Some(ui) = clock_ui.upgrade() else { return };
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+        let (time, date) = zones::clock(&clock_settings.borrow().time_zone, now);
+        if ui.get_clock_time() != time.as_str() {
+            ui.set_clock_time(time.into());
+        }
+        if ui.get_clock_date() != date.as_str() {
+            ui.set_clock_date(date.into());
+        }
+    });
     ages_timer.start(slint::TimerMode::Repeated, std::time::Duration::from_secs(30), move || {
         if let Ok(mut rows) = rows_for_ages.try_borrow_mut() {
             if rows.devices.values().any(|d| d.last_seen.is_some()) {
@@ -794,7 +845,10 @@ fn main() {
                     // For the settings page's "N devices can control this hub".
                     let _ = request_tx.send(ws_client::Request::ListClients);
                 }
-                ws_client::Update::Disconnected => ui.set_connected(false),
+                ws_client::Update::Disconnected => {
+                    ui.set_connected(false);
+                    wizard.borrow_mut().connection_lost(&ui);
+                }
                 ws_client::Update::Devices(list) => rows.borrow_mut().replace_all(list),
                 ws_client::Update::DeviceChanged(device) => {
                     // The details page follows its device (e.g. "online").
@@ -830,13 +884,14 @@ fn main() {
                 }
                 ws_client::Update::WizardStep(step) => wizard.borrow_mut().show_step(&ui, &request_tx, &step),
                 ws_client::Update::WizardError { session, field, message, detail } => {
-                    wizard.borrow_mut().show_error(&ui, &session, field.as_deref(), &message, &detail)
+                    wizard.borrow_mut().show_error(&ui, &request_tx, &session, field.as_deref(), &message, &detail)
                 }
                 ws_client::Update::WizardDone(device) => {
                     wizard.borrow_mut().finished(&ui, &device.name);
                     device_message_until = Some(std::time::Instant::now() + DEVICE_MESSAGE_TIME);
                 }
                 ws_client::Update::Removed(Ok(())) => {
+                    ui.set_device_back(0);
                     ui.set_page(setup::PAGE_DEVICES);
                     ui.set_device_message_ok(true);
                     ui.set_device_message(format!("{} removed", ui.get_dev_name()).into());
@@ -960,7 +1015,7 @@ fn main() {
                 // failed: said under the device list, like a failed command.
                 ws_client::Update::DeviceAction { name, result: Err(message), .. }
                     if matches!(name.as_str(), "open" | "close" | "stop")
-                        || (name == "press" && ui.get_page() == setup::PAGE_DEVICES) =>
+                        || (name == "press" && matches!(ui.get_page(), setup::PAGE_DEVICES | PAGE_CONTROLS)) =>
                 {
                     ui.set_device_message_ok(false);
                     ui.set_device_message(message.into());
@@ -1264,42 +1319,52 @@ fn apply_action_result(ui: &AppWindow, action: ws_client::Action, result: Result
 }
 
 /// The device list shown on the main screen (issue #34): the devices as
-/// backend_daemon last reported them, and the cards app.slint draws --
-/// split into rows of `columns` cards (issue #38: 1 on the touchscreen, 2
-/// or 3 on a monitor; app.slint decides by the window's width).
+/// backend_daemon last reported them, and what app.slint draws of them.
+/// Since issue #95 that's tiles (tiles.rs builds them): the ones the
+/// selected filter chip picks, under room headings, split into rows of
+/// `tile-columns` tiles; plus the chips, and the open controls page's
+/// full card.
 ///
-/// Each row is its own model (VecModel), all held by one model of rows,
-/// for the program's whole life. On a change only the cards that differ
-/// are updated (set_row_data); the rows are only rebuilt when devices
-/// appear, disappear or change order (or the column count changes) -- so
-/// the list doesn't jump back to the top every time a lamp is switched.
+/// The grid is one model of rows for the program's whole life. On a
+/// change only the tiles that differ are updated (set_row_data); the rows
+/// are only rebuilt when tiles appear, disappear or move (or the filter or
+/// the column count changes) -- so the list doesn't jump back to the top
+/// every time a lamp is switched.
 struct DeviceRows {
     devices: std::collections::BTreeMap<String, ws_client::Device>,
-    /// The device types (issue #40): whether a card offers "Pair again".
+    /// The device types (issue #40): "Pair again", and a tile's icon.
     templates: Vec<ws_client::Template>,
-    /// What app.slint shows: one entry per row of cards.
-    grid: std::rc::Rc<slint::VecModel<slint::ModelRc<DeviceItem>>>,
-    /// The same rows' own models, to update a single card.
-    rows: Vec<std::rc::Rc<slint::VecModel<DeviceItem>>>,
-    /// The id of each card, in order (row by row).
-    ids: Vec<String>,
-    /// How many columns the rows were built for.
-    columns: usize,
-    /// To read the column count (weak: see the callbacks in main).
+    /// What app.slint shows: one entry per row (a heading or tiles).
+    grid: std::rc::Rc<slint::VecModel<TileRow>>,
+    /// The tile rows' own models, by grid row (None for a heading).
+    rows: Vec<Option<std::rc::Rc<slint::VecModel<TileItem>>>>,
+    /// The grid's shape: each row's heading or tile ids.
+    shape: Vec<(String, Vec<String>)>,
+    /// The filter chips as last shown, and their model on the screen.
+    chips: Vec<FilterChip>,
+    chip_model: std::rc::Rc<slint::VecModel<FilterChip>>,
+    /// Favourites start selected the first time there are any.
+    filter_chosen: bool,
+    /// To read the filter, the column count, the theme (weak: see the
+    /// callbacks in main).
     ui: slint::Weak<AppWindow>,
 }
 
 impl DeviceRows {
     fn new(ui: &AppWindow) -> Self {
         let grid = std::rc::Rc::new(slint::VecModel::default());
-        ui.set_device_rows(grid.clone().into());
+        ui.set_tile_rows(grid.clone().into());
+        let chip_model = std::rc::Rc::new(slint::VecModel::default());
+        ui.set_filter_chips(chip_model.clone().into());
         DeviceRows {
             devices: Default::default(),
             templates: Vec::new(),
             grid,
             rows: Vec::new(),
-            ids: Vec::new(),
-            columns: 0,
+            shape: Vec::new(),
+            chips: Vec::new(),
+            chip_model,
+            filter_chosen: false,
             ui: ui.as_weak(),
         }
     }
@@ -1324,36 +1389,115 @@ impl DeviceRows {
         self.refresh();
     }
 
-    /// Brings the rows in line with `devices`: sorted by room, then name
-    /// (so a room's devices stay together), then id.
+    /// Brings the chips, the grid and the controls page in line with
+    /// `devices`.
     fn refresh(&mut self) {
         use slint::Model;
-        let columns = self.ui.upgrade().map_or(1, |ui| ui.get_columns().max(1) as usize);
-        let mut sorted: Vec<&ws_client::Device> = self.devices.values().collect();
-        sorted.sort_by(|a, b| (&a.room, &a.name, &a.id).cmp(&(&b.room, &b.name, &b.id)));
-        let ids: Vec<String> = sorted.iter().map(|d| d.id.clone()).collect();
-        let items: Vec<DeviceItem> = sorted.into_iter().map(|d| device_item(d, &self.templates)).collect();
-        if ids == self.ids && columns == self.columns {
-            // Same cards in the same places: card i is in row i / columns,
-            // at position i % columns.
-            for (i, item) in items.into_iter().enumerate() {
-                let row = &self.rows[i / columns];
-                if row.row_data(i % columns).as_ref() != Some(&item) {
-                    row.set_row_data(i % columns, item);
+        let Some(ui) = self.ui.upgrade() else { return };
+        let all: Vec<&ws_client::Device> = self.devices.values().collect();
+
+        // The chips; a filter whose chip is gone (no lights on any more,
+        // a room emptied) falls back to All.
+        let chips = tiles::chips(&all, &self.templates);
+        if !self.filter_chosen && !all.is_empty() {
+            self.filter_chosen = true;
+            if all.iter().any(|d| d.favourite) {
+                ui.set_device_filter(tiles::FAVOURITES.into());
+            }
+        }
+        let filter = ui.get_device_filter().to_string();
+        let filter = if chips.iter().any(|c| c.id == filter.as_str()) { filter } else { tiles::ALL.to_string() };
+        // Only real changes reach the screen: every change redraws.
+        if ui.get_device_filter() != filter.as_str() {
+            ui.set_device_filter(filter.as_str().into());
+        }
+        let same_chips = chips.len() == self.chips.len() && chips.iter().zip(&self.chips).all(|(a, b)| a.id == b.id);
+        if same_chips {
+            // The same chips, maybe new numbers ("18 W" -> "19 W"): just
+            // those labels.
+            for (i, chip) in chips.iter().enumerate() {
+                if *chip != self.chips[i] {
+                    self.chip_model.set_row_data(i, chip.clone());
                 }
             }
         } else {
-            self.rows = items
-                .chunks(columns)
-                .map(|cards| std::rc::Rc::new(slint::VecModel::from(cards.to_vec())))
+            self.chip_model.set_vec(chips.clone());
+        }
+        self.chips = chips;
+
+        // The grid: each group's heading, then its tiles in rows.
+        let columns = ui.get_tile_columns().max(1) as usize;
+        let accent = ui.global::<Theme>().get_accent();
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+        let mut rows: Vec<(String, Vec<TileItem>)> = Vec::new();
+        for (heading, group) in tiles::groups(&all, &filter, &self.templates, accent, now) {
+            if !heading.is_empty() {
+                rows.push((heading, Vec::new()));
+            }
+            for chunk in group.chunks(columns) {
+                rows.push((String::new(), chunk.to_vec()));
+            }
+        }
+        let shape: Vec<(String, Vec<String>)> =
+            rows.iter().map(|(h, t)| (h.clone(), t.iter().map(|t| t.id.to_string()).collect())).collect();
+        if shape == self.shape {
+            // Same tiles in the same places: update the changed ones.
+            for ((_, tiles), model) in rows.into_iter().zip(&self.rows) {
+                if let Some(model) = model {
+                    for (i, tile) in tiles.into_iter().enumerate() {
+                        if model.row_data(i).as_ref() != Some(&tile) {
+                            model.set_row_data(i, tile);
+                        }
+                    }
+                }
+            }
+        } else {
+            self.rows = rows
+                .iter()
+                .map(|(h, t)| h.is_empty().then(|| std::rc::Rc::new(slint::VecModel::from(t.clone()))))
                 .collect();
-            self.grid
-                .set_vec(self.rows.iter().map(|row| slint::ModelRc::from(row.clone())).collect::<Vec<_>>());
-            self.ids = ids;
-            self.columns = columns;
+            let grid: Vec<TileRow> = rows
+                .iter()
+                .zip(&self.rows)
+                .map(|((h, _), model)| TileRow {
+                    header: h.as_str().into(),
+                    tiles: model.clone().map_or_else(Default::default, slint::ModelRc::from),
+                })
+                .collect();
+            self.grid.set_vec(grid);
+            self.shape = shape;
+        }
+
+        // The controls page follows its device.
+        if ui.get_page() == PAGE_CONTROLS {
+            self.show_controls(&ui, ui.get_controls_item().id.as_str());
+        }
+    }
+
+    /// Fills the controls page (issue #95) for this device; false if it's
+    /// gone.
+    fn show_controls(&self, ui: &AppWindow, id: &str) -> bool {
+        match self.devices.get(id) {
+            Some(device) => {
+                let accent = ui.global::<Theme>().get_accent();
+                let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+                ui.set_controls_tile(tiles::tile(device, &self.templates, accent, now));
+                ui.set_controls_item(device_item(device, &self.templates));
+                ui.set_controls_favourite(device.favourite);
+                true
+            }
+            None => {
+                // Removed meanwhile (from the app, the cloud).
+                ui.set_device_back(0);
+                ui.set_page(setup::PAGE_DEVICES);
+                false
+            }
         }
     }
 }
+
+/// Issue #95: one device's controls (app.slint's page 20).
+const PAGE_CONTROLS: i32 = 20;
 
 /// Automations (issue #47): the list, the log, the editor, the location.
 const PAGE_AUTOMATIONS: i32 = 16;
@@ -1405,9 +1549,8 @@ fn show_log(ui: &AppWindow, log: &[ws_client::LogEntry], time_zone: &str) {
 const PAGE_SCENES: i32 = 14;
 const PAGE_CAPTURE: i32 = 15;
 
-/// The scenes on both pages: all of them on the Scenes page, the first
-/// few as the Devices page's quick buttons -- as many as fit beside its
-/// "Scenes" button: 2 on the touchscreen, 5 on a wide monitor.
+/// The scenes: on the Scenes page, and as the home screen's scene chips
+/// (all of them since #95; the row scrolls sideways).
 fn show_scenes(ui: &AppWindow, store: &std::cell::RefCell<Vec<ws_client::Scene>>, list: Vec<ws_client::Scene>) {
     let item = |s: &ws_client::Scene| {
         let devices: std::collections::BTreeSet<&str> = s.steps.iter().filter_map(|step| step["device"].as_str()).collect();
@@ -1419,8 +1562,6 @@ fn show_scenes(ui: &AppWindow, store: &std::cell::RefCell<Vec<ws_client::Scene>>
         SceneItem { id: s.id.clone().into(), name: s.name.clone().into(), detail: detail.into() }
     };
     let all: Vec<SceneItem> = list.iter().map(item).collect();
-    let quick = if ui.get_columns() <= 1 { 2 } else { 5 };
-    ui.set_quick_scenes(std::rc::Rc::new(slint::VecModel::from(all.iter().take(quick).cloned().collect::<Vec<_>>())).into());
     ui.set_scenes(std::rc::Rc::new(slint::VecModel::from(all)).into());
     *store.borrow_mut() = list;
 }
@@ -1582,12 +1723,7 @@ fn seen_ago(at: u64) -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
-    match now.saturating_sub(at) {
-        0..=59 => "just now".into(),
-        s @ 60..=3599 => format!("{} min ago", s / 60),
-        s @ 3600..=86399 => format!("{} h ago", s / 3600),
-        s => format!("{} days ago", s / 86400),
-    }
+    tiles::seen_ago(at, now)
 }
 
 fn status_text(device: &ws_client::Device) -> &'static str {

@@ -497,6 +497,7 @@ mod tests {
             identity: String::new(),
             online: None,
             last_seen: None,
+            favourite: false,
             capabilities: Capabilities::with_defaults(&t.capabilities).unwrap(),
         }
     }

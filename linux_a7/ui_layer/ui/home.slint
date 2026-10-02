@@ -1,0 +1,251 @@
+// home.slint -- the hub's home screen pieces (issue #95, second round):
+// the bottom navigation bar, round icon buttons, the scene chips, and the
+// big brightness slider of a device's controls page.
+//
+// The layout follows wall-panel dashboards (Apple Home on an iPad, Google
+// Nest Hub): a clock at the top, scenes as one-tap chips, devices as
+// tiles, and the four main places always one tap away at the bottom.
+
+import { Theme } from "theme.slint";
+import { Icon } from "icons.slint";
+
+// A round, icon-only button for the top bar: thumb-sized.
+export component IconButton inherits Rectangle {
+    in property <string> icon;
+    in property <color> tint: Theme.text;
+    callback clicked();
+
+    width: Theme.touch-height;
+    height: Theme.touch-height;
+    border-radius: self.height / 2;
+    background: touch.pressed ? Theme.surface-pressed : Theme.surface;
+    Icon {
+        kind: root.icon;
+        color: root.tint;
+    }
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// One of the bottom bar's places.
+component NavItem inherits Rectangle {
+    in property <string> icon;
+    in property <string> label;
+    in property <bool> current;
+    callback clicked();
+
+    // The current place: its icon on an accent pill (Material 3).
+    VerticalLayout {
+        alignment: center;
+        spacing: Theme.space-xxs;
+        HorizontalLayout {
+            alignment: center;
+            Rectangle {
+                width: 56px;
+                height: 28px;
+                border-radius: self.height / 2;
+                background: current ? Theme.accent : (touch.pressed ? Theme.surface-pressed : transparent);
+                animate background { duration: 150ms; }
+                Icon {
+                    kind: root.icon;
+                    color: current ? Theme.on-accent : Theme.text-muted;
+                }
+            }
+        }
+        Text {
+            text: root.label;
+            color: current ? Theme.text : Theme.text-muted;
+            font-size: Theme.font-caption;
+            horizontal-alignment: center;
+        }
+    }
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// The bottom bar: Home, Scenes, Automations, Settings. `current` is the
+// place shown (0-3).
+export component NavBar inherits Rectangle {
+    in property <int> current;
+    callback go(int);
+
+    background: Theme.surface;
+    // A hairline above it.
+    Rectangle {
+        y: 0;
+        height: 1px;
+        background: Theme.outline;
+    }
+    HorizontalLayout {
+        padding-top: Theme.space-xs;
+        padding-bottom: Theme.space-xs;
+        NavItem {
+            icon: "home";
+            label: "Home";
+            current: root.current == 0;
+            clicked => {
+                root.go(0);
+            }
+        }
+        NavItem {
+            icon: "scenes";
+            label: "Scenes";
+            current: root.current == 1;
+            clicked => {
+                root.go(1);
+            }
+        }
+        NavItem {
+            icon: "automation";
+            label: "Automations";
+            current: root.current == 2;
+            clicked => {
+                root.go(2);
+            }
+        }
+        NavItem {
+            icon: "settings";
+            label: "Settings";
+            current: root.current == 3;
+            clicked => {
+                root.go(3);
+            }
+        }
+    }
+}
+
+// A scene as a chip: tap = run it. `running`: waiting for it to finish.
+export component SceneChip inherits Rectangle {
+    in property <string> text;
+    in property <bool> running;
+    callback clicked();
+
+    height: 44px;
+    border-radius: self.height / 2;
+    background: touch.pressed || running ? Theme.surface-pressed : Theme.surface;
+    border-width: 1px;
+    border-color: Theme.outline;
+    HorizontalLayout {
+        padding-left: Theme.space-m;
+        padding-right: Theme.space-l;
+        spacing: Theme.space-xs;
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 28px;
+                height: 28px;
+                border-radius: self.height / 2;
+                background: Theme.accent;
+                Icon {
+                    width: 18px;
+                    height: 18px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    kind: "play";
+                    color: Theme.on-accent;
+                }
+            }
+        }
+        Text {
+            text: running ? root.text + " \u{2026}" : root.text;
+            color: Theme.text;
+            font-size: Theme.font-body;
+            vertical-alignment: center;
+        }
+    }
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// The controls page's brightness: a wide pill filled up to the level in
+// the light's own colour, the % on it -- slide anywhere along it. Like
+// devices.slint's LevelBar the command goes out once, when the finger
+// lifts, and the chosen value stays until the device confirms (at most
+// 2 s).
+export component BigLevel inherits Rectangle {
+    in property <int> level;
+    in property <color> tint: Theme.accent;
+    in property <bool> enabled: true;
+    in property <string> icon: "brightness";
+    callback set(int);
+
+    property <int> drag-level: -1;
+    property <int> pending: -1;
+    property <int> shown: drag-level >= 0 ? drag-level : (pending >= 0 ? pending : level);
+
+    changed level => {
+        pending = -1;
+    }
+    Timer {
+        interval: 2s;
+        running: pending >= 0;
+        triggered => {
+            pending = -1;
+        }
+    }
+
+    height: 64px;
+    border-radius: Theme.radius-medium * 2;
+    background: Theme.surface-pressed;
+    clip: true;
+
+    // The filled part.
+    Rectangle {
+        x: 0;
+        width: parent.width * max(shown, 0) / 100;
+        background: enabled ? root.tint : Theme.text-muted;
+        opacity: enabled ? 1 : 0.5;
+    }
+    HorizontalLayout {
+        padding-left: Theme.space-l;
+        padding-right: Theme.space-l;
+        spacing: Theme.space-s;
+        VerticalLayout {
+            alignment: center;
+            Icon {
+                kind: root.icon;
+                color: Theme.text;
+            }
+        }
+        Rectangle {
+            horizontal-stretch: 1;
+        }
+        Text {
+            text: shown + " %";
+            color: Theme.text;
+            font-size: Theme.font-heading;
+            vertical-alignment: center;
+        }
+    }
+    TouchArea {
+        enabled: root.enabled;
+        function level-at(x: length) -> int {
+            return max(1, min(100, round(x / self.width * 100)));
+        }
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.down) {
+                drag-level = level-at(self.mouse-x);
+            } else if (event.kind == PointerEventKind.up) {
+                if (drag-level >= 0 && drag-level != level) {
+                    pending = drag-level;
+                    set(drag-level);
+                }
+                drag-level = -1;
+            }
+        }
+        moved => {
+            if (self.pressed) {
+                drag-level = level-at(self.mouse-x);
+            }
+        }
+    }
+}

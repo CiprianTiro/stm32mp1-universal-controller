@@ -65,6 +65,7 @@ impl Adapter for M4Led {
             identity: String::new(),
             online: None,
             last_seen: None,
+            favourite: false,
             capabilities: Capabilities {
                 switch: Some(Switch { on: false }),
                 ..Default::default()

@@ -592,6 +592,7 @@ impl Session {
             identity: self.identity(),
             online: None,
             last_seen: None,
+            favourite: false,
             capabilities,
         };
         ctx.control
@@ -1184,6 +1185,7 @@ mod tests {
             identity: String::new(),
             online: None,
             last_seen: None,
+            favourite: false,
             capabilities: device::Capabilities::with_defaults(&["switch".to_string()]).unwrap(),
         };
         assert_eq!(unique_id("Kitchen strip", "wled", &[]), "kitchen-strip");
@@ -1426,6 +1428,7 @@ mod tests {
             identity: String::new(),
             online: None,
             last_seen: None,
+            favourite: false,
             capabilities: device::Capabilities::with_defaults(&["switch".into(), "media".into()]).unwrap(),
         };
         let old_key = [("client_key".to_string(), Secret::new("revoked-key"))].into();
