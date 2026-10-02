@@ -356,10 +356,12 @@ fn from_wled(state: &WledState, kelvin: Option<u16>) -> Reported {
         Some(k) if kelvin_to_rgb(k) == rgb => Color {
             hex: None,
             kelvin: Some(k),
+            ..Default::default()
         },
         _ => Color {
             hex: Some(rgb_to_hex(rgb)),
             kelvin: None,
+            ..Default::default()
         },
     });
     Reported {
@@ -606,6 +608,7 @@ mod tests {
                 color: Some(Color {
                     hex: Some("#FFFFFF".into()),
                     kelvin: None,
+                    ..Default::default()
                 }),
                 ..Default::default()
             },

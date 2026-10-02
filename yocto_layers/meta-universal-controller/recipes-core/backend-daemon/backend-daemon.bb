@@ -75,6 +75,7 @@ SRC_URI = " \
     file://src/ir_codes.rs \
     file://src/ir_encode.rs \
     file://src/ir_library.rs \
+    file://src/ir_light.rs \
     file://src/main.rs \
     file://src/mqtt.rs \
     file://src/network.rs \

@@ -21,7 +21,7 @@ import "../fonts/DejaVuSans.ttf";
 // screens (issue #61).
 import { Theme, Splash, Glyphs } from "theme.slint";
 import { HeaderButton } from "common.slint";
-import { DeviceItem, MediaInputItem, DeviceList } from "devices.slint";
+import { DeviceItem, MediaInputItem, ColorChip, DeviceList } from "devices.slint";
 import { TemplateItem, FoundItem, FieldItem, ChoiceItem, VariantItem, AddDevicePage, WizardPage, DevicePage } from "wizard.slint";
 import { RemoteItem, RemotePage } from "remote.slint";
 import { IrRemotePage, IrKeyItem, IrRow } from "ir_remote.slint";
@@ -33,7 +33,7 @@ import { AutomationItem, LogItem, AutomationsPage, LogPage, NewAutomationPage, L
 
 // Re-exported so main.rs can use these types (the Rust side only sees what
 // the main file exports).
-export { NetStatus, WifiNetwork, DeviceItem, MediaInputItem, ClientItem, AccentItem, ZoneItem }
+export { NetStatus, WifiNetwork, DeviceItem, MediaInputItem, ColorChip, ClientItem, AccentItem, ZoneItem }
 export { TemplateItem, FoundItem, FieldItem, ChoiceItem, VariantItem, RemoteItem, IrKeyItem, IrRow }
 export { SceneItem, PickItem, AutomationItem, LogItem }
 // The design tokens (issue #39): main.rs's theme.rs sets them.
@@ -297,6 +297,10 @@ export component AppWindow inherits Window {
     callback set-cover-position(string, int);
     callback set-climate(string, string, float, string);
     callback set-lock(string, bool);
+    // Issue #85: an IR light's colour chip, and its brightness -/+ (a
+    // press of that device's remote button).
+    callback set-color(string, string);
+    callback device-press(string, string);
 
     // ---- Adding and setting up devices (issue #40, wizard.slint) -------
     // The "Add a device" page.
@@ -384,6 +388,10 @@ export component AppWindow inherits Window {
     callback ir-learn(string);
     callback ir-forget(string);
     callback ir-rename(string, string);
+    // Issue #85: used as a light, and its strip's colour order.
+    in property <bool> ir-light;
+    in property <string> ir-order;
+    callback ir-set-light(bool, string);
     // Its code finder for a lost remote (issue #82, ir_finder.rs).
     in property <[RemoteItem]> ir-items;
     in property <bool> ir-loading;
@@ -555,6 +563,12 @@ export component AppWindow inherits Window {
             set-lock(id, locked) => {
                 root.set-lock(id, locked);
             }
+            set-color(id, hex) => {
+                root.set-color(id, hex);
+            }
+            press(id, button) => {
+                root.device-press(id, button);
+            }
         }
     }
 
@@ -603,6 +617,11 @@ export component AppWindow inherits Window {
         }
         rename(button, to) => {
             root.ir-rename(button, to);
+        }
+        light: root.ir-light;
+        order: root.ir-order;
+        set-light(on, order) => {
+            root.ir-set-light(on, order);
         }
         backspace => {
             root.ir-text = drop-last(root.ir-text);

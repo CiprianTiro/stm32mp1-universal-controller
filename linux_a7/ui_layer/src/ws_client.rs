@@ -191,6 +191,10 @@ pub struct Device {
     /* Issue #72: a battery device's last report (Unix seconds). */
     #[serde(default)]
     pub last_seen: Option<u64>,
+    /* Its adapter's plain settings; issue #85 reads an IR device's "light"
+     * and "colour_order". */
+    #[serde(default)]
+    pub config: std::collections::BTreeMap<String, String>,
     pub capabilities: Capabilities,
 }
 
@@ -269,6 +273,15 @@ pub struct Remote {
     /* Issue #42: buttons are taught (an IR blaster), with any names. */
     #[serde(default)]
     pub learn: bool,
+    /* Issue #85: an IR light's brighter / dimmer buttons. */
+    #[serde(default)]
+    pub brightness: Option<BrightnessButtons>,
+}
+
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct BrightnessButtons {
+    pub up: String,
+    pub down: String,
 }
 
 #[derive(Deserialize, Clone, Debug, PartialEq)]
@@ -345,6 +358,9 @@ pub struct Dimmer {
 pub struct Color {
     pub hex: Option<String>,
     pub kelvin: Option<u16>,
+    /* Issue #85: the only colours it can show (an IR LED strip). */
+    #[serde(default)]
+    pub palette: Vec<String>,
 }
 
 #[derive(Deserialize, Clone, Debug, PartialEq)]

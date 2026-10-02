@@ -107,6 +107,13 @@ channel list:
     python3 tools/hub_ws.py <board> action <id> media channels '{"query": "pro", "offset": 0, "limit": 100}'
     python3 tools/hub_ws.py <board> action <id> media tune '{"channel": "<id from the list>"}'
 
+An IR remote device as a light (issue #85): its switch, colour and
+brightness buttons; ORDER = what the strip shows for Red, Green, Blue
+(RGB if wired right, GRB if Red and Green are swapped):
+
+    python3 tools/hub_ws.py <board> ir-light <id> on [ORDER]
+    python3 tools/hub_ws.py <board> ir-light <id> off
+
 Adding real devices (issue #40): the hub's setup wizard, step by step in
 the terminal. `found` lists what the hub sees on the network; pick one with
 found=<address>, or start from a device type (and optionally its way in):
@@ -232,6 +239,12 @@ def build_request(args):
         case ["press", device_id, button]:
             return {"action": "device_action", "id": device_id, "capability": "remote",
                     "name": "press", "args": {"button": button}}
+        case ["ir-light", device_id, "on" | "off" as what, *order] if len(order) <= 1:
+            args = {"enabled": what == "on"}
+            if order:
+                args["order"] = order[0].upper()
+            return {"action": "device_action", "id": device_id, "capability": "remote",
+                    "name": "light", "args": args}
         case ["type", device_id, text]:
             return {"action": "device_action", "id": device_id, "capability": "remote",
                     "name": "type", "args": {"text": text}}

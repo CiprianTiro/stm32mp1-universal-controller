@@ -20,6 +20,7 @@ mod hotspot;
 mod ir_codes;
 mod ir_encode;
 mod ir_library;
+mod ir_light;
 mod mqtt;
 mod network;
 mod rpmsg;
