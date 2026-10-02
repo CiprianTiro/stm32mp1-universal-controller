@@ -56,8 +56,10 @@ SRC_URI = " \
     file://src/adapters/esp_prov/ble.rs \
     file://src/adapters/esp_prov/pb.rs \
     file://src/adapters/esp_prov/srp.rs \
+    file://src/adapters/http_generic.rs \
     file://src/adapters/ir_blaster.rs \
     file://src/adapters/net.rs \
+    file://src/adapters/wiz.rs \
     file://src/adapters/wled.rs \
     file://src/auth.rs \
     file://src/ble.rs \

@@ -384,7 +384,10 @@ impl Session {
             steps: chosen.steps.clone(),
             pos: 0,
             history: Vec::new(),
-            values: SetupValues::default(),
+            values: SetupValues {
+                template: template.id.clone(),
+                ..Default::default()
+            },
             found: None,
             probe: None,
             last_active: Instant::now(),
@@ -449,6 +452,7 @@ impl Session {
             values: SetupValues {
                 plain: device.config.clone(),
                 secret: ctx.control.secrets().get(&device.id),
+                template: template.id.clone(),
             },
             existing: Some((device, mode)),
             steps,
@@ -1229,7 +1233,7 @@ mod tests {
         let (templates, problems) = Templates::load(
             &dir,
             &Known {
-                adapters: &["m4-led", "wled", "lg-webos", "ir-blaster"],
+                adapters: &["m4-led", "wled", "lg-webos", "ir-blaster", "wiz", "http"],
                 capabilities: &device::CAPABILITY_NAMES,
             },
         );

@@ -2,7 +2,9 @@
  * adapters -- the code that speaks each device family's protocol (issue
  * #40). A TEMPLATE (templates.rs) says what a device type is; its ADAPTER
  * makes it work. One adapter per protocol family: "m4-led" (the board's
- * LED, through the Cortex-M4), later "wled", "lg-webos", ...
+ * LED, through the Cortex-M4), "wled", "lg-webos", "wiz", ... -- and
+ * "http" (http_generic.rs, issue #75), which runs whatever a template's
+ * "http" block describes: simple devices need no adapter of their own.
  *
  * AT RUN TIME every hardware device has its own task, started by its
  * adapter (Adapter::start). The task keeps whatever connection the device
@@ -28,13 +30,21 @@
  */
 pub mod channels;
 pub mod esp_prov;
+pub mod http_generic;
 pub mod ir_blaster;
 pub mod lg_webos;
 pub mod m4_led;
 pub mod net;
+pub mod wiz;
 pub mod wled;
 #[cfg(test)]
+pub mod http_sim;
+#[cfg(test)]
 pub mod lg_sim;
+#[cfg(test)]
+pub mod test_hub;
+#[cfg(test)]
+pub mod wiz_sim;
 #[cfg(test)]
 pub mod wled_sim;
 
@@ -146,6 +156,9 @@ impl Hub {
 pub struct SetupValues {
     pub plain: BTreeMap<String, String>,
     pub secret: DeviceSecrets,
+    /* The template being set up (the generic HTTP adapter's probe reads
+     * its "http" block). */
+    pub template: String,
 }
 
 /* What a probe learned about the device. */

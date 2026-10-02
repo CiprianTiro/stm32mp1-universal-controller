@@ -1,0 +1,38 @@
+{
+  "$comment": "WiZ WiFi lights: open local API over UDP 38899 (pattern P1), found by UDP broadcast. Format: wiki Device-Templates.",
+  "format": 1,
+  "id": "wiz",
+  "version": 1,
+  "name": "WiZ light",
+  "category": "lighting",
+  "description": "WiZ bulbs and lamps (also sold as Philips Smart LED WiZ). The light must already be on your WiFi (set up once in the WiZ app), with \"Allow local communication\" switched on in the WiZ app's settings.",
+  "adapter": "wiz",
+  "capabilities": ["switch", "dimmer", "color"],
+  "inputs": [
+    {
+      "id": "host",
+      "type": "text",
+      "label": "Address",
+      "hint": "The light's IP address (WiZ app: the light's settings > Device info), e.g. 192.168.1.60",
+      "validate": { "pattern": "host" }
+    }
+  ],
+  "discovery": [
+    {
+      "method": "udp_broadcast",
+      "port": 38899,
+      "probe": "{\"method\":\"getPilot\",\"params\":{}}",
+      "match": { "json.method": "getPilot" },
+      "fill": { "host": "{address}", "mac": "{json.result.mac}" }
+    }
+  ],
+  "setup": [
+    { "id": "guided", "label": "Find it automatically", "steps": [ { "type": "discover" }, { "type": "test" } ] },
+    { "id": "advanced", "label": "Enter the address", "steps": [ { "type": "form", "fields": ["host"] }, { "type": "test" } ] }
+  ],
+  "errors": {
+    "timeout": "The light didn't answer. Check that it's switched on at the wall, and that \"Allow local communication\" is on in the WiZ app (Settings > Security)."
+  },
+  "identity": "{mac}",
+  "defaults": { "name": "Light" }
+}

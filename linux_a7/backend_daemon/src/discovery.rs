@@ -8,8 +8,17 @@
  *   - mDNS (DNS-SD): a browse per service type ("_wled._tcp"), running
  *     all the time -- devices answer and announce themselves;
  *   - SSDP: an M-SEARCH per search target every PASS, or when a client
- *     asks (discover_now) -- the TV answers.
- * (UDP broadcast, WS-Discovery and the rest come with their first device.)
+ *     asks (discover_now) -- the TV answers;
+ *   - UDP broadcast (issue #75): a template's probe ("getPilot" for WiZ
+ *     bulbs) sent to the broadcast address of every network the hub is
+ *     on, with the SSDP rounds -- every device of that kind answers;
+ *   - UDP multicast (issue #75): listening on a group devices announce
+ *     themselves to (Yeelight), all the time.
+ * (WS-Discovery and the rest come with their first device.)
+ *
+ * A template's "match" picks ITS devices among what a method finds: every
+ * Shelly answers mDNS "_shelly._tcp", the plug template only takes the
+ * ones whose TXT says app=PlugSG3.
  *
  * WHAT IT'S FOR:
  *   - the "Found on your network" INBOX: devices matching a template that
@@ -18,13 +27,18 @@
  *     identity: MAC, UUID) simply gets its address updated, and its
  *     adapter restarted -- no "device lost" after a router restart.
  *
- * Gentle on the network: mDNS is mostly listening; SSDP sends one small
- * packet per template every PASS (5 min). Nothing here scans addresses.
+ * Gentle on the network: mDNS and multicast are listening; SSDP and UDP
+ * broadcast send one small packet per template every PASS (5 min). Nothing
+ * here scans addresses.
  *
- * FIREWALL: SSDP answers arrive as unicast to our sending port, which the
- * default-deny firewall (#37) only lets in because this file always sends
- * from SSDP_PORT, opened in hub-firewall.nft for exactly that. mDNS uses
- * 5353, open already.
+ * FIREWALL: SSDP and UDP broadcast answers arrive as unicast to our
+ * sending port, which the default-deny firewall (#37) only lets in
+ * because this file always sends from SSDP_PORT / UDP_PORT, opened in
+ * hub-firewall.nft for exactly that. (A broadcast's answer comes from the
+ * DEVICE's address, not the broadcast address it was sent to, so the
+ * firewall can't match it to the request as it does for normal replies.)
+ * mDNS uses 5353, open already; a template's multicast port must be
+ * opened there too.
  */
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -35,12 +49,16 @@ use tokio::net::UdpSocket;
 use tokio::sync::{mpsc, watch, Notify};
 
 use crate::control::Control;
+use crate::network;
 use crate::templates::{self, Template, Templates};
 
 /* The port SSDP searches are sent FROM -- and answers come back TO.
  * Opened in hub-firewall.nft (keep them equal). */
 pub const SSDP_PORT: u16 = 50190;
 const SSDP_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(239, 255, 255, 250)), 1900);
+/* The port UDP broadcast probes are sent FROM, answers come back TO.
+ * Opened in hub-firewall.nft (keep them equal). */
+pub const UDP_PORT: u16 = 50191;
 /* How long answers are collected after a search. */
 const SSDP_WAIT: Duration = Duration::from_secs(3);
 /* A search round every PASS (and on demand). */
@@ -241,6 +259,31 @@ pub async fn run(discovery: Arc<Discovery>, templates: Arc<Templates>, control: 
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
         .collect();
+    /* UDP broadcast probes: (port, what to send). */
+    let udp_probes: Vec<(u16, String)> = templates
+        .all()
+        .flat_map(|t| t.discovery.iter())
+        .filter_map(|d| match d {
+            templates::Discovery::UdpBroadcast { port, probe, .. } => Some((*port, probe.clone())),
+            _ => None,
+        })
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+
+    /* UDP multicast: one listener per group and port. */
+    let groups: std::collections::BTreeSet<(Ipv4Addr, u16)> = templates
+        .all()
+        .flat_map(|t| t.discovery.iter())
+        .filter_map(|d| match d {
+            templates::Discovery::UdpMulticast { group, port, .. } => Some((*group, *port)),
+            _ => None,
+        })
+        .collect();
+    for (group, port) in groups {
+        spawn_multicast_listen(group, port, seen_tx.clone());
+    }
+
     {
         let discovery = discovery.clone();
         let seen_tx = seen_tx.clone();
@@ -249,6 +292,11 @@ pub async fn run(discovery: Arc<Discovery>, templates: Arc<Templates>, control: 
                 if !ssdp_targets.is_empty() {
                     if let Err(e) = ssdp_round(&ssdp_targets, &seen_tx).await {
                         println!("discovery: SSDP search failed: {e}");
+                    }
+                }
+                if !udp_probes.is_empty() {
+                    if let Err(e) = udp_round(&udp_probes, &broadcast_targets(), UDP_PORT, &seen_tx).await {
+                        println!("discovery: UDP broadcast failed: {e}");
                     }
                 }
                 if discovery.expire() {
@@ -271,9 +319,11 @@ pub async fn run(discovery: Arc<Discovery>, templates: Arc<Templates>, control: 
                 let matches = match method {
                     templates::Discovery::Mdns { service, .. } => what == format!("mdns:{service}"),
                     templates::Discovery::Ssdp { search, .. } => what == format!("ssdp:{search}"),
+                    templates::Discovery::UdpBroadcast { port, .. } => what == format!("udp:{port}"),
+                    templates::Discovery::UdpMulticast { group, port, .. } => what == format!("mcast:{group}:{port}"),
                     _ => false,
                 };
-                if !matches {
+                if !matches || !matches_template(method, &vars) {
                     continue;
                 }
                 let Some(found) = to_found(template, method.fill(), &vars) else {
@@ -287,6 +337,11 @@ pub async fn run(discovery: Arc<Discovery>, templates: Arc<Templates>, control: 
             discovery.announce();
         }
     }
+}
+
+/* The template's "match": every condition holds for this sighting. */
+fn matches_template(method: &templates::Discovery, vars: &Vars) -> bool {
+    method.matches().iter().all(|(name, wanted)| fill(&format!("{{{name}}}"), vars) == *wanted)
 }
 
 /* IP auto-update: an added device with this identity at another address. */
@@ -391,6 +446,142 @@ fn parse_ssdp(packet: &[u8], from: IpAddr) -> Option<Vars> {
     Some(vars)
 }
 
+/* Where UDP broadcast probes go: the broadcast address of every network
+ * the hub is on (192.168.1.255 for 192.168.1.x/24) -- 255.255.255.255
+ * would only leave through ONE interface (the default route's), missing
+ * the hotspot or a second network. Loopback is skipped. */
+fn broadcast_targets() -> Vec<Ipv4Addr> {
+    let mut targets: Vec<Ipv4Addr> = network::ipv4_interfaces()
+        .iter()
+        .filter(|i| !i.address.is_loopback())
+        .map(|i| i.broadcast())
+        .collect();
+    targets.sort();
+    targets.dedup();
+    if targets.is_empty() {
+        targets.push(Ipv4Addr::BROADCAST);
+    }
+    targets
+}
+
+/* One UDP broadcast round: every probe to every target, answers
+ * collected SSDP_WAIT. An answer belongs to the probe sent to the port it
+ * comes FROM (a WiZ bulb answers from 38899). `from_port`: UDP_PORT (the
+ * tests use a free one). */
+async fn udp_round(
+    probes: &[(u16, String)],
+    targets: &[Ipv4Addr],
+    from_port: u16,
+    seen_tx: &mpsc::Sender<(String, Vars)>,
+) -> std::io::Result<()> {
+    let socket = UdpSocket::bind(("0.0.0.0", from_port)).await?;
+    socket.set_broadcast(true)?;
+    for (port, probe) in probes {
+        for target in targets {
+            /* One unreachable network (an interface going down) mustn't
+             * stop the others. */
+            if let Err(e) = socket.send_to(probe.as_bytes(), (*target, *port)).await {
+                println!("discovery: UDP probe to {target}:{port}: {e}");
+            }
+        }
+    }
+    let deadline = tokio::time::Instant::now() + SSDP_WAIT;
+    let mut buf = vec![0u8; 4096];
+    while let Ok(Ok((len, from))) = tokio::time::timeout_at(deadline, socket.recv_from(&mut buf)).await {
+        if !probes.iter().any(|(port, _)| *port == from.port()) {
+            continue;
+        }
+        let vars = parse_udp(&buf[..len], from);
+        if seen_tx.send((format!("udp:{}", from.port()), vars)).await.is_err() {
+            break;
+        }
+    }
+    Ok(())
+}
+
+/* Listens to a multicast group for the daemon's lifetime. The group is
+ * joined on every network the hub is on, again every PASS: the WiFi may
+ * connect long after the daemon started. */
+fn spawn_multicast_listen(group: Ipv4Addr, port: u16, seen_tx: mpsc::Sender<(String, Vars)>) {
+    tokio::spawn(async move {
+        let socket = match UdpSocket::bind(("0.0.0.0", port)).await {
+            Ok(socket) => socket,
+            Err(e) => {
+                println!("discovery: can't listen to {group}:{port}: {e}");
+                return;
+            }
+        };
+        let what = format!("mcast:{group}:{port}");
+        let mut join = tokio::time::interval(PASS);
+        let mut buf = vec![0u8; 4096];
+        loop {
+            tokio::select! {
+                _ = join.tick() => {
+                    for iface in network::ipv4_interfaces().iter().filter(|i| !i.address.is_loopback()) {
+                        /* "Already a member" on the second round: fine. */
+                        let _ = socket.join_multicast_v4(group, iface.address);
+                    }
+                }
+                received = socket.recv_from(&mut buf) => {
+                    let Ok((len, from)) = received else { continue };
+                    if seen_tx.send((what.clone(), parse_udp(&buf[..len], from))).await.is_err() {
+                        return;
+                    }
+                }
+            }
+        }
+    });
+}
+
+/* A UDP answer or announcement: {address} and {port} it came from, then
+ * either JSON (WiZ: {"method":"getPilot","result":{"mac":...}}) as
+ * {json.result.mac}, or "Name: value" lines (Yeelight, SSDP-like) as
+ * {header.Name}. */
+fn parse_udp(packet: &[u8], from: SocketAddr) -> Vars {
+    let mut vars = Vars::new();
+    vars.insert("address".into(), from.ip().to_string());
+    vars.insert("port".into(), from.port().to_string());
+    if let Ok(json) = serde_json::from_slice::<serde_json::Value>(packet) {
+        flatten_json("json", &json, &mut vars);
+    } else if let Ok(text) = std::str::from_utf8(packet) {
+        for line in text.split(['\r', '\n']) {
+            if let Some((name, value)) = line.split_once(':') {
+                if !name.trim().is_empty() && !name.contains(' ') {
+                    vars.insert(format!("header.{}", name.trim()), value.trim().to_string());
+                }
+            }
+        }
+    }
+    vars
+}
+
+/* {"result": {"mac": "a8bb50..", "rssi": -60}} under "json" ->
+ * json.result.mac = "a8bb50..", json.result.rssi = "-60". List items by
+ * index (json.list.0). Texts as they are, numbers and true/false as
+ * written in JSON; null is left out. */
+fn flatten_json(prefix: &str, value: &serde_json::Value, vars: &mut Vars) {
+    use serde_json::Value;
+    match value {
+        Value::Object(map) => {
+            for (key, value) in map {
+                flatten_json(&format!("{prefix}.{key}"), value, vars);
+            }
+        }
+        Value::Array(items) => {
+            for (i, value) in items.iter().enumerate() {
+                flatten_json(&format!("{prefix}.{i}"), value, vars);
+            }
+        }
+        Value::String(text) => {
+            vars.insert(prefix.to_string(), text.clone());
+        }
+        Value::Null => {}
+        other => {
+            vars.insert(prefix.to_string(), other.to_string());
+        }
+    }
+}
+
 fn percent_decode(text: &str) -> String {
     /* Byte by byte: "%" + two hex digits -> that byte. Anything else,
      * including a "%" not followed by two hex digits, stays as it is.
@@ -460,21 +651,134 @@ mod tests {
         assert_eq!(percent_decode("ends with %4"), "ends with %4");
     }
 
-    /* Against the REAL network: finds WLED devices (mDNS) and LG TVs
-     * (SSDP) on the LAN of the machine running it. Not part of the normal
-     * test run (it needs those devices and takes a few seconds):
-     *     cargo test live_discovery -- --ignored --nocapture */
+    /* Against the REAL network: finds WLED devices and Shelly plugs
+     * (mDNS), LG TVs (SSDP) and WiZ lights (UDP broadcast) on the LAN of
+     * the machine running it. Not part of the normal test run (it needs
+     * those devices and takes a few seconds):
+     *     cargo test live_discovery -- --ignored --nocapture
+     * (A PC's own firewall may drop the UDP broadcast's answers -- ufw
+     * does: they don't look like replies. The hub's opens UDP_PORT.) */
     #[tokio::test]
     #[ignore]
     async fn live_discovery() {
         let (tx, mut rx) = mpsc::channel(64);
         let daemon = mdns_sd::ServiceDaemon::new().unwrap();
         spawn_mdns_browse(&daemon, "_wled._tcp".into(), tx.clone());
+        spawn_mdns_browse(&daemon, "_shelly._tcp".into(), tx.clone());
         ssdp_round(&["urn:lge-com:service:webos-second-screen:1".into()], &tx).await.unwrap();
+        let wiz = (38899, r#"{"method":"getPilot","params":{}}"#.to_string());
+        udp_round(&[wiz], &broadcast_targets(), UDP_PORT, &tx).await.unwrap();
         let deadline = tokio::time::Instant::now() + Duration::from_secs(6);
         while let Ok(Some((what, vars))) = tokio::time::timeout_at(deadline, rx.recv()).await {
             println!("{what}: {vars:?}");
         }
+    }
+
+    fn wiz_template() -> Template {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("templates/wiz.json");
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn a_wiz_answer_becomes_a_found_bulb() {
+        let answer = br#"{"method":"getPilot","env":"pro","result":{"mac":"a8bb5012ab34","rssi":-58,"state":true,"dimming":80}}"#;
+        let vars = parse_udp(answer, "192.168.1.77:38899".parse().unwrap());
+        assert_eq!(vars["json.result.mac"], "a8bb5012ab34");
+        assert_eq!(vars["json.result.rssi"], "-58");
+        assert_eq!(vars["json.result.state"], "true");
+        let t = wiz_template();
+        assert!(matches_template(&t.discovery[0], &vars));
+        let found = to_found(&t, t.discovery[0].fill(), &vars).unwrap();
+        assert_eq!(found.values["host"], "192.168.1.77");
+        assert_eq!(found.identity, "a8bb5012ab34");
+
+        /* Something else answering on that port: not a bulb. */
+        let other = parse_udp(br#"{"method":"error"}"#, "192.168.1.78:38899".parse().unwrap());
+        assert!(!matches_template(&t.discovery[0], &other));
+    }
+
+    /* What a real Shelly Plug S Gen3 advertises (seen with
+     * live_discovery, firmware 1.7.3): the plug template takes it, with
+     * the same id its probe learns -- so IP auto-update works. */
+    #[test]
+    fn a_shelly_sighting_becomes_a_found_plug() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("templates/shelly-plug-gen3.json");
+        let t: Template = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let mut vars: Vars = [
+            ("address", "192.168.1.131"),
+            ("name", "shellyplugsg3-d885ac1fb048"),
+            ("port", "80"),
+            ("txt.app", "PlugSG3"),
+            ("txt.gen", "3"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        assert!(matches_template(&t.discovery[0], &vars));
+        let found = to_found(&t, t.discovery[0].fill(), &vars).unwrap();
+        assert_eq!(found.identity, "shellyplugsg3-d885ac1fb048");
+        assert_eq!(found.values["host"], "192.168.1.131");
+
+        /* Another Shelly (a Plus 1 relay): not this template's. */
+        vars.insert("txt.app".into(), "Plus1".into());
+        assert!(!matches_template(&t.discovery[0], &vars));
+    }
+
+    #[test]
+    fn text_announcements_become_headers() {
+        let packet = b"NOTIFY * HTTP/1.1\r\nHost: 239.255.255.250:1982\r\nLocation: yeelight://192.168.1.9:55443\r\nid: 0x0000000002dfb19a\r\n\r\n";
+        let vars = parse_udp(packet, "192.168.1.9:1982".parse().unwrap());
+        assert_eq!(vars["header.Location"], "yeelight://192.168.1.9:55443");
+        assert_eq!(vars["header.id"], "0x0000000002dfb19a");
+        assert_eq!(vars["address"], "192.168.1.9");
+        /* The request line has no "Name:" -- left out. */
+        assert!(!vars.keys().any(|k| k.contains("NOTIFY")));
+    }
+
+    #[tokio::test]
+    async fn a_udp_round_finds_simulated_bulbs() {
+        /* Two "bulbs" on localhost answer the probe; a third device
+         * answers from another port (not the probe's) and is ignored. */
+        let bulb = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let port = bulb.local_addr().unwrap().port();
+        let stranger = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        tokio::spawn(async move {
+            let mut buf = [0u8; 256];
+            let (len, from) = bulb.recv_from(&mut buf).await.unwrap();
+            assert_eq!(&buf[..len], b"hello?");
+            bulb.send_to(br#"{"method":"getPilot","result":{"mac":"aa"}}"#, from).await.unwrap();
+            stranger.send_to(b"{}", from).await.unwrap();
+        });
+        let (tx, mut rx) = mpsc::channel(8);
+        /* A free port to send from (UDP_PORT may be taken on a dev PC). */
+        let from_port = UdpSocket::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap().port();
+        udp_round(&[(port, "hello?".into())], &[Ipv4Addr::LOCALHOST], from_port, &tx).await.unwrap();
+        drop(tx);
+        let (what, vars) = rx.recv().await.unwrap();
+        assert_eq!(what, format!("udp:{port}"));
+        assert_eq!(vars["json.result.mac"], "aa");
+        assert!(rx.recv().await.is_none(), "only the bulb's answer counts");
+    }
+
+    #[tokio::test]
+    async fn multicast_listeners_hear_announcements() {
+        /* Sent straight to the listening port (multicast routing on a
+         * build machine is unpredictable); what's tested is the listener. */
+        let port = UdpSocket::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap().port();
+        let (tx, mut rx) = mpsc::channel(8);
+        spawn_multicast_listen(Ipv4Addr::new(239, 255, 255, 250), port, tx);
+        let sender = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let mut got = None;
+        for _ in 0..20 {
+            sender.send_to(b"id: 42\r\n", ("127.0.0.1", port)).await.unwrap();
+            if let Ok(Some(seen)) = tokio::time::timeout(Duration::from_millis(100), rx.recv()).await {
+                got = Some(seen);
+                break;
+            }
+        }
+        let (what, vars) = got.expect("no announcement heard");
+        assert_eq!(what, format!("mcast:239.255.255.250:{port}"));
+        assert_eq!(vars["header.id"], "42");
     }
 
     #[test]

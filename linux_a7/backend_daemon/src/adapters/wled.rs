@@ -358,7 +358,7 @@ fn from_wled(state: &WledState, kelvin: Option<u16>) -> Reported {
             kelvin: Some(k),
         },
         _ => Color {
-            hex: Some(format!("#{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2])),
+            hex: Some(rgb_to_hex(rgb)),
             kelvin: None,
         },
     });
@@ -426,8 +426,8 @@ fn level_from_bri(bri: u8) -> u8 {
     ((u32::from(bri) * 100 + 127) / 255).max(1) as u8
 }
 
-/* "#FF8800" -> [255, 136, 0] */
-fn hex_to_rgb(hex: &str) -> Option<[u8; 3]> {
+/* "#FF8800" -> [255, 136, 0]. Also the WiZ and generic HTTP adapters'. */
+pub(crate) fn hex_to_rgb(hex: &str) -> Option<[u8; 3]> {
     let digits = hex.strip_prefix('#')?;
     if digits.len() != 6 {
         return None;
@@ -436,11 +436,16 @@ fn hex_to_rgb(hex: &str) -> Option<[u8; 3]> {
     Some([channel(0)?, channel(2)?, channel(4)?])
 }
 
+/* [255, 136, 0] -> "#FF8800" (upper case, as device.rs's colours). */
+pub(crate) fn rgb_to_hex(rgb: [u8; 3]) -> String {
+    format!("#{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2])
+}
+
 /* A white temperature as RGB: the usual approximation of a black body's
  * colour (Tanner Helland's curve fit, good from 1000 to 40000 K). Only an
  * RGB strip's best guess -- warm white from red+green LEDs never looks
  * like a real warm-white LED. */
-fn kelvin_to_rgb(kelvin: u16) -> [u8; 3] {
+pub(crate) fn kelvin_to_rgb(kelvin: u16) -> [u8; 3] {
     let t = f64::from(kelvin) / 100.0;
     let red = if t <= 66.0 {
         255.0

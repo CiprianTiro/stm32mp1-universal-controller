@@ -3,7 +3,8 @@
  * adapters share, so an adapter is mostly its protocol's logic.
  *
  *   http_json  one HTTP request with a JSON reply (WLED's /json/state,
- *              later Shelly, Tasmota, ...)
+ *              the generic HTTP adapter's Shelly, Tasmota, ...);
+ *              http_request: the same, any reply
  *   ws_connect a WebSocket to a device (WLED's /ws push channel)
  *   ws_open    a WebSocket on any port, plain or TLS with a PINNED
  *              certificate (the LG TV: its certificate is self-signed, so
@@ -11,6 +12,10 @@
  *              use" -- and refuses any other afterwards)
  *   wake_on_lan  the "magic packet" that switches on a device whose
  *              network is asleep (the TV in standby)
+ *   udp_request  one UDP request/answer, with retries (WiZ bulbs; issue
+ *              #75 -- later LIFX, Yeelight's discovery, ...)
+ *   TcpClient  a TCP connection exchanging lines or length-prefixed
+ *              messages (Yeelight, old Kasa plugs, ...)
  *
  * Every call has a timeout: a device that stops answering mid-request
  * (unplugged, out of WiFi range) must never leave a task waiting forever.
@@ -124,7 +129,15 @@ pub fn with_port(host: &str, default_port: u16) -> String {
  * connection each time: devices like the ESP close it after every reply
  * anyway ("Connection: close"), and it's one request per command. */
 pub async fn http_json(method: Method, host: &str, path: &str, body: Option<&Value>) -> Result<Value, NetError> {
-    match tokio::time::timeout(HTTP_TIMEOUT, http_json_inner(method, host, path, body)).await {
+    let bytes = http_request(method, host, path, body).await?;
+    serde_json::from_slice(&bytes)
+        .map_err(|e| NetError::new(ErrorKind::Unsupported, format!("{host} didn't answer with JSON: {e}")))
+}
+
+/* The same request, the reply's body as it is (issue #75: a command's
+ * answer doesn't have to be JSON -- "OK", XML, nothing). */
+pub async fn http_request(method: Method, host: &str, path: &str, body: Option<&Value>) -> Result<Bytes, NetError> {
+    match tokio::time::timeout(HTTP_TIMEOUT, http_request_inner(method, host, path, body)).await {
         Ok(result) => result,
         Err(_) => Err(NetError::new(
             ErrorKind::Timeout,
@@ -133,7 +146,7 @@ pub async fn http_json(method: Method, host: &str, path: &str, body: Option<&Val
     }
 }
 
-async fn http_json_inner(method: Method, host: &str, path: &str, body: Option<&Value>) -> Result<Value, NetError> {
+async fn http_request_inner(method: Method, host: &str, path: &str, body: Option<&Value>) -> Result<Bytes, NetError> {
     let unreachable = |e: String| NetError::new(ErrorKind::Unreachable, e);
     /* Answered, but not what an adapter of this kind expects. */
     let unsupported = |e: String| NetError::new(ErrorKind::Unsupported, e);
@@ -175,7 +188,7 @@ async fn http_json_inner(method: Method, host: &str, path: &str, body: Option<&V
     if !status.is_success() {
         return Err(unsupported(format!("{host} answered {path} with HTTP {status}")));
     }
-    serde_json::from_slice(&bytes).map_err(|e| unsupported(format!("{host} didn't answer with JSON: {e}")))
+    Ok(bytes)
 }
 
 /* Opens ws://{host}{path}. Within HTTP_TIMEOUT, like a request. */
@@ -406,6 +419,210 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 /* ------------------------------------------------------------------ */
+/* Raw UDP and TCP (issue #75)                                         */
+/* ------------------------------------------------------------------ */
+
+/* (TcpClient has no adapter using it yet -- Yeelight and old Kasa plugs
+ * will; it's tested below. The allow goes when the first one comes.) */
+
+/* How long one UDP try waits for its answer. LAN devices answer within
+ * milliseconds; a bulb busy with its WiFi can take a few hundred. */
+pub const UDP_TRY_TIMEOUT: Duration = Duration::from_millis(1000);
+/* Biggest datagram accepted (and the biggest UDP can carry). */
+const MAX_DATAGRAM: usize = 65_535;
+
+/* One UDP request: sends `payload` to host (default port `port`) and
+ * returns the first answer `accept` takes. UDP can lose a packet without
+ * anyone noticing, so it's sent up to `tries` times, each waiting
+ * UDP_TRY_TIMEOUT.
+ *
+ * `accept` skips answers to something else: a WiZ bulb may still be
+ * answering an earlier try, or send a status of its own. Only the
+ * device's own address is listened to: the socket is CONNECTED to it, so
+ * the kernel drops datagrams from anyone else -- and the firewall (#37)
+ * lets the answer in as part of an exchange the hub started.
+ *
+ * Only for commands that are fine to repeat (set the light to 50 %, ask
+ * for the state): a retried "toggle" could toggle twice. */
+pub async fn udp_request(
+    host: &str,
+    port: u16,
+    payload: &[u8],
+    tries: u32,
+    accept: impl Fn(&[u8]) -> bool,
+) -> Result<Vec<u8>, NetError> {
+    let unreachable = |e: String| NetError::new(ErrorKind::Unreachable, e);
+    let socket = UdpSocket::bind("0.0.0.0:0")
+        .await
+        .map_err(|e| unreachable(format!("UDP: {e}")))?;
+    /* connect() also resolves a name ("bulb.local") and checks there's a
+     * route; nothing is sent yet. */
+    socket
+        .connect(with_port(host, port))
+        .await
+        .map_err(|e| unreachable(format!("can't reach {host}: {e}")))?;
+    let mut buf = vec![0u8; MAX_DATAGRAM];
+    for _ in 0..tries.max(1) {
+        socket
+            .send(payload)
+            .await
+            .map_err(|e| unreachable(format!("can't reach {host}: {e}")))?;
+        let deadline = tokio::time::Instant::now() + UDP_TRY_TIMEOUT;
+        loop {
+            match tokio::time::timeout_at(deadline, socket.recv(&mut buf)).await {
+                Ok(Ok(len)) if accept(&buf[..len]) => return Ok(buf[..len].to_vec()),
+                /* Something else: keep listening until this try's time is up. */
+                Ok(Ok(_)) => continue,
+                /* "Connection refused": the host said nothing listens on
+                 * that port (an ICMP message) -- trying again won't help. */
+                Ok(Err(e)) => return Err(unreachable(format!("can't reach {host}: {e}"))),
+                Err(_) => break,
+            }
+        }
+    }
+    Err(NetError::new(
+        ErrorKind::Timeout,
+        format!("{host} isn't answering (UDP, {} tries)", tries.max(1)),
+    ))
+}
+
+/* How messages are cut out of a TCP byte stream. */
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug)]
+pub enum Framing {
+    /* Text lines ending with this ("\r\n" for Yeelight, "\n" for most). */
+    Lines(&'static str),
+    /* A 4-byte big-endian length, then that many bytes (old TP-Link
+     * Kasa, and many binary protocols). */
+    Length32,
+}
+
+/* A TCP connection to a device that exchanges whole messages ("frames").
+ * Every read and write has a timeout; a frame bigger than MAX_REPLY is
+ * refused (a broken or hostile device must not fill the hub's RAM). */
+#[allow(dead_code)]
+pub struct TcpClient {
+    stream: tokio::io::BufReader<TcpStream>,
+    framing: Framing,
+    host: String,
+}
+
+#[allow(dead_code)]
+impl TcpClient {
+    /* Connects within HTTP_TIMEOUT. */
+    pub async fn connect(host: &str, port: u16, framing: Framing) -> Result<TcpClient, NetError> {
+        let connect = TcpStream::connect(with_port(host, port));
+        let stream = match tokio::time::timeout(HTTP_TIMEOUT, connect).await {
+            Ok(Ok(stream)) => stream,
+            Ok(Err(e)) => return Err(NetError::new(ErrorKind::Unreachable, format!("can't reach {host}: {e}"))),
+            Err(_) => return Err(NetError::new(ErrorKind::Timeout, format!("{host} isn't answering (TCP)"))),
+        };
+        /* Small messages, sent at once (no Nagle delay). */
+        let _ = stream.set_nodelay(true);
+        Ok(TcpClient {
+            stream: tokio::io::BufReader::new(stream),
+            framing,
+            host: host.to_string(),
+        })
+    }
+
+    /* Sends one message (the line ending / length prefix is added here). */
+    pub async fn send(&mut self, message: &[u8]) -> Result<(), NetError> {
+        use tokio::io::AsyncWriteExt;
+        let mut frame = Vec::with_capacity(message.len() + 4);
+        match self.framing {
+            Framing::Lines(end) => {
+                frame.extend_from_slice(message);
+                frame.extend_from_slice(end.as_bytes());
+            }
+            Framing::Length32 => {
+                let len = u32::try_from(message.len())
+                    .map_err(|_| NetError::new(ErrorKind::Unsupported, "message too long".into()))?;
+                frame.extend_from_slice(&len.to_be_bytes());
+                frame.extend_from_slice(message);
+            }
+        }
+        let write = self.stream.get_mut().write_all(&frame);
+        match tokio::time::timeout(HTTP_TIMEOUT, write).await {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(e)) => Err(NetError::new(ErrorKind::Unreachable, format!("{}: connection lost: {e}", self.host))),
+            Err(_) => Err(NetError::new(ErrorKind::Timeout, format!("{} isn't reading (TCP)", self.host))),
+        }
+    }
+
+    /* The next message (without its line ending / length), waiting at
+     * most `wait`. Ok(None): nothing arrived in time -- normal for
+     * devices that only speak when something changes. A closed
+     * connection is an error. */
+    pub async fn receive(&mut self, wait: Duration) -> Result<Option<Vec<u8>>, NetError> {
+        let host = self.host.clone();
+        let lost = |e: String| NetError::new(ErrorKind::Unreachable, format!("{host}: {e}"));
+        let read = async {
+            match self.framing {
+                Framing::Lines(end) => read_line(&mut self.stream, end.as_bytes()).await,
+                Framing::Length32 => read_length32(&mut self.stream).await,
+            }
+        };
+        match tokio::time::timeout(wait, read).await {
+            Ok(Ok(frame)) => Ok(Some(frame)),
+            Ok(Err(e)) => Err(lost(e)),
+            Err(_) => Ok(None),
+        }
+    }
+
+    /* Sends a message and returns the first answer `accept` takes, within
+     * HTTP_TIMEOUT (other messages arriving meanwhile are skipped). */
+    pub async fn request(&mut self, message: &[u8], accept: impl Fn(&[u8]) -> bool) -> Result<Vec<u8>, NetError> {
+        self.send(message).await?;
+        let deadline = tokio::time::Instant::now() + HTTP_TIMEOUT;
+        loop {
+            let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+            match self.receive(left).await? {
+                Some(frame) if accept(&frame) => return Ok(frame),
+                Some(_) if !left.is_zero() => continue,
+                _ => {
+                    return Err(NetError::new(
+                        ErrorKind::Timeout,
+                        format!("{} isn't answering (no reply within {} s)", self.host, HTTP_TIMEOUT.as_secs()),
+                    ))
+                }
+            }
+        }
+    }
+}
+
+#[allow(dead_code)]
+/* Bytes up to `end` (not included). Byte by byte from a BufReader, which
+ * is cheap: the reader asks the socket for big chunks. */
+async fn read_line(stream: &mut tokio::io::BufReader<TcpStream>, end: &[u8]) -> Result<Vec<u8>, String> {
+    use tokio::io::AsyncReadExt;
+    let mut line = Vec::new();
+    loop {
+        let byte = stream.read_u8().await.map_err(|e| format!("connection lost: {e}"))?;
+        line.push(byte);
+        if line.ends_with(end) {
+            line.truncate(line.len() - end.len());
+            return Ok(line);
+        }
+        if line.len() > MAX_REPLY {
+            return Err(format!("a line longer than {MAX_REPLY} bytes"));
+        }
+    }
+}
+
+#[allow(dead_code)]
+async fn read_length32(stream: &mut tokio::io::BufReader<TcpStream>) -> Result<Vec<u8>, String> {
+    use tokio::io::AsyncReadExt;
+    let len = stream.read_u32().await.map_err(|e| format!("connection lost: {e}"))? as usize;
+    if len > MAX_REPLY {
+        return Err(format!("a message of {len} bytes (at most {MAX_REPLY} accepted)"));
+    }
+    let mut frame = vec![0u8; len];
+    stream.read_exact(&mut frame).await.map_err(|e| format!("connection lost: {e}"))?;
+    Ok(frame)
+}
+
+/* ------------------------------------------------------------------ */
 /* Wake-on-LAN                                                         */
 /* ------------------------------------------------------------------ */
 
@@ -505,6 +722,70 @@ mod tests {
         assert_eq!(parse_mac("AABBCCDDEE0F"), Some([0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x0f]));
         assert_eq!(parse_mac("aa:bb"), None);
         assert_eq!(parse_mac("zz:bb:cc:dd:ee:ff"), None);
+    }
+
+    #[tokio::test]
+    async fn udp_requests_retry_and_skip_other_answers() {
+        /* A "device" that ignores the first packet (lost), then answers
+         * with something unrelated before the real answer. */
+        let device = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let addr = device.local_addr().unwrap();
+        tokio::spawn(async move {
+            let mut buf = [0u8; 64];
+            let (_, _) = device.recv_from(&mut buf).await.unwrap();
+            let (len, from) = device.recv_from(&mut buf).await.unwrap();
+            device.send_to(b"noise", from).await.unwrap();
+            let mut reply = b"re:".to_vec();
+            reply.extend_from_slice(&buf[..len]);
+            device.send_to(&reply, from).await.unwrap();
+        });
+        let reply = udp_request("127.0.0.1", addr.port(), b"ping", 3, |r| r.starts_with(b"re:")).await.unwrap();
+        assert_eq!(reply, b"re:ping");
+    }
+
+    #[tokio::test]
+    async fn udp_requests_time_out() {
+        /* Bound but silent: every try times out. */
+        let silent = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let port = silent.local_addr().unwrap().port();
+        let err = udp_request("127.0.0.1", port, b"x", 2, |_| true).await.unwrap_err();
+        assert_eq!(err.kind, ErrorKind::Timeout);
+        assert!(err.message.contains("2 tries"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn tcp_lines_and_length_frames() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        tokio::spawn(async move {
+            /* 1st connection: lines. Pushes a status first, then echoes. */
+            let (mut s, _) = listener.accept().await.unwrap();
+            s.write_all(b"status\r\n").await.unwrap();
+            let mut buf = [0u8; 64];
+            let len = s.read(&mut buf).await.unwrap();
+            s.write_all(b"ok:").await.unwrap();
+            s.write_all(&buf[..len]).await.unwrap();
+            /* 2nd: length-prefixed. */
+            let (mut s, _) = listener.accept().await.unwrap();
+            let len = s.read_u32().await.unwrap() as usize;
+            let mut msg = vec![0u8; len];
+            s.read_exact(&mut msg).await.unwrap();
+            msg.reverse();
+            s.write_u32(msg.len() as u32).await.unwrap();
+            s.write_all(&msg).await.unwrap();
+            /* then a huge length: refused, not allocated. */
+            s.write_u32(u32::MAX).await.unwrap();
+        });
+        let mut c = TcpClient::connect(&addr, 0, Framing::Lines("\r\n")).await.unwrap();
+        let reply = c.request(b"hello", |r| r.starts_with(b"ok:")).await.unwrap();
+        /* The pushed "status" was skipped; the line ending is removed. */
+        assert_eq!(reply, b"ok:hello");
+
+        let mut c = TcpClient::connect(&addr, 0, Framing::Length32).await.unwrap();
+        assert_eq!(c.request(b"abc", |_| true).await.unwrap(), b"cba");
+        /* The 4 GB "message" is refused before anything is allocated. */
+        assert!(c.receive(Duration::from_secs(1)).await.is_err());
     }
 
     #[tokio::test]

@@ -108,6 +108,10 @@ pub struct Template {
     pub reauth: Vec<String>,
     #[serde(default)]
     pub defaults: Defaults,
+    /* For adapter "http" only (issue #75): the device's HTTP API, described
+     * instead of programmed -- see HttpSpec. */
+    #[serde(default)]
+    pub http: Option<HttpSpec>,
 }
 
 /* One value setup collects. */
@@ -198,18 +202,37 @@ pub enum Discovery {
         service: String,
         #[serde(default)]
         fill: BTreeMap<String, String>,
+        #[serde(default, rename = "match")]
+        matches: BTreeMap<String, String>,
     },
     Ssdp {
         search: String,
         #[serde(default)]
         fill: BTreeMap<String, String>,
+        #[serde(default, rename = "match")]
+        matches: BTreeMap<String, String>,
     },
+    /* Issue #75: `probe` is sent to the broadcast address of every network
+     * the hub is on, to UDP `port`; every answer is a device. */
     UdpBroadcast {
         port: u16,
-        /* What to send, as text (the adapter's protocol decides). */
+        /* What to send, as text (the device's protocol decides). */
         probe: String,
         #[serde(default)]
         fill: BTreeMap<String, String>,
+        #[serde(default, rename = "match")]
+        matches: BTreeMap<String, String>,
+    },
+    /* Issue #75: devices that announce themselves to a multicast group
+     * (Yeelight: 239.255.255.250:1982) -- the hub just listens. The port
+     * must be opened in hub-firewall.nft. */
+    UdpMulticast {
+        group: std::net::Ipv4Addr,
+        port: u16,
+        #[serde(default)]
+        fill: BTreeMap<String, String>,
+        #[serde(default, rename = "match")]
+        matches: BTreeMap<String, String>,
     },
     WsDiscovery {
         #[serde(default)]
@@ -239,12 +262,16 @@ pub enum Discovery {
     },
 }
 
+/* No conditions (the methods that have no "match"). */
+static NO_MATCH: BTreeMap<String, String> = BTreeMap::new();
+
 impl Discovery {
     pub fn fill(&self) -> &BTreeMap<String, String> {
         match self {
             Discovery::Mdns { fill, .. }
             | Discovery::Ssdp { fill, .. }
             | Discovery::UdpBroadcast { fill, .. }
+            | Discovery::UdpMulticast { fill, .. }
             | Discovery::WsDiscovery { fill }
             | Discovery::NetworkScan { fill, .. }
             | Discovery::PortProbe { fill, .. }
@@ -252,6 +279,275 @@ impl Discovery {
             | Discovery::CloudList { fill } => fill,
         }
     }
+
+    /* "match": values a sighting must have to be this template's device,
+     * e.g. {"txt.app": "PlugSG3"} -- every Shelly answers the same mDNS
+     * service, only the plug is a Shelly plug. Keys are placeholder names
+     * ("txt.app", "json.method"), values compared as text. */
+    pub fn matches(&self) -> &BTreeMap<String, String> {
+        match self {
+            Discovery::Mdns { matches, .. }
+            | Discovery::Ssdp { matches, .. }
+            | Discovery::UdpBroadcast { matches, .. }
+            | Discovery::UdpMulticast { matches, .. } => matches,
+            _ => &NO_MATCH,
+        }
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* The generic HTTP adapter's description (issue #75)                  */
+/* ------------------------------------------------------------------ */
+
+/* A device whose local API is plain HTTP + JSON (Shelly, Tasmota, many
+ * DIY ESP firmwares) needs no Rust of its own: the template says which
+ * request sets each capability and where in which reply its state is.
+ * adapters/http_generic.rs carries it out. Example (Shelly Gen2+):
+ *   "http": {
+ *     "poll_s": 10,
+ *     "state": [ { "path": "/rpc/Switch.GetStatus?id=0",
+ *                  "read": { "switch.on": "output",
+ *                            "sensor.power": { "path": "apower", "unit": "W" } } } ],
+ *     "commands": { "switch": { "path": "/rpc/Switch.Set?id=0&on={on}" } },
+ *     "probe": { "path": "/shelly", "values": { "mac": "mac" }, "summary": "Shelly {model}" }
+ *   }
+ * Paths into a JSON reply are dot-separated keys and list indexes:
+ * "aenergy.total", "lights.0.ison". */
+#[derive(Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct HttpSpec {
+    /* The state is read this often (s): changes made elsewhere (the
+     * vendor's app, a button) show up at most this late. */
+    #[serde(default = "default_poll_s")]
+    pub poll_s: u32,
+    /* The requests that read the state, each with where its values are. */
+    pub state: Vec<HttpRead>,
+    /* Per settable capability, the request that sets it. */
+    #[serde(default)]
+    pub commands: BTreeMap<String, HttpRequest>,
+    /* The wizard's test step; without one, reading the state is the test. */
+    #[serde(default)]
+    pub probe: Option<HttpProbe>,
+}
+
+fn default_poll_s() -> u32 {
+    10
+}
+
+/* One request. Placeholders in path and body are the command's values:
+ *   switch  {on}               (true / false, or `bool`'s texts)
+ *   dimmer  {level}            (0-100)
+ *   color   {hex} {r} {g} {b}  ("FF8800" without "#", 0-255 each; a
+ *                               white temperature arrives as its RGB)
+ * plus any of the device's config values ({host}, a channel number...).
+ * A body string that is exactly one placeholder ("{level}") becomes the
+ * value itself -- a number or true/false -- not a text. */
+#[derive(Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct HttpRequest {
+    #[serde(default)]
+    pub method: HttpMethod,
+    pub path: String,
+    #[serde(default)]
+    pub body: Option<serde_json::Value>,
+    /* How {on} is written: [text for off, text for on], e.g. ["OFF",
+     * "ON"] for Tasmota. Default "false" / "true". */
+    #[serde(default)]
+    pub bool: Option<[String; 2]>,
+}
+
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum HttpMethod {
+    #[default]
+    Get,
+    Post,
+    Put,
+}
+
+/* A state request: GET `path`, then each "<capability>.<field>" from its
+ * reply. Fields: switch.on, dimmer.level, color.hex, and
+ * sensor.<reading> (any name: "power", "temperature"). */
+#[derive(Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct HttpRead {
+    pub path: String,
+    pub read: BTreeMap<String, HttpValue>,
+}
+
+/* Where a value is: a path, or a path with a unit and a factor (a
+ * device reporting mW, read as W: "scale": 0.001). */
+#[derive(Deserialize, Debug, Clone)]
+#[serde(untagged)]
+pub enum HttpValue {
+    Path(String),
+    Full {
+        path: String,
+        #[serde(default)]
+        unit: String,
+        #[serde(default)]
+        scale: Option<f64>,
+    },
+}
+
+impl HttpValue {
+    pub fn path(&self) -> &str {
+        match self {
+            HttpValue::Path(path) | HttpValue::Full { path, .. } => path,
+        }
+    }
+}
+
+/* The test step: GET `path`; every `require` path must hold that text
+ * (it IS that kind of device); `values` are learned from the reply
+ * ({"mac": "mac"} -- for the template's identity), `name` is the
+ * device's own name, `summary` the "OK" line with {json.path}s. */
+#[derive(Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct HttpProbe {
+    pub path: String,
+    #[serde(default)]
+    pub require: BTreeMap<String, String>,
+    #[serde(default)]
+    pub values: BTreeMap<String, String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub summary: String,
+}
+
+/* The adapter that runs "http" blocks. */
+pub const GENERIC_HTTP_ADAPTER: &str = "http";
+
+/* What each settable capability's command may use. */
+fn command_placeholders(capability: &str) -> Option<&'static [&'static str]> {
+    match capability {
+        "switch" => Some(&["on"]),
+        "dimmer" => Some(&["level"]),
+        "color" => Some(&["hex", "r", "g", "b"]),
+        _ => None,
+    }
+}
+
+impl HttpSpec {
+    fn check(&self, template: &Template) -> Result<(), String> {
+        if !(2..=3600).contains(&self.poll_s) {
+            return Err("http.poll_s must be 2-3600".into());
+        }
+        if self.state.is_empty() {
+            return Err("http.state: at least one request reads the state".into());
+        }
+        let config_names: HashSet<&str> = template
+            .inputs
+            .iter()
+            .map(|i| i.id.as_str())
+            .chain(template.adapter_config.keys().map(String::as_str))
+            .collect();
+        // Which capabilities some request reads.
+        let mut read = HashSet::new();
+        for request in &self.state {
+            check_path(&request.path, &config_names, &[]).map_err(|e| format!("http.state: {e}"))?;
+            if request.read.is_empty() {
+                return Err(format!("http.state {:?} reads nothing", request.path));
+            }
+            for (target, value) in &request.read {
+                let Some((capability, field)) = target.split_once('.') else {
+                    return Err(format!("http.state reads {target:?}: write <capability>.<field>"));
+                };
+                if !template.capabilities.iter().any(|c| c == capability) {
+                    return Err(format!("http.state reads {target:?}, but the template has no capability {capability:?}"));
+                }
+                let ok = match capability {
+                    "switch" => field == "on",
+                    "dimmer" => field == "level",
+                    "color" => field == "hex",
+                    "sensor" => valid_id_underscore(field),
+                    _ => false,
+                };
+                if !ok {
+                    return Err(format!("http.state reads {target:?}: the http adapter doesn't know that field"));
+                }
+                if value.path().is_empty() {
+                    return Err(format!("http.state reads {target:?} from an empty path"));
+                }
+                if matches!(value, HttpValue::Full { scale: Some(s), .. } if !s.is_finite() || *s == 0.0) {
+                    return Err(format!("http.state reads {target:?}: scale must be a non-zero number"));
+                }
+                read.insert(capability);
+            }
+        }
+        for capability in &template.capabilities {
+            let settable = command_placeholders(capability).is_some();
+            if !settable && capability != "sensor" {
+                return Err(format!("the http adapter can't run capability {capability:?}"));
+            }
+            if !read.contains(capability.as_str()) {
+                return Err(format!("http.state never reads capability {capability:?}"));
+            }
+            if settable && !self.commands.contains_key(capability) {
+                return Err(format!("http.commands has no request for {capability:?}"));
+            }
+        }
+        for (capability, request) in &self.commands {
+            let Some(allowed) = command_placeholders(capability) else {
+                return Err(format!("http.commands {capability:?}: only switch, dimmer and color are set by commands"));
+            };
+            if !template.capabilities.contains(capability) {
+                return Err(format!("http.commands {capability:?}: the template has no such capability"));
+            }
+            let what = format!("http.commands {capability:?}");
+            check_path(&request.path, &config_names, allowed).map_err(|e| format!("{what}: {e}"))?;
+            if let Some(body) = &request.body {
+                check_body(body, &config_names, allowed).map_err(|e| format!("{what}: {e}"))?;
+            }
+            if request.bool.is_some() && capability != "switch" {
+                return Err(format!("{what}: \"bool\" only goes with switch"));
+            }
+        }
+        if let Some(probe) = &self.probe {
+            check_path(&probe.path, &config_names, &[]).map_err(|e| format!("http.probe: {e}"))?;
+            check_placeholders(&probe.summary).map_err(|e| format!("http.probe.summary: {e}"))?;
+            for name in probe.values.keys() {
+                if !valid_id_underscore(name) {
+                    return Err(format!("http.probe learns {name:?}: use a-z, 0-9 and _"));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/* A request path: starts with "/", and its placeholders are config values
+ * or the command's own. */
+fn check_path(path: &str, config: &HashSet<&str>, command: &[&str]) -> Result<(), String> {
+    if !path.starts_with('/') {
+        return Err(format!("path {path:?} must start with /"));
+    }
+    check_names(path, config, command)
+}
+
+fn check_body(body: &serde_json::Value, config: &HashSet<&str>, command: &[&str]) -> Result<(), String> {
+    match body {
+        serde_json::Value::String(text) => check_names(text, config, command),
+        serde_json::Value::Array(items) => items.iter().try_for_each(|v| check_body(v, config, command)),
+        serde_json::Value::Object(map) => map.values().try_for_each(|v| check_body(v, config, command)),
+        _ => Ok(()),
+    }
+}
+
+fn check_names(text: &str, config: &HashSet<&str>, command: &[&str]) -> Result<(), String> {
+    check_placeholders(text)?;
+    for name in placeholder_names(text) {
+        if !config.contains(name) && !command.contains(&name) {
+            return Err(format!("{text:?} uses {{{name}}}, which is neither a setting nor one of {command:?}"));
+        }
+    }
+    Ok(())
+}
+
+/* The names of a (checked) text's {placeholders}. */
+fn placeholder_names(text: &str) -> impl Iterator<Item = &str> {
+    text.split('{').skip(1).filter_map(|part| part.split_once('}').map(|(name, _)| name))
 }
 
 /* One way through setup ("guided" / "advanced"). */
@@ -479,6 +775,26 @@ impl Template {
                 }
                 check_placeholders(source).map_err(|e| format!("discovery fill {target:?}: {e}"))?;
             }
+            for key in d.matches().keys() {
+                check_placeholders(&format!("{{{key}}}")).map_err(|e| format!("discovery match: {e}"))?;
+            }
+            match d {
+                Discovery::UdpBroadcast { port, probe, .. } if *port == 0 || probe.is_empty() => {
+                    return Err("udp_broadcast needs a port and a probe to send".into());
+                }
+                Discovery::UdpMulticast { group, port, .. } if !group.is_multicast() || *port == 0 => {
+                    return Err(format!("udp_multicast: {group}:{port} isn't a multicast group and port"));
+                }
+                _ => {}
+            }
+        }
+
+        // The generic HTTP adapter's description: exactly with that adapter.
+        match (&self.http, self.adapter == GENERIC_HTTP_ADAPTER) {
+            (Some(http), true) => http.check(self)?,
+            (None, true) => return Err(format!("adapter {GENERIC_HTTP_ADAPTER:?} needs an \"http\" block")),
+            (Some(_), false) => return Err(format!("an \"http\" block goes with adapter {GENERIC_HTTP_ADAPTER:?} only")),
+            (None, false) => {}
         }
 
         check_placeholders(&self.identity).map_err(|e| format!("identity: {e}"))?;
@@ -658,6 +974,14 @@ impl Templates {
     pub fn len(&self) -> usize {
         self.by_id.len()
     }
+
+    /* Tests: these templates (unchecked -- the caller did that). */
+    #[cfg(test)]
+    pub fn from_list(templates: Vec<Template>) -> Templates {
+        Templates {
+            by_id: templates.into_iter().map(|t| (t.id.clone(), t)).collect(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -667,7 +991,7 @@ mod tests {
     /* The hub's own list: a template using a new capability is checked
      * against what device.rs really has. */
     const ALL_CAPS: [&str; crate::device::CAPABILITY_NAMES.len()] = crate::device::CAPABILITY_NAMES;
-    const ADAPTERS: [&str; 4] = ["m4-led", "wled", "lg-webos", "ir-blaster"];
+    const ADAPTERS: [&str; 6] = ["m4-led", "wled", "lg-webos", "ir-blaster", "wiz", "http"];
 
     fn known() -> Known<'static> {
         Known {
@@ -699,13 +1023,57 @@ mod tests {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("templates");
         let (templates, problems) = Templates::load(&dir, &known());
         assert!(problems.is_empty(), "{problems:?}");
-        for id in ["m4-led", "wled", "lg-webos-tv", "ir-blaster"] {
+        for id in ["m4-led", "wled", "lg-webos-tv", "ir-blaster", "wiz", "shelly-plug-gen3"] {
             assert!(templates.get(id).is_some(), "{id} missing");
         }
         let tv = templates.get("lg-webos-tv").unwrap();
         assert_eq!(tv.tls, Tls::Tofu);
         assert_eq!(tv.wake, Wake::Wol);
         assert_eq!(tv.reauth, ["pair"]);
+    }
+
+    /* Issue #75: the generic HTTP adapter's block. */
+    #[test]
+    fn http_blocks_are_checked() {
+        let http = |change: fn(&mut serde_json::Value)| {
+            with(|v| {
+                v["adapter"] = "http".into();
+                v["capabilities"] = serde_json::json!(["switch", "sensor"]);
+                v["http"] = serde_json::json!({
+                    "state": [ { "path": "/status", "read": { "switch.on": "relay.on", "sensor.power": { "path": "w", "unit": "W" } } } ],
+                    "commands": { "switch": { "path": "/relay?on={on}&key={host}" } }
+                });
+                change(v);
+            })
+        };
+        assert_eq!(http(|_| {}), Ok(()));
+        let err = |change| http(change).unwrap_err();
+        assert!(err(|v| v["http"] = serde_json::Value::Null).contains("needs an \"http\" block"));
+        assert!(err(|v| v["http"]["poll_s"] = 1.into()).contains("poll_s"));
+        assert!(err(|v| v["http"]["commands"] = serde_json::json!({})).contains("no request for \"switch\""));
+        assert!(err(|v| v["http"]["commands"]["switch"]["path"] = "/x?on={level}".into()).contains("{level}"));
+        assert!(err(|v| v["http"]["commands"]["switch"]["path"] = "relay".into()).contains("start with /"));
+        assert!(err(|v| v["http"]["state"][0]["read"]["dimmer.level"] = "bri".into()).contains("no capability \"dimmer\""));
+        assert!(err(|v| v["http"]["state"][0]["read"]["switch.state"] = "x".into()).contains("doesn't know that field"));
+        assert!(err(|v| v["capabilities"] = serde_json::json!(["switch", "sensor", "media"])).contains("can't run"));
+        assert!(err(|v| v["http"]["commands"]["switch"]["typo"] = 1.into()).contains("unknown field"));
+        /* A body's placeholders are checked too. */
+        assert!(err(|v| v["http"]["commands"]["switch"]["body"] = serde_json::json!({"a": ["{nope}"]})).contains("{nope}"));
+        /* ...and an http block with another adapter is a mistake. */
+        let other = with(|v| {
+            v["http"] = serde_json::json!({ "state": [] });
+        });
+        assert!(other.unwrap_err().contains("goes with adapter"));
+    }
+
+    #[test]
+    fn udp_discovery_is_checked() {
+        let udp = |d: serde_json::Value| with(|v| v["discovery"] = serde_json::json!([d]));
+        assert_eq!(udp(serde_json::json!({"method": "udp_broadcast", "port": 38899, "probe": "x", "match": {"json.method": "x"}})), Ok(()));
+        assert!(udp(serde_json::json!({"method": "udp_broadcast", "port": 38899, "probe": ""})).is_err());
+        assert_eq!(udp(serde_json::json!({"method": "udp_multicast", "group": "239.255.255.250", "port": 1982})), Ok(()));
+        assert!(udp(serde_json::json!({"method": "udp_multicast", "group": "192.168.1.1", "port": 1982})).is_err());
+        assert!(udp(serde_json::json!({"method": "mdns", "service": "_x._tcp", "match": {"bad name": "x"}})).is_err());
     }
 
     #[test]
