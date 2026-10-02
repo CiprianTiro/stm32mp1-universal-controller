@@ -175,12 +175,25 @@ impl Control {
 
     /* A one-off action (issue #44): checked by device.rs's rules like a
      * command, then carried out by the device's adapter. Virtual devices
-     * have nothing that could carry one out. Returns the action's result
-     * (e.g. a TV's channel list; `{}` for a button press). */
+     * have nothing that could carry one out -- except a cover's open /
+     * close / stop (issue #77), which a virtual cover plays out at once,
+     * so the cover card can be tried without a motor. Returns the action's
+     * result (e.g. a TV's channel list; `{}` for a button press). */
     pub async fn action(&self, id: &str, capability: &str, name: &str, args: serde_json::Value) -> Result<serde_json::Value, String> {
         let device = self.get(id).await?.ok_or_else(|| format!("unknown device {id:?}"))?;
         device::check_action(&device, capability, name, &args)?;
         if device.source.is_virtual() {
+            if let (Some(cover), "cover") = (&device.capabilities.cover, capability) {
+                let mut cover = cover.clone();
+                match name {
+                    "open" => cover.position = Some(100),
+                    "close" => cover.position = Some(0),
+                    _ => {} /* stop: it's already where it is */
+                }
+                cover.moving = device::Moving::Stopped;
+                self.set(id, "cover", serde_json::json!(cover), Origin::Device).await?;
+                return Ok(serde_json::json!({}));
+            }
             return Err(format!("{id} is a virtual device: it has nothing to carry out actions"));
         }
         self.adapters.action(id, capability, name, args).await
@@ -250,5 +263,37 @@ impl Control {
             reply,
         })
         .await?
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::adapters::test_hub::TestHub;
+    use crate::adapters::wled::Wled;
+    use crate::device::{Device, Moving};
+    use serde_json::json;
+
+    /* Issue #77: a virtual cover plays out open / close / stop, and is
+     * set to a position like any virtual device. */
+    #[tokio::test]
+    async fn virtual_covers_play_out_their_actions() {
+        let blind: Device = serde_json::from_value(json!({
+            "id": "blind", "name": "Blind", "source": "virtual",
+            "capabilities": {"cover": {"position": 50, "can_position": true}}
+        }))
+        .unwrap();
+        /* (Any adapter: the virtual device doesn't use it.) */
+        let hub = TestHub::start(blind, Box::new(Wled)).await;
+        let position = || async { hub.control.get("blind").await.unwrap().unwrap().capabilities.cover.unwrap().position };
+        hub.control.action("blind", "cover", "open", json!({})).await.unwrap();
+        assert_eq!(position().await, Some(100));
+        hub.control.action("blind", "cover", "close", json!({})).await.unwrap();
+        assert_eq!(position().await, Some(0));
+        let d = hub.control.command("blind", "cover", json!({"position": 30})).await.unwrap();
+        assert_eq!(d.capabilities.cover.unwrap().moving, Moving::Stopped);
+        hub.control.action("blind", "cover", "stop", json!({})).await.unwrap();
+        assert_eq!(position().await, Some(30));
+        /* Other actions still have nothing to carry them out. */
+        assert!(hub.control.action("blind", "media", "apps", json!({})).await.is_err());
     }
 }

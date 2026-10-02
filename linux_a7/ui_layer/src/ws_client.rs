@@ -155,6 +155,60 @@ pub struct Capabilities {
     pub media: Option<Media>,
     /* A remote control's buttons (issue #44). */
     pub remote: Option<Remote>,
+    /* Issue #77: blinds, air conditioners, door locks, metering. */
+    pub cover: Option<Cover>,
+    pub climate: Option<Climate>,
+    pub lock: Option<Lock>,
+    pub energy: Option<Energy>,
+}
+
+/* Issue #77 -- backend_daemon's device.rs has the rules; these are only
+ * what the cards show. */
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct Cover {
+    /* 0 = closed, 100 = open; None = not known. */
+    #[serde(default)]
+    pub position: Option<u8>,
+    /* "opening", "closing", "stopped". */
+    #[serde(default)]
+    pub moving: String,
+    /* Can be sent to any position (else only open / close / stop). */
+    #[serde(default)]
+    pub can_position: bool,
+}
+
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct Climate {
+    pub mode: String,
+    pub target: f64,
+    #[serde(default)]
+    pub current: Option<f64>,
+    #[serde(default)]
+    pub fan: Option<String>,
+    #[serde(default)]
+    pub modes: Vec<String>,
+    #[serde(default)]
+    pub fans: Vec<String>,
+    pub min: f64,
+    pub max: f64,
+    pub step: f64,
+}
+
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct Lock {
+    /* "locked", "unlocked", "jammed", "unknown". */
+    pub state: String,
+}
+
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct Energy {
+    pub power_w: f64,
+    #[serde(default)]
+    pub energy_kwh: Option<f64>,
+    #[serde(default)]
+    pub voltage_v: Option<f64>,
+    #[serde(default)]
+    pub current_a: Option<f64>,
 }
 
 #[derive(Deserialize, Clone, Debug, PartialEq)]

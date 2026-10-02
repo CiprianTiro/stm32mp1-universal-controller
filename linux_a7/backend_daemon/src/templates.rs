@@ -366,8 +366,9 @@ pub enum HttpMethod {
 }
 
 /* A state request: GET `path`, then each "<capability>.<field>" from its
- * reply. Fields: switch.on, dimmer.level, color.hex, and
- * sensor.<reading> (any name: "power", "temperature"). */
+ * reply. Fields: switch.on, dimmer.level, color.hex, sensor.<reading>
+ * (any name: "temperature"), and energy.power_w / energy_kwh / voltage_v /
+ * current_a (#77; with "scale" for other units: Wh -> kWh is 0.001). */
 #[derive(Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct HttpRead {
@@ -419,6 +420,9 @@ pub struct HttpProbe {
 /* The adapter that runs "http" blocks. */
 pub const GENERIC_HTTP_ADAPTER: &str = "http";
 
+/* What the http adapter can read into an energy capability (#77). */
+const ENERGY_FIELDS: [&str; 4] = ["power_w", "energy_kwh", "voltage_v", "current_a"];
+
 /* What each settable capability's command may use. */
 fn command_placeholders(capability: &str) -> Option<&'static [&'static str]> {
     match capability {
@@ -462,6 +466,7 @@ impl HttpSpec {
                     "dimmer" => field == "level",
                     "color" => field == "hex",
                     "sensor" => valid_id_underscore(field),
+                    "energy" => ENERGY_FIELDS.contains(&field),
                     _ => false,
                 };
                 if !ok {
@@ -478,7 +483,7 @@ impl HttpSpec {
         }
         for capability in &template.capabilities {
             let settable = command_placeholders(capability).is_some();
-            if !settable && capability != "sensor" {
+            if !settable && !matches!(capability.as_str(), "sensor" | "energy") {
                 return Err(format!("the http adapter can't run capability {capability:?}"));
             }
             if !read.contains(capability.as_str()) {

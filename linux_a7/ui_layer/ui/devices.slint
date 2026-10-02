@@ -2,7 +2,9 @@
 //
 // Every device is drawn from its CAPABILITIES alone -- there is no code
 // here for "a lamp" or "the LED": a switch capability gets a toggle, a
-// dimmer a level bar, a color a swatch, a sensor its readings. A device
+// dimmer a level bar, a color a swatch, a sensor its readings; a cover
+// open / stop / close, a climate its mode and target, a lock its state,
+// energy what's drawn (issue #77). A device
 // type the UI has never heard of works as long as it's built from these.
 // main.rs turns backend_daemon's devices into DeviceItem rows and sends the
 // commands; like everything in ui_layer, nothing here changes a device's
@@ -50,6 +52,34 @@ export struct DeviceItem {
     // ("Live TV \u{2022} 5 Pro TV", "Netflix").
     has-remote: bool,
     now-playing: string,
+    // ---- Issue #77 ----
+    // A cover: position 0-100 (-1 = not known); can it go to any position
+    // (a blind) or only open / close / stop (a garage door); "Opening",
+    // "Closing" or "" while still.
+    has-cover: bool,
+    cover-position: int,
+    cover-can-position: bool,
+    cover-moving: string,
+    // A climate device: its mode and the modes it offers ("off", "heat"
+    // ...), the target and its range/step, as numbers to step with and as
+    // text ("21.5 °C"); the room temperature ("" if it doesn't measure);
+    // fan speed and the ones it offers (none = no fan setting).
+    has-climate: bool,
+    climate-mode: string,
+    climate-modes: [string],
+    climate-target: float,
+    climate-target-text: string,
+    climate-min: float,
+    climate-max: float,
+    climate-step: float,
+    climate-current-text: string,
+    climate-fan: string,
+    climate-fans: [string],
+    // A lock: "locked", "unlocked", "jammed", "unknown".
+    has-lock: bool,
+    lock-state: string,
+    // What a metering device draws: "40.2 W \u{2022} 1.23 kWh"; "" = none.
+    energy-text: string,
 }
 
 // On/off, big enough for a finger.
@@ -189,6 +219,14 @@ component DeviceRow inherits Rectangle {
     callback open(string);
     callback reauth(string);
     callback open-remote(string);
+    // Issue #77.
+    callback cover-action(string, string);
+    callback set-cover-position(string, int);
+    callback set-climate(string, string, float, string);
+    callback set-lock(string, bool);
+
+    // The lock's "Unlock Front door?" question is showing.
+    property <bool> asking-unlock: false;
 
     border-radius: Theme.radius-medium;
     background: Theme.surface;
@@ -363,6 +401,198 @@ component DeviceRow inherits Rectangle {
             font-size: Theme.font-body;
             wrap: word-wrap;
         }
+
+        // ---- Issue #77 ----
+
+        // What it draws: the number people look at first.
+        if item.energy-text != "": Text {
+            text: item.energy-text;
+            color: Theme.text;
+            font-size: Theme.font-body;
+            overflow: elide;
+        }
+
+        // A cover: where it is, the three buttons, and -- for one that can
+        // stop anywhere -- a position bar (the dimmer's, so dragging works
+        // the same).
+        if item.has-cover: Text {
+            text: item.cover-moving != "" ? item.cover-moving + "\u{2026}"
+                : item.cover-position < 0 ? "Position not known"
+                : item.cover-position == 0 ? "Closed"
+                : item.cover-position == 100 ? "Open"
+                : item.cover-position + "% open";
+            color: Theme.text-muted;
+            font-size: Theme.font-caption;
+        }
+        if item.has-cover: HorizontalLayout {
+            spacing: Theme.space-xs;
+            ActionButton {
+                text: "Open";
+                horizontal-stretch: 1;
+                clicked => {
+                    root.cover-action(item.id, "open");
+                }
+            }
+            ActionButton {
+                text: "Stop";
+                horizontal-stretch: 1;
+                clicked => {
+                    root.cover-action(item.id, "stop");
+                }
+            }
+            ActionButton {
+                text: "Close";
+                horizontal-stretch: 1;
+                clicked => {
+                    root.cover-action(item.id, "close");
+                }
+            }
+        }
+        if item.has-cover && item.cover-can-position: HorizontalLayout {
+            spacing: Theme.space-l;
+            position := LevelBar {
+                horizontal-stretch: 1;
+                level: max(0, item.cover-position);
+                set(level) => {
+                    root.set-cover-position(item.id, level);
+                }
+            }
+            Text {
+                text: position.shown + "%";
+                color: Theme.text;
+                font-size: Theme.font-body;
+                vertical-alignment: center;
+                min-width: 48px;
+                horizontal-alignment: right;
+            }
+        }
+
+        // An air conditioner / thermostat: its modes, the target with
+        // - / + (one step each, within the device's range), what the room
+        // is now, and the fan speeds it offers.
+        if item.has-climate: HorizontalLayout {
+            spacing: Theme.space-xs;
+            for mode in item.climate-modes: Choice {
+                text: mode == "off" ? "Off" : mode == "heat" ? "Heat" : mode == "cool" ? "Cool"
+                    : mode == "auto" ? "Auto" : mode == "dry" ? "Dry" : mode == "fan" ? "Fan" : mode;
+                selected: mode == item.climate-mode;
+                clicked => {
+                    root.set-climate(item.id, mode, item.climate-target, item.climate-fan);
+                }
+            }
+        }
+        if item.has-climate: HorizontalLayout {
+            spacing: Theme.space-m;
+            ActionButton {
+                text: "\u{2212}";
+                enabled: item.climate-target - item.climate-step >= item.climate-min - 0.001;
+                clicked => {
+                    root.set-climate(item.id, item.climate-mode, item.climate-target - item.climate-step, item.climate-fan);
+                }
+            }
+            Text {
+                text: item.climate-target-text;
+                color: item.climate-mode == "off" ? Theme.text-muted : Theme.text;
+                font-size: Theme.font-subtitle;
+                vertical-alignment: center;
+                horizontal-alignment: center;
+                min-width: 96px;
+            }
+            ActionButton {
+                text: "+";
+                enabled: item.climate-target + item.climate-step <= item.climate-max + 0.001;
+                clicked => {
+                    root.set-climate(item.id, item.climate-mode, item.climate-target + item.climate-step, item.climate-fan);
+                }
+            }
+            Text {
+                text: item.climate-current-text != "" ? "Now " + item.climate-current-text : "";
+                color: Theme.text-muted;
+                font-size: Theme.font-body;
+                vertical-alignment: center;
+                horizontal-alignment: right;
+                horizontal-stretch: 1;
+            }
+        }
+        if item.has-climate && item.climate-fans.length > 0: HorizontalLayout {
+            spacing: Theme.space-xs;
+            Text {
+                text: "Fan";
+                color: Theme.text-muted;
+                font-size: Theme.font-caption;
+                vertical-alignment: center;
+            }
+            for fan in item.climate-fans: Choice {
+                text: fan == "auto" ? "Auto" : fan == "quiet" ? "Quiet" : fan == "low" ? "Low"
+                    : fan == "medium" ? "Medium" : fan == "high" ? "High" : fan == "turbo" ? "Turbo" : fan;
+                selected: fan == item.climate-fan;
+                clicked => {
+                    root.set-climate(item.id, item.climate-mode, item.climate-target, fan);
+                }
+            }
+        }
+
+        // A lock: its state and Lock / Unlock. Unlocking asks first, right
+        // on the card -- backend_daemon refuses an unlock that wasn't
+        // confirmed (the unlock rule, issue #77).
+        if item.has-lock && !asking-unlock: HorizontalLayout {
+            spacing: Theme.space-m;
+            Text {
+                text: item.lock-state == "locked" ? "Locked" : item.lock-state == "unlocked" ? "Unlocked"
+                    : item.lock-state == "jammed" ? "Jammed: check the door" : "State not known";
+                color: item.lock-state == "jammed" ? Theme.error : Theme.text;
+                font-size: Theme.font-body;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+            if item.lock-state != "locked": ActionButton {
+                text: "Lock";
+                clicked => {
+                    root.set-lock(item.id, true);
+                }
+            }
+            if item.lock-state != "unlocked": ActionButton {
+                text: "Unlock";
+                clicked => {
+                    asking-unlock = true;
+                }
+            }
+        }
+        if item.has-lock && asking-unlock: HorizontalLayout {
+            spacing: Theme.space-m;
+            Text {
+                text: "Unlock " + item.name + "?";
+                color: Theme.text;
+                font-size: Theme.font-body;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+                overflow: elide;
+            }
+            ActionButton {
+                text: "Cancel";
+                clicked => {
+                    asking-unlock = false;
+                }
+            }
+            ActionButton {
+                text: "Unlock";
+                destructive: true;
+                clicked => {
+                    asking-unlock = false;
+                    root.set-lock(item.id, false);
+                }
+            }
+        }
+    }
+
+    // Not answered within 10 s: the question goes away by itself, so a
+    // card left like this can't be unlocked by a later stray tap.
+    Timer {
+        interval: 10s;
+        running: asking-unlock;
+        triggered => {
+            asking-unlock = false;
+        }
     }
 }
 
@@ -383,6 +613,10 @@ export component DeviceList inherits Rectangle {
     callback open(string);
     callback reauth(string);
     callback open-remote(string);
+    callback cover-action(string, string);
+    callback set-cover-position(string, int);
+    callback set-climate(string, string, float, string);
+    callback set-lock(string, bool);
 
     if rows.length == 0: Text {
         text: "No devices yet";
@@ -419,6 +653,18 @@ export component DeviceList inherits Rectangle {
                 }
                 open-remote(id) => {
                     root.open-remote(id);
+                }
+                cover-action(id, action) => {
+                    root.cover-action(id, action);
+                }
+                set-cover-position(id, position) => {
+                    root.set-cover-position(id, position);
+                }
+                set-climate(id, mode, target, fan) => {
+                    root.set-climate(id, mode, target, fan);
+                }
+                set-lock(id, locked) => {
+                    root.set-lock(id, locked);
                 }
             }
             // The last row may have fewer cards: empty places keep them at

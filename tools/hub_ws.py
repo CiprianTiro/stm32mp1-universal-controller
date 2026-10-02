@@ -35,6 +35,21 @@ below). Examples:
     python3 tools/hub_ws.py stm32mp1.local set lamp-1 dimmer '{"level": 30}'
     python3 tools/hub_ws.py stm32mp1.local on ld7
 
+Virtual test devices for the capabilities of issue #77 (cover, climate,
+lock, energy), and controlling them:
+
+    python3 tools/hub_ws.py <board> add blind "Blind" '{"cover": {"position": 50, "can_position": true}}'
+    python3 tools/hub_ws.py <board> action blind cover open          (also close, stop)
+    python3 tools/hub_ws.py <board> set blind cover '{"position": 30}'
+    python3 tools/hub_ws.py <board> add ac "AC" '{"climate": {"mode": "off", "target": 22, "current": 25.5, "fans": ["auto", "low", "high"], "fan": "auto"}}'
+    python3 tools/hub_ws.py <board> set ac climate '{"mode": "cool", "target": 23}'
+    python3 tools/hub_ws.py <board> add door "Front door" '{"lock": {"state": "locked"}}'
+    python3 tools/hub_ws.py <board> set door lock '{"state": "unlocked", "confirmed": true}'
+    python3 tools/hub_ws.py <board> add meter "Meter" '{"energy": {"power_w": 40.2, "energy_kwh": 1.23}}'
+
+(Unlocking without "confirmed": true is refused: the unlock rule, wiki
+Device-Model. Energy is read-only: a virtual meter keeps what it was added with.)
+
 Network (issue #61):
 
     python3 tools/hub_ws.py <board> net                      status of Ethernet/WiFi

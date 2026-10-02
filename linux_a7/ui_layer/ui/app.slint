@@ -232,6 +232,12 @@ export component AppWindow inherits Window {
     callback set-level(string, int);
     // A TV's volume, mute and input (issue #40).
     callback set-media(string, int, bool, string);
+    // Issue #77: a cover's open / close / stop and position, a climate
+    // device's mode / target / fan, locking (true) or a CONFIRMED unlock.
+    callback cover-action(string, string);
+    callback set-cover-position(string, int);
+    callback set-climate(string, string, float, string);
+    callback set-lock(string, bool);
 
     // ---- Adding and setting up devices (issue #40, wizard.slint) -------
     // The "Add a device" page.
@@ -458,6 +464,18 @@ export component AppWindow inherits Window {
             }
             open-remote(id) => {
                 root.open-remote(id);
+            }
+            cover-action(id, action) => {
+                root.cover-action(id, action);
+            }
+            set-cover-position(id, position) => {
+                root.set-cover-position(id, position);
+            }
+            set-climate(id, mode, target, fan) => {
+                root.set-climate(id, mode, target, fan);
+            }
+            set-lock(id, locked) => {
+                root.set-lock(id, locked);
             }
         }
     }

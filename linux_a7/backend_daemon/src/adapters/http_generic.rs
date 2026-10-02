@@ -18,7 +18,7 @@
  * (WLED, the LG TV): this adapter only POLLS, every "poll_s".
  *
  * Capabilities it can run: switch, dimmer, color (set and read), sensor
- * (read). Templates are checked at load (templates.rs) so a template that
+ * and energy (read). Templates are checked at load (templates.rs) so a template that
  * reads a capability it doesn't have, or uses a placeholder nobody fills,
  * never gets this far.
  *
@@ -265,6 +265,14 @@ fn convert(capability: &str, value: &Value, how: &HttpValue) -> Option<Value> {
             };
             Some(json!({ "value": number()? * scale, "unit": unit }))
         }
+        /* Issue #77: one number per field; the field name says the unit. */
+        "energy" => {
+            let scale = match how {
+                HttpValue::Full { scale, .. } => scale.unwrap_or(1.0),
+                HttpValue::Path(_) => 1.0,
+            };
+            Some(json!(number()? * scale))
+        }
         _ => None,
     }
 }
@@ -504,6 +512,7 @@ mod tests {
             scale: Some(0.001),
         };
         assert_eq!(convert("sensor", &json!(1500), &mw), Some(json!({"value": 1.5, "unit": "W"})));
+        assert_eq!(convert("energy", &json!("1500"), &mw), Some(json!(1.5)));
     }
 
     #[test]
@@ -539,15 +548,17 @@ mod tests {
 
         let d = hub.until(|d| d.online == Some(Health::Online)).await;
         assert_eq!(d.capabilities.switch, Some(Switch { on: false }));
-        let readings = &d.capabilities.sensor.as_ref().unwrap().readings;
-        assert_eq!(readings["voltage"].value, 231.4);
-        assert_eq!(readings["voltage"].unit, "V");
+        let energy = d.capabilities.energy.as_ref().unwrap();
+        assert_eq!(energy.voltage_v, Some(231.4));
+        /* 1234.567 Wh, read with "scale": 0.001. */
+        assert!((energy.energy_kwh.unwrap() - 1.234567).abs() < 1e-9);
+        assert_eq!(d.capabilities.sensor.as_ref().unwrap().readings["temperature"].unit, "°C");
 
         let d = hub.control.command("dev", "switch", json!({"on": true})).await.unwrap();
         assert_eq!(d.capabilities.switch, Some(Switch { on: true }));
         assert!(sim.shelly_on());
         /* The sim draws 40 W while on; the confirmation poll saw it. */
-        assert_eq!(d.capabilities.sensor.unwrap().readings["power"].value, 40.0);
+        assert_eq!(d.capabilities.energy.unwrap().power_w, 40.0);
 
         /* The button on the plug: seen at the next poll. */
         sim.press_button();
