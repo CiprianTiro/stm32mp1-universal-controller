@@ -20,9 +20,13 @@
 //   5  pick the device's type      6  pick its brand
 //   7  "Did the device react?" after its Power
 //   8  "Did it react again?" after a second button
+// and (issue #85):
+//   9  "Use as a light": switch and colours on the device's card, and the
+//      strip's colour order
 
 import { Theme } from "theme.slint";
-import { PageHeader, ActionButton } from "common.slint";
+import { PageHeader, ActionButton, Choice } from "common.slint";
+import { Toggle } from "devices.slint";
 import { Keyboard } from "keyboard.slint";
 import { RemoteItem } from "remote.slint";
 
@@ -153,6 +157,10 @@ export component IrRemotePage inherits Rectangle {
     callback pick(string, string);
     callback answer(bool);
     callback resend();
+    // Issue #85: used as a light, its colour order ("RGB", "GRB", ...).
+    in property <bool> light;
+    in property <string> order;
+    callback set-light(bool, string);
 
     // Edit view: the button whose Delete was tapped once ("Delete?").
     property <string> confirm-delete;
@@ -175,6 +183,7 @@ export component IrRemotePage inherits Rectangle {
                 : view == 5 ? "What kind of device?"
                 : view == 6 ? "Which brand?"
                 : view == 7 || view == 8 ? "Finding the codes"
+                : view == 9 ? "Use as a light"
                 : root.device-name;
             back => {
                 if (view == 4) {
@@ -291,12 +300,106 @@ export component IrRemotePage inherits Rectangle {
             }
         }
 
-        if view == 0: ActionButton {
-            text: buttons.length == 0 ? "No remote? Find its codes" : "Add buttons from the code library";
-            enabled: status == "";
-            clicked => {
-                root.find();
+        if view == 0: HorizontalLayout {
+            spacing: Theme.space-s;
+            ActionButton {
+                text: buttons.length == 0 ? "No remote? Find its codes" : "Add from the code library";
+                horizontal-stretch: 1;
+                enabled: status == "";
+                clicked => {
+                    root.find();
+                }
             }
+            if buttons.length > 0: ActionButton {
+                text: "Light\u{2026}";
+                clicked => {
+                    view = 9;
+                }
+            }
+        }
+
+        // ---- 9: as a light (issue #85) ----
+        if view == 9: HorizontalLayout {
+            spacing: Theme.space-m;
+            Text {
+                text: "Use as a light";
+                color: Theme.text;
+                font-size: Theme.font-subtitle;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+            Toggle {
+                on: root.light;
+                toggled(on) => {
+                    root.set-light(on, root.order);
+                }
+            }
+        }
+        if view == 9: Text {
+            text: "Its card then gets an on/off switch, colours and brightness \u{2212} / +, from its buttons' names (On, Off, Power, Red, Green, Blue, White, Orange\u{2026}, Brighter, Dimmer); other names on the standard 24- and 44-key LED remotes are recognised by their codes. The hub can't see the strip: it remembers what it last sent.";
+            color: Theme.text-muted;
+            font-size: Theme.font-body;
+            wrap: word-wrap;
+        }
+        if view == 9 && root.light: Text {
+            text: "What does the strip show for the remote's Red, Green, Blue? (Cheap strips often have two wires swapped.)";
+            color: Theme.text;
+            font-size: Theme.font-body;
+            wrap: word-wrap;
+        }
+        if view == 9 && root.light: GridLayout {
+            spacing: Theme.space-s;
+            Row {
+                Choice {
+                    text: "Red Green Blue";
+                    selected: root.order == "RGB" || root.order == "";
+                    clicked => {
+                        root.set-light(true, "RGB");
+                    }
+                }
+                Choice {
+                    text: "Green Red Blue";
+                    selected: root.order == "GRB";
+                    clicked => {
+                        root.set-light(true, "GRB");
+                    }
+                }
+            }
+            Row {
+                Choice {
+                    text: "Blue Green Red";
+                    selected: root.order == "BGR";
+                    clicked => {
+                        root.set-light(true, "BGR");
+                    }
+                }
+                Choice {
+                    text: "Red Blue Green";
+                    selected: root.order == "RBG";
+                    clicked => {
+                        root.set-light(true, "RBG");
+                    }
+                }
+            }
+            Row {
+                Choice {
+                    text: "Green Blue Red";
+                    selected: root.order == "GBR";
+                    clicked => {
+                        root.set-light(true, "GBR");
+                    }
+                }
+                Choice {
+                    text: "Blue Red Green";
+                    selected: root.order == "BRG";
+                    clicked => {
+                        root.set-light(true, "BRG");
+                    }
+                }
+            }
+        }
+        if view == 9: Rectangle {
+            vertical-stretch: 1;
         }
 
         // ---- 1: edit ----

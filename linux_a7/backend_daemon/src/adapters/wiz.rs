@@ -359,10 +359,12 @@ fn from_wiz(pilot: &Value) -> Result<Reported, String> {
         (0, Some(temp), ..) if temp > 0 => Some(Color {
             hex: None,
             kelvin: u16::try_from(temp).ok(),
+            ..Default::default()
         }),
         (0, _, Some(r), Some(g), Some(b)) => Some(Color {
             hex: Some(rgb_to_hex([r, g, b])),
             kelvin: None,
+            ..Default::default()
         }),
         _ => None,
     };
@@ -481,6 +483,7 @@ mod tests {
                 color: Some(Color {
                     hex: Some("#FFFFFF".into()),
                     kelvin: None,
+                    ..Default::default()
                 }),
                 ..Default::default()
             },

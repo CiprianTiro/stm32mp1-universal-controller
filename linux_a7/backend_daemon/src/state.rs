@@ -103,6 +103,14 @@ pub enum Msg {
         names: Vec<String>,
         reply: oneshot::Sender<Result<Vec<String>, String>>,
     },
+    /* Issue #85: removes these capabilities (an IR device that stops
+     * being used as a light loses its switch and colour); replies with
+     * the ones removed. A device keeps at least one. */
+    RemoveCapabilities {
+        id: DeviceId,
+        names: Vec<String>,
+        reply: oneshot::Sender<Result<Vec<String>, String>>,
+    },
     /* A hardware device became reachable or not (issue #40), reported by
      * its adapter. Screens and the cloud hear about it; the flash doesn't
      * (it only describes this run of the hub, see Device::online). */
@@ -178,6 +186,16 @@ pub async fn run(mut rx: mpsc::Receiver<Msg>, mut devices: HashMap<DeviceId, Dev
                 let result = add_missing(&mut devices, &id, &names);
                 if let Ok(added) = &result {
                     if !added.is_empty() {
+                        let device = devices[&id].clone();
+                        changed(&out, &devices, Event::Changed(device), true);
+                    }
+                }
+                let _ = reply.send(result);
+            }
+            Msg::RemoveCapabilities { id, names, reply } => {
+                let result = remove_capabilities(&mut devices, &id, &names);
+                if let Ok(removed) = &result {
+                    if !removed.is_empty() {
                         let device = devices[&id].clone();
                         changed(&out, &devices, Event::Changed(device), true);
                     }
@@ -310,6 +328,22 @@ fn add_missing(devices: &mut HashMap<DeviceId, Device>, id: &str, names: &[Strin
         devices.get_mut(id).expect("checked above").capabilities = capabilities;
     }
     Ok(added)
+}
+
+fn remove_capabilities(devices: &mut HashMap<DeviceId, Device>, id: &str, names: &[String]) -> Result<Vec<String>, String> {
+    let device = devices.get(id).ok_or_else(|| format!("unknown device {id:?}"))?;
+    let mut capabilities = device.capabilities.clone();
+    let mut removed = Vec::new();
+    for name in names {
+        if capabilities.remove(name)? {
+            removed.push(name.clone());
+        }
+    }
+    if !removed.is_empty() {
+        capabilities.check()?;
+        devices.get_mut(id).expect("checked above").capabilities = capabilities;
+    }
+    Ok(removed)
 }
 
 fn set_online(devices: &mut HashMap<DeviceId, Device>, id: &str, online: Health) -> Result<(Device, bool), String> {

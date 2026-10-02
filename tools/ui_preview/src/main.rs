@@ -83,7 +83,7 @@ const PAGES: [(&str, Option<i32>); 18] = [
 
 /// The wizard page (10) in each kind of step (issue #40): the step's
 /// sample data is set just before its render.
-const WIZARD_STEPS: [(&str, fn(&AppWindow)); 25] = [
+const WIZARD_STEPS: [(&str, fn(&AppWindow)); 26] = [
     // The remote (issue #44), page 12, in its views.
     ("remote", |ui| {
         ui.set_page(12);
@@ -127,6 +127,14 @@ const WIZARD_STEPS: [(&str, fn(&AppWindow)); 25] = [
     ("ir-remote-offline", |ui| {
         ir_remote(ui, &["Power", "Red"], 0);
         ui.set_ir_status("The IR blaster is offline: buttons can't be sent or taught right now. Is it plugged in and on the WiFi?".into());
+    }),
+    // Issue #85: "Use as a light", with the strip's colour order.
+    ("ir-light", |ui| {
+        ir_remote(ui, &["power", "red", "green", "blue", "Brighter", "Dimmer"], 9);
+        ui.set_ir_light(true);
+        ui.set_ir_order("GRB".into());
+        ui.set_ir_message_ok(true);
+        ui.set_ir_message("On its card: on/off, 3 colours, brightness \u{2212} / +.".into());
     }),
     ("ir-edit", |ui| {
         ir_remote(ui, &["Power", "Brighter", "Dimmer", "Red"], 1);
@@ -421,6 +429,22 @@ fn fill_sample_data(ui: &AppWindow, appearance: &theme::Appearance) {
     };
     let devices = vec![
         DeviceItem { has_switch: true, on: true, ..device("ld7", "Board LED (LD7)", "Hub") },
+        // Issue #85: an IR LED strip used as a light: its colours as chips,
+        // brightness - / +.
+        {
+            let chip = |hex: &str, r, g, b| ColorChip { hex: hex.into(), color: slint::Color::from_rgb_u8(r, g, b) };
+            DeviceItem { has_switch: true, on: true, has_color: true, color: slint::Color::from_rgb_u8(255, 0, 0),
+                         color_text: "#FF0000".into(),
+                         palette: Rc::new(VecModel::from(vec![
+                             chip("#FF0000", 255, 0, 0), chip("#00FF00", 0, 255, 0), chip("#0000FF", 0, 0, 255),
+                             chip("#FFFFFF", 255, 255, 255), chip("#FF8000", 255, 128, 0), chip("#FFFF00", 255, 255, 0),
+                             chip("#00FFFF", 0, 255, 255), chip("#8000FF", 128, 0, 255), chip("#FF00FF", 255, 0, 255),
+                             chip("#FF60A0", 255, 96, 160),
+                         ])).into(),
+                         brightness_up: "Brighter".into(), brightness_down: "Dimmer".into(),
+                         has_remote: true, remote_learns: true,
+                         ..device("led-strip", "Shelf LED strip", "Living room") }
+        },
         DeviceItem { has_switch: true, on: true, has_dimmer: true, level: 42, has_color: true,
                      color: slint::Color::from_rgb_u8(0, 255, 136), color_text: "#00FF88".into(),
                      ..device("bulb", "Hall bulb", "Hall") },

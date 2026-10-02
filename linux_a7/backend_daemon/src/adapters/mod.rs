@@ -148,6 +148,17 @@ impl Hub {
         self.control.get(id).await.ok().flatten()
     }
 
+    /* Issue #85: capabilities that come and go with a device's setting
+     * (an IR device used as a light): added with their neutral value /
+     * removed; only changes are announced. */
+    pub async fn add_capabilities(&self, id: &str, names: &[&str]) -> Result<Vec<String>, String> {
+        self.control.add_missing_capabilities(id, names.iter().map(|n| n.to_string()).collect()).await
+    }
+
+    pub async fn remove_capabilities(&self, id: &str, names: &[&str]) -> Result<Vec<String>, String> {
+        self.control.remove_capabilities(id, names.iter().map(|n| n.to_string()).collect()).await
+    }
+
     /* Issue #72: a battery device reported (Device::last_seen). */
     pub async fn seen(&self, id: &str) {
         self.control.seen(id).await;

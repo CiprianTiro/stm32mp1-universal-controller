@@ -731,6 +731,7 @@ impl Task {
                 buttons: REMOTE_BUTTONS.iter().map(|b| b.to_string()).collect(),
                 keyboard: true,
                 learn: false,
+                brightness: None,
             };
             if let Err(e) = self.hub.report(&self.id, "remote", json!(remote)).await {
                 println!("lg-webos: {}: {e}", self.id);

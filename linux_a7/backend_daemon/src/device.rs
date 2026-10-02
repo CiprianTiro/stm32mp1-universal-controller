@@ -211,15 +211,28 @@ pub struct Dimmer {
 /* A colour OR a white temperature -- bulbs are in one mode or the other,
  * so exactly one of the two is set:
  *   {"hex": "#FF8800"}   a colour, as red/green/blue in hex (like CSS)
- *   {"kelvin": 2700}     white light; 2700 = warm, 6500 = cold daylight */
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+ *   {"kelvin": 2700}     white light; 2700 = warm, 6500 = cold daylight
+ *
+ * Issue #85: a light that can only show a FEW fixed colours (an IR LED
+ * strip: one button per colour) also lists them:
+ *   {"hex": "#FF0000", "palette": ["#FF0000", "#00FF00", "#0000FF"]}
+ * A screen then offers those as chips instead of a colour wheel. Any
+ * colour may still be asked for: the device shows the nearest one in its
+ * palette, and reports that. Only the device sets the palette (a
+ * client's command keeps it, see from_client). */
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 #[serde(deny_unknown_fields)]
 pub struct Color {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hex: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kelvin: Option<u16>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub palette: Vec<String>,
 }
+
+/* The most colours a palette may have (a 44-key remote has 20). */
+pub const MAX_PALETTE: usize = 32;
 
 /* Readings: {"temperature": {"value": 21.5, "unit": "°C"}, ...}. Only
  * the device itself reports them -- a client can't "set" a temperature. */
@@ -300,7 +313,26 @@ pub struct Remote {
      * learn / forget / rename actions), and may have any name. */
     #[serde(default)]
     pub learn: bool,
+    /* Issue #85: the two buttons that make a light brighter / dimmer one
+     * step (an IR LED strip's). Its real brightness isn't known (the
+     * remote only says "a bit more"), so it's not a `dimmer` with a
+     * level: a screen shows these two as - and + next to the light. */
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brightness: Option<BrightnessButtons>,
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct BrightnessButtons {
+    pub up: String,
+    pub down: String,
+}
+
+/* Issue #85: how a cheap RGB strip may be wired. The letters are the
+ * colours the strip really shows for the remote's Red, Green and Blue
+ * buttons: "GRB" = Red shows green, Green shows red (two wires swapped at
+ * the controller). "RGB" = wired right. */
+pub const COLOR_ORDERS: [&str; 6] = ["RGB", "RBG", "GRB", "GBR", "BRG", "BGR"];
 
 /* The most buttons one remote may have (a big TV remote has ~50). */
 pub const MAX_REMOTE_BUTTONS: usize = 100;
@@ -521,13 +553,23 @@ impl Capability for Dimmer {
 /* White temperatures real bulbs and LED strips offer. */
 const KELVIN_RANGE: std::ops::RangeInclusive<u16> = 1000..=10000;
 
+/* "#FF8800"-shaped: '#' and six hex digits. */
+fn is_hex_color(hex: &str) -> bool {
+    hex.strip_prefix('#').is_some_and(|d| d.len() == 6 && d.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
 impl Capability for Color {
     const NAME: &'static str = "color";
     fn check(&self) -> Result<(), String> {
+        if self.palette.len() > MAX_PALETTE {
+            return Err(format!("a colour palette has at most {MAX_PALETTE} colours"));
+        }
+        if let Some(bad) = self.palette.iter().find(|c| !is_hex_color(c)) {
+            return Err(format!("palette colours must look like \"#FF8800\", got {bad:?}"));
+        }
         match (&self.hex, self.kelvin) {
             (Some(hex), None) => {
-                let digits = hex.strip_prefix('#').unwrap_or("");
-                if digits.len() != 6 || !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
+                if !is_hex_color(hex) {
                     return Err(format!("color hex must look like \"#FF8800\", got {hex:?}"));
                 }
                 Ok(())
@@ -540,6 +582,12 @@ impl Capability for Color {
             )),
             _ => Err("color needs exactly one of \"hex\" or \"kelvin\"".into()),
         }
+    }
+    /* The palette is what the device CAN show: a client asks for a
+     * colour, it doesn't change that. */
+    fn from_client(current: &Self, mut new: Self) -> Result<Self, String> {
+        new.palette = current.palette.clone();
+        Ok(new)
     }
 }
 
@@ -585,6 +633,11 @@ impl Capability for Remote {
             }
             if self.buttons[..i].contains(button) {
                 return Err(format!("remote button {button:?} listed twice"));
+            }
+        }
+        if let Some(b) = &self.brightness {
+            if let Some(missing) = [&b.up, &b.down].into_iter().find(|n| !self.buttons.contains(n)) {
+                return Err(format!("remote brightness button {missing:?} isn't one of its buttons"));
             }
         }
         Ok(())
@@ -812,6 +865,11 @@ fn replace<T: Capability>(
  *                   code of their test button, most common first
  *           try {"type", "set", "button"}   send one button of a set
  *           use_set {"type", "set"} -> {"added": N}  copy its buttons
+ *     and as a light (issue #85, ir_light.rs), e.g. an LED strip:
+ *           light {"enabled": true, "order"?: "GRB"}
+ *                -> {"switch": bool, "colors": N, "brightness": bool}
+ *                   what its buttons gave; `order` = the colours the strip
+ *                   really shows for the remote's Red, Green, Blue
  *   media   apps {}      -> {"apps": [{"id", "label"}]}
  *           launch {"app": "<id>"}
  *           channels {"query"?, "offset"?, "limit"?}
@@ -862,7 +920,7 @@ pub fn check_action(device: &Device, capability: &str, name: &str, args: &serde_
                     _ => Err("remote delete needs {\"count\": 1-256}".into()),
                 },
                 "submit" => no_args(),
-                "learn" | "forget" | "rename" | "library" | "finder" | "try" | "use_set" if !remote.learn => {
+                "learn" | "forget" | "rename" | "library" | "finder" | "try" | "use_set" | "light" if !remote.learn => {
                     Err(format!("{id} can't learn buttons"))
                 }
                 /* The IR code library (issue #82, ir_library.rs). Only the
@@ -887,6 +945,16 @@ pub fn check_action(device: &Device, capability: &str, name: &str, args: &serde_
                 "use_set" => {
                     library_arg("type", 32)?;
                     library_arg("set", 200)
+                }
+                "light" => {
+                    if !args["enabled"].is_boolean() {
+                        return Err("remote light needs {\"enabled\": true or false}".into());
+                    }
+                    match args.get("order") {
+                        None => Ok(()),
+                        Some(o) if o.as_str().is_some_and(|o| COLOR_ORDERS.contains(&o)) => Ok(()),
+                        Some(_) => Err(format!("remote light: order must be one of {}", COLOR_ORDERS.join(", "))),
+                    }
                 }
                 "learn" => {
                     let button = args["button"].as_str().ok_or("remote learn needs {\"button\": \"Power\"}")?;
@@ -919,7 +987,7 @@ pub fn check_action(device: &Device, capability: &str, name: &str, args: &serde_
                     Ok(())
                 }
                 other => Err(format!(
-                    "remote has no action {other:?} (press, type, delete, submit, learn, forget, rename, library, finder, try, use_set)"
+                    "remote has no action {other:?} (press, type, delete, submit, learn, forget, rename, library, finder, try, use_set, light)"
                 )),
             }
         }
@@ -997,7 +1065,7 @@ impl Capabilities {
                 &mut self.color,
                 Color {
                     hex: Some("#FFFFFF".into()),
-                    kelvin: None,
+                    ..Default::default()
                 },
             ),
             "sensor" => fill(&mut self.sensor, Sensor::default()),
@@ -1021,6 +1089,27 @@ impl Capabilities {
                 },
             ),
             "energy" => fill(&mut self.energy, Energy::default()),
+            other => return Err(format!("unknown capability {other:?}")),
+        })
+    }
+
+    /* Removes one capability, if present; true if it was there (issue
+     * #85, state::Msg::RemoveCapabilities). */
+    pub fn remove(&mut self, name: &str) -> Result<bool, String> {
+        fn take<T>(slot: &mut Option<T>) -> bool {
+            slot.take().is_some()
+        }
+        Ok(match name {
+            "switch" => take(&mut self.switch),
+            "dimmer" => take(&mut self.dimmer),
+            "color" => take(&mut self.color),
+            "sensor" => take(&mut self.sensor),
+            "media" => take(&mut self.media),
+            "remote" => take(&mut self.remote),
+            "cover" => take(&mut self.cover),
+            "climate" => take(&mut self.climate),
+            "lock" => take(&mut self.lock),
+            "energy" => take(&mut self.energy),
             other => return Err(format!("unknown capability {other:?}")),
         })
     }
@@ -1274,6 +1363,7 @@ mod tests {
             buttons: vec!["UP".into(), "OK".into()],
             keyboard: true,
             learn: false,
+            brightness: None,
         });
         let ok = |cap: &str, name: &str, args: serde_json::Value| check_action(&tv, cap, name, &args);
         assert_eq!(ok("remote", "press", json!({"button": "UP"})), Ok(()));
@@ -1306,6 +1396,7 @@ mod tests {
             buttons: vec!["Power".into(), "Red".into()],
             keyboard: false,
             learn: true,
+            brightness: None,
         });
         let ok = |name: &str, args: serde_json::Value| check_action(&ir, "remote", name, &args);
         assert_eq!(ok("press", json!({"button": "Power"})), Ok(()));
@@ -1418,13 +1509,13 @@ mod tests {
     #[test]
     fn color_rules() {
         let ok = |c: Color| c.check().is_ok();
-        assert!(ok(Color { hex: Some("#ff8800".into()), kelvin: None }));
-        assert!(ok(Color { hex: None, kelvin: Some(2700) }));
-        assert!(!ok(Color { hex: Some("ff8800".into()), kelvin: None }));
-        assert!(!ok(Color { hex: Some("#ff88".into()), kelvin: None }));
-        assert!(!ok(Color { hex: None, kelvin: Some(500) }));
-        assert!(!ok(Color { hex: Some("#ff8800".into()), kelvin: Some(2700) }));
-        assert!(!ok(Color { hex: None, kelvin: None }));
+        assert!(ok(Color { hex: Some("#ff8800".into()), kelvin: None, ..Default::default() }));
+        assert!(ok(Color { hex: None, kelvin: Some(2700), ..Default::default() }));
+        assert!(!ok(Color { hex: Some("ff8800".into()), kelvin: None, ..Default::default() }));
+        assert!(!ok(Color { hex: Some("#ff88".into()), kelvin: None, ..Default::default() }));
+        assert!(!ok(Color { hex: None, kelvin: Some(500), ..Default::default() }));
+        assert!(!ok(Color { hex: Some("#ff8800".into()), kelvin: Some(2700), ..Default::default() }));
+        assert!(!ok(Color { hex: None, kelvin: None, ..Default::default() }));
     }
 
     #[test]

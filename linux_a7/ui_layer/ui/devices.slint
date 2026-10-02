@@ -20,6 +20,13 @@ export struct MediaInputItem {
     label: string,
 }
 
+// Issue #85: one colour a fixed-colour light can show (a chip on its
+// card): "#FF0000" as sent back when tapped, and for drawing.
+export struct ColorChip {
+    hex: string,
+    color: color,
+}
+
 // One device, flattened for display. The has-* flags say which
 // capabilities it has; the other fields are only meaningful when their
 // flag is set.
@@ -35,6 +42,13 @@ export struct DeviceItem {
     color: color,
     // e.g. "#FF8800" or "2700 K"
     color-text: string,
+    // Issue #85: the only colours it can show (an IR LED strip), as chips
+    // instead of the text; empty = any colour.
+    palette: [ColorChip],
+    // Issue #85: the remote buttons that make it brighter / dimmer one
+    // step ("" = none): - and + on the card.
+    brightness-up: string,
+    brightness-down: string,
     // e.g. "temperature 21.5 °C   humidity 40 %"; empty = no sensor
     sensor-text: string,
     // Issue #40: "" (fine, or not known), "Offline", "Needs pairing again".
@@ -51,6 +65,10 @@ export struct DeviceItem {
     // Issue #44: a remote (opens the Remote page), and what's on screen
     // ("Live TV \u{2022} 5 Pro TV", "Netflix").
     has-remote: bool,
+    // A remote that learns (an IR blaster's, issue #42): usable whatever
+    // the hub assumes about on/off (issue #85: an IR light's "off" is only
+    // a guess).
+    remote-learns: bool,
     now-playing: string,
     // ---- Issue #77 ----
     // A cover: position 0-100 (-1 = not known); can it go to any position
@@ -224,6 +242,10 @@ component DeviceRow inherits Rectangle {
     callback set-cover-position(string, int);
     callback set-climate(string, string, float, string);
     callback set-lock(string, bool);
+    // Issue #85: a palette colour tapped; a remote button pressed (an IR
+    // light's brightness steps).
+    callback set-color(string, string);
+    callback press(string, string);
 
     // The lock's "Unlock Front door?" question is showing.
     property <bool> asking-unlock: false;
@@ -325,7 +347,31 @@ component DeviceRow inherits Rectangle {
             }
         }
 
-        if item.has-color: Text {
+        // Issue #85: a light with a few fixed colours (an IR LED strip):
+        // its colours as chips, the current one ringed; tap = that colour.
+        // Laid out by hand in rows (Slint has no wrapping layout).
+        if item.palette.length > 0: Rectangle {
+            property <length> chip: 40px;
+            property <length> gap: Theme.space-s;
+            property <int> per-row: max(1, floor((self.width + gap) / (chip + gap)));
+            height: ceil(item.palette.length / per-row) * (chip + gap) - gap;
+            for c[i] in item.palette: Rectangle {
+                x: (i - floor(i / per-row) * per-row) * (chip + gap);
+                y: floor(i / per-row) * (chip + gap);
+                width: chip;
+                height: chip;
+                border-radius: chip / 2;
+                background: c.color;
+                border-width: c.hex == item.color-text ? 3px : 1px;
+                border-color: c.hex == item.color-text ? Theme.text : Theme.outline;
+                TouchArea {
+                    clicked => {
+                        root.set-color(item.id, c.hex);
+                    }
+                }
+            }
+        }
+        if item.has-color && item.palette.length == 0: Text {
             text: "Color " + item.color-text;
             color: Theme.text-muted;
             font-size: Theme.font-caption;
@@ -373,8 +419,28 @@ component DeviceRow inherits Rectangle {
         }
 
         // What's on screen, and the Remote page (issue #44).
+        // An IR light (issue #85): brightness one step at a time, here
+        // instead (the real level isn't known, so no bar).
         if item.has-remote || (item.has-media && item.now-playing != ""): HorizontalLayout {
             spacing: Theme.space-l;
+            if item.brightness-up != "": Text {
+                text: "Brightness";
+                color: Theme.text-muted;
+                font-size: Theme.font-body;
+                vertical-alignment: center;
+            }
+            if item.brightness-up != "": ActionButton {
+                text: "\u{2212}";
+                clicked => {
+                    root.press(item.id, item.brightness-down);
+                }
+            }
+            if item.brightness-up != "": ActionButton {
+                text: "+";
+                clicked => {
+                    root.press(item.id, item.brightness-up);
+                }
+            }
             Text {
                 text: item.on ? item.now-playing : "";
                 color: Theme.text-muted;
@@ -387,8 +453,9 @@ component DeviceRow inherits Rectangle {
                 text: "Remote";
                 // A TV's remote does nothing while the TV is off; a device
                 // without an on/off state the hub knows (an IR blaster's,
-                // issue #42) can always be used.
-                enabled: item.on || !item.has-switch;
+                // issue #42) can always be used -- also an IR light, whose
+                // on/off is only assumed (issue #85).
+                enabled: item.on || !item.has-switch || item.remote-learns;
                 clicked => {
                     root.open-remote(item.id);
                 }
@@ -617,6 +684,8 @@ export component DeviceList inherits Rectangle {
     callback set-cover-position(string, int);
     callback set-climate(string, string, float, string);
     callback set-lock(string, bool);
+    callback set-color(string, string);
+    callback press(string, string);
 
     if rows.length == 0: Text {
         text: "No devices yet";
@@ -665,6 +734,12 @@ export component DeviceList inherits Rectangle {
                 }
                 set-lock(id, locked) => {
                     root.set-lock(id, locked);
+                }
+                set-color(id, hex) => {
+                    root.set-color(id, hex);
+                }
+                press(id, button) => {
+                    root.press(id, button);
                 }
             }
             // The last row may have fewer cards: empty places keep them at

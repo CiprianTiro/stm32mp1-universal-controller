@@ -216,6 +216,18 @@ impl Control {
         .await?
     }
 
+    /* Issue #85: the opposite, for capabilities that come and go with a
+     * setting (an IR device used as a light or not). Returns the ones
+     * removed. */
+    pub async fn remove_capabilities(&self, id: &str, names: Vec<String>) -> Result<Vec<String>, String> {
+        self.ask(|reply| Msg::RemoveCapabilities {
+            id: id.to_string(),
+            names,
+            reply,
+        })
+        .await?
+    }
+
     /* Changes some of a device's adapter settings (the given keys only),
      * and restarts its adapter task so it uses them (issue #40: a device
      * found at a new address). */

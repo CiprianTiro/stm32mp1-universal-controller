@@ -48,6 +48,14 @@
  * remote: library / finder look up code sets, try sends one button of a
  * set, use_set copies a set's buttons into the store (after the taught
  * ones). Only `try` needs the blaster.
+ *
+ * AS A LIGHT (issue #85, ir_light.rs): an LED strip's device, once marked
+ * as a light (action "light", or a set of the library's "LED lights"),
+ * also gets `switch` and `color` from the buttons that mean that, and the
+ * remote's `brightness` buttons. Their state is ASSUMED (IR goes one way):
+ * what the hub last sent, also by pressing those buttons on the remote
+ * screen. Config "light" = "on", "colour_order" = "GRB" (device.rs
+ * COLOR_ORDERS); both change without restarting the task.
  */
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -59,10 +67,11 @@ use tokio_rustls::client::TlsStream;
 
 use super::net::{self, NetError};
 use super::{Adapter, BoxFuture, DeviceCmd, DeviceHandle, Hub, Probe, SetupError, SetupValues};
-use crate::device::{Device, Health, Remote};
+use crate::device::{BrightnessButtons, Color, Device, Health, Remote, Switch};
 use crate::templates::ErrorKind;
 use crate::ir_encode;
 use crate::ir_library::{self, IrLibrary};
+use crate::ir_light::{self, LightMap, Role};
 use crate::tls;
 
 /* The blaster's TCP port (PROTOCOL.md). */
@@ -82,6 +91,11 @@ const RETRY_MAX: Duration = Duration::from_secs(60);
 const LEARN_DEFAULT_S: u64 = 15;
 /* The longest line accepted from the blaster (PROTOCOL.md: 16 KiB). */
 const MAX_LINE: usize = 16 * 1024;
+/* Between two buttons of one light command (Power, then a colour): a
+ * strip's controller may miss a frame that follows another at once. */
+const BETWEEN_PRESSES: Duration = Duration::from_millis(300);
+/* The code library's type whose sets make a device a light at once. */
+const LIGHT_LIBRARY_TYPE: &str = "led_lighting";
 
 type Stream = TlsStream<TcpStream>;
 
@@ -455,9 +469,9 @@ async fn read_lines(reader: ReadHalf<Stream>, tx: mpsc::Sender<Value>) {
 
 impl Task {
     async fn run(self, mut commands: mpsc::Receiver<DeviceCmd>) {
-        /* The taught buttons are known even before the blaster answers. */
-        self.report_buttons(self.hub.ir_codes().get(&self.id).into_iter().map(|b| b.button).collect())
-            .await;
+        /* The taught buttons (and what they do for a light) are known
+         * even before the blaster answers. */
+        self.sync_light().await;
         let (Some(host), Some(pin)) = (self.host.clone(), self.pin.clone()) else {
             println!("ir-blaster: {} has no address or pairing: pair it again", self.id);
             self.hub.set_online(&self.id, Health::Unauthorized).await;
@@ -542,11 +556,11 @@ impl Task {
         match name {
             "forget" | "rename" => {
                 let button = text("button");
-                let names = match name {
+                match name {
                     "forget" => self.hub.ir_codes().forget(&self.id, &button)?,
                     _ => self.hub.ir_codes().rename(&self.id, &button, &text("to"))?,
                 };
-                self.report_buttons(names).await;
+                self.sync_light().await;
                 Ok(json!({}))
             }
             "library" => {
@@ -574,17 +588,213 @@ impl Task {
                 /* A TV's buttons by the hub's standard names: the screen
                  * then lays them out as a remote. */
                 let buttons = ir_library::standard_names(&text("type"), buttons);
-                let (names, added) = self.hub.ir_codes().add_set(&self.id, buttons);
-                self.report_buttons(names).await;
+                let (_, added) = self.hub.ir_codes().add_set(&self.id, buttons);
+                /* An LED strip's set: it's a light (issue #85) -- unless
+                 * the person already said it isn't. */
+                if text("type") == LIGHT_LIBRARY_TYPE && self.light_setting("light").await.is_none() {
+                    self.hub.store_config(&self.id, "light", "on").await;
+                }
+                self.sync_light().await;
                 println!("ir-blaster: {}: {added} buttons from the library ({})", self.id, set.id);
                 Ok(json!({"added": added}))
+            }
+            "light" => {
+                let enabled = args["enabled"].as_bool().unwrap_or(false);
+                self.hub.store_config(&self.id, "light", if enabled { "on" } else { "off" }).await;
+                if let Some(order) = args["order"].as_str() {
+                    self.hub.store_config(&self.id, "colour_order", order).await;
+                }
+                let map = self.sync_light().await;
+                Ok(json!({
+                    "switch": enabled && map.can_switch(),
+                    "colors": if enabled { map.colors.len() } else { 0 },
+                    "brightness": enabled && map.has_brightness(),
+                }))
             }
             other => Err(format!("ir-blaster can't {other} without the blaster")),
         }
     }
 
-    async fn report_buttons(&self, names: Vec<String>) {
-        report_buttons(&self.hub, &self.id, names).await;
+    /* One of the device's config values, read now: the "light" action
+     * changes them while the task runs. */
+    async fn light_setting(&self, key: &str) -> Option<String> {
+        self.hub.device(&self.id).await?.config.get(key).cloned()
+    }
+
+    /* The colour order if the device is used as a light, None if not. */
+    async fn light_order(&self) -> Option<String> {
+        let device = self.hub.device(&self.id).await?;
+        if device.config.get("light").map(String::as_str) != Some("on") {
+            return None;
+        }
+        Some(device.config.get("colour_order").cloned().unwrap_or_else(|| "RGB".into()))
+    }
+
+    /* Reports the buttons, and makes the device's light capabilities
+     * match them (issue #85): `switch` if they can switch it on and off,
+     * `color` (with the palette) if there are colour buttons, the
+     * remote's brightness buttons -- or none of those if it isn't used as
+     * a light. After every change to the buttons or the settings. */
+    async fn sync_light(&self) -> LightMap {
+        let buttons = self.hub.ir_codes().get(&self.id);
+        let map = LightMap::from_buttons(&buttons);
+        let order = self.light_order().await;
+        let light = order.is_some();
+        let brightness = match (&map.brighter, &map.dimmer) {
+            (Some(up), Some(down)) if light => Some(BrightnessButtons {
+                up: up.clone(),
+                down: down.clone(),
+            }),
+            _ => None,
+        };
+        let names = buttons.into_iter().map(|b| b.button).collect();
+        report_buttons(&self.hub, &self.id, names, brightness).await;
+
+        let mut want: Vec<&str> = Vec::new();
+        let mut drop: Vec<&str> = Vec::new();
+        (if light && map.can_switch() { &mut want } else { &mut drop }).push("switch");
+        (if light && !map.colors.is_empty() { &mut want } else { &mut drop }).push("color");
+        if let Err(e) = self.hub.add_capabilities(&self.id, &want).await {
+            println!("ir-blaster: {}: {e}", self.id);
+        }
+        if let Err(e) = self.hub.remove_capabilities(&self.id, &drop).await {
+            println!("ir-blaster: {}: {e}", self.id);
+        }
+        if let Some(order) = &order {
+            if !map.colors.is_empty() {
+                /* The palette, and a current colour that's in it (the one
+                 * the hub last sent, if it still is). */
+                let palette = map.palette(order);
+                let current = self.hub.device(&self.id).await.and_then(|d| d.capabilities.color).and_then(|c| c.hex);
+                let hex = current.filter(|h| palette.contains(h)).unwrap_or_else(|| palette[0].clone());
+                self.report_color(hex, palette).await;
+            }
+        }
+        map
+    }
+
+    async fn report_color(&self, hex: String, palette: Vec<String>) {
+        let color = Color {
+            hex: Some(hex),
+            kelvin: None,
+            palette,
+        };
+        if let Err(e) = self.hub.report(&self.id, "color", json!(color)).await {
+            println!("ir-blaster: {}: {e}", self.id);
+        }
+    }
+
+    async fn report_switch(&self, on: bool) {
+        if let Err(e) = self.hub.report(&self.id, "switch", json!(Switch { on })).await {
+            println!("ir-blaster: {}: {e}", self.id);
+        }
+    }
+
+    /* What a pressed button did to the light, as far as the hub can tell
+     * (issue #85): a Power toggle flips the assumed state, a colour button
+     * sets the colour. Nothing if it isn't used as a light. */
+    async fn pressed(&self, button: &str) {
+        let Some(order) = self.light_order().await else { return };
+        let map = LightMap::from_buttons(&self.hub.ir_codes().get(&self.id));
+        let Some(device) = self.hub.device(&self.id).await else { return };
+        let assumed_on = device.capabilities.switch.as_ref().is_some_and(|s| s.on);
+        match map.role(button) {
+            Some(Role::On) if map.can_switch() => self.report_switch(true).await,
+            Some(Role::Off) if map.can_switch() => self.report_switch(false).await,
+            Some(Role::Toggle) => self.report_switch(!assumed_on).await,
+            Some(Role::Color(rgb)) => {
+                self.report_color(ir_light::to_hex(ir_light::shown_color(rgb, &order)), map.palette(&order)).await;
+            }
+            _ => {}
+        }
+    }
+
+    /* Sends one button now and waits for the blaster's answer, handling
+     * whatever else arrives meanwhile (a light command presses up to two
+     * buttons, in order). The outer Err: the connection broke; the inner
+     * one: the blaster couldn't send it. */
+    async fn press_now(&self, conn: &mut Conn, button: &str) -> Result<Result<(), String>, String> {
+        let Some(code) = self.hub.ir_codes().code(&self.id, button) else {
+            return Ok(Err(format!("{button:?} isn't taught yet")));
+        };
+        let Some(code) = ir_encode::for_sending(&code) else {
+            return Ok(Err(format!("this hub can't send {button:?} ({})", code["proto"])));
+        };
+        let (tx, mut rx) = oneshot::channel();
+        send_request(conn, "send", json!({"code": code}), PendingKind::Send(tx), REPLY_TIMEOUT).await?;
+        let mut tick = tokio::time::interval(Duration::from_secs(1));
+        loop {
+            tokio::select! {
+                answer = &mut rx => {
+                    return Ok(answer.unwrap_or_else(|_| Err("The IR blaster didn't answer.".into())).map(|_| ()));
+                }
+                msg = conn.incoming.recv() => match msg {
+                    None => return Err("the blaster closed the connection".into()),
+                    Some(msg) => {
+                        conn.last_heard = Instant::now();
+                        self.message(conn, msg).await;
+                    }
+                },
+                _ = tick.tick() => expire(conn),
+            }
+        }
+    }
+
+    /* A `switch` or `color` command to a device used as a light (issue
+     * #85): the buttons that do it, then the assumed new state. */
+    async fn light_command(&self, conn: &mut Conn, capability: &str, value: &Value) -> Result<Result<(), String>, String> {
+        let Some(order) = self.light_order().await else {
+            return Ok(Err("this IR device isn't used as a light".into()));
+        };
+        let map = LightMap::from_buttons(&self.hub.ir_codes().get(&self.id));
+        let assumed_on = self
+            .hub
+            .device(&self.id)
+            .await
+            .and_then(|d| d.capabilities.switch)
+            .is_some_and(|s| s.on);
+        let mut presses: Vec<String> = Vec::new();
+        let (on, color) = match capability {
+            "switch" => {
+                let on = value["on"].as_bool().unwrap_or(false);
+                presses = map.presses_for_switch(on, assumed_on);
+                (Some(on), None)
+            }
+            "color" => {
+                let want = match (value["hex"].as_str(), value["kelvin"].as_u64()) {
+                    (Some(hex), _) => ir_light::from_hex(hex),
+                    (None, Some(k)) => Some(ir_light::kelvin_to_rgb(k.min(u16::MAX as u64) as u16)),
+                    _ => None,
+                };
+                let Some((button, shown)) = want.and_then(|rgb| map.nearest(rgb, &order)) else {
+                    return Ok(Err("this light has no colour buttons".into()));
+                };
+                /* A strip that's off ignores colour buttons: on first. */
+                let mut on = None;
+                if !assumed_on && map.can_switch() {
+                    presses = map.presses_for_switch(true, false);
+                    on = Some(true);
+                }
+                presses.push(button);
+                (on, Some(ir_light::to_hex(shown)))
+            }
+            other => return Ok(Err(format!("an IR light has no {other} to set"))),
+        };
+        for (i, button) in presses.iter().enumerate() {
+            if i > 0 {
+                tokio::time::sleep(BETWEEN_PRESSES).await;
+            }
+            if let Err(why) = self.press_now(conn, button).await? {
+                return Ok(Err(why));
+            }
+        }
+        if let Some(on) = on {
+            self.report_switch(on).await;
+        }
+        if let Some(hex) = color {
+            self.report_color(hex, map.palette(&order)).await;
+        }
+        Ok(Ok(()))
     }
 
     async fn session(&self, mut conn: Conn, commands: &mut mpsc::Receiver<DeviceCmd>) -> End {
@@ -632,9 +842,12 @@ impl Task {
     async fn command(&self, conn: &mut Conn, cmd: DeviceCmd) -> Result<(), String> {
         let (capability, name, args, reply) = match cmd {
             DeviceCmd::Action { capability, name, args, reply } => (capability, name, args, reply),
-            cmd => {
-                cmd.refuse("an IR blaster has no state to set: press its buttons");
-                return Ok(());
+            DeviceCmd::Command { capability, value, reply } => {
+                /* Only a light's switch and colour (issue #85). */
+                let result = self.light_command(conn, &capability, &value).await;
+                let broken = result.as_ref().err().cloned();
+                let _ = reply.send(result.unwrap_or_else(|_| Err("The connection to the IR blaster was lost. Try again.".into())));
+                return broken.map_or(Ok(()), Err);
             }
         };
         if capability != "remote" {
@@ -643,17 +856,25 @@ impl Task {
         }
         match name.as_str() {
             "press" => {
+                /* Taught codes pass through; library ones are encoded
+                 * (press_now). Waited for: a light's assumed state
+                 * (issue #85) only changes once it was sent. */
                 let button = args["button"].as_str().unwrap_or_default();
-                let Some(code) = self.hub.ir_codes().code(&self.id, button) else {
-                    let _ = reply.send(Err(format!("{button:?} isn't taught yet")));
-                    return Ok(());
-                };
-                /* Taught codes pass through; library ones are encoded. */
-                let Some(code) = ir_encode::for_sending(&code) else {
-                    let _ = reply.send(Err(format!("this hub can't send {button:?} ({})", code["proto"])));
-                    return Ok(());
-                };
-                send_request(conn, "send", json!({"code": code}), PendingKind::Send(reply), REPLY_TIMEOUT).await
+                match self.press_now(conn, button).await {
+                    Ok(Ok(())) => {
+                        self.pressed(button).await;
+                        let _ = reply.send(Ok(json!({})));
+                        Ok(())
+                    }
+                    Ok(Err(why)) => {
+                        let _ = reply.send(Err(why));
+                        Ok(())
+                    }
+                    Err(broken) => {
+                        let _ = reply.send(Err("The connection to the IR blaster was lost. Try again.".into()));
+                        Err(broken)
+                    }
+                }
             }
             "learn" => {
                 let seconds = args["timeout_s"].as_u64().unwrap_or(LEARN_DEFAULT_S);
@@ -731,8 +952,8 @@ impl Task {
                     let _ = reply.send(Err("The IR blaster sent no code".into()));
                     return;
                 }
-                let names = self.hub.ir_codes().learn(&self.id, &button, code.clone());
-                self.report_buttons(names).await;
+                self.hub.ir_codes().learn(&self.id, &button, code.clone());
+                self.sync_light().await;
                 println!("ir-blaster: {}: learned {button:?}: {code}", self.id);
                 let _ = reply.send(Ok(json!({"code": code})));
             }
@@ -740,11 +961,12 @@ impl Task {
     }
 }
 
-async fn report_buttons(hub: &Hub, id: &str, buttons: Vec<String>) {
+async fn report_buttons(hub: &Hub, id: &str, buttons: Vec<String>, brightness: Option<BrightnessButtons>) {
     let remote = Remote {
         buttons,
         keyboard: false,
         learn: true,
+        brightness,
     };
     if let Err(e) = hub.report(id, "remote", json!(remote)).await {
         println!("ir-blaster: {id}: {e}");
@@ -803,7 +1025,7 @@ fn fail(kind: PendingKind, why: &str) {
 
 /* Remote actions the hub answers from its own data (hub_only_action). */
 fn is_hub_only(name: &str) -> bool {
-    matches!(name, "forget" | "rename" | "library" | "finder" | "use_set")
+    matches!(name, "forget" | "rename" | "library" | "finder" | "use_set" | "light")
 }
 
 /* Runs a code library lookup on a blocking thread: reading and parsing a

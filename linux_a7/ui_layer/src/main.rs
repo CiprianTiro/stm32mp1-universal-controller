@@ -191,6 +191,22 @@ fn main() {
     });
     // Unlocking only comes from the card's "Unlock …?" question, so it's
     // sent as confirmed -- backend_daemon refuses an unlock without it.
+    // Issue #85: an IR light's colour chip, and its brightness -/+ (a
+    // press of one of its remote's buttons, for that card's device).
+    let tx = request_tx.clone();
+    ui.on_set_color(move |id, hex| {
+        let value = serde_json::json!({ "hex": hex.as_str() });
+        let _ = tx.send(ws_client::Request::Command { id: id.to_string(), capability: "color".into(), value });
+    });
+    let tx = request_tx.clone();
+    ui.on_device_press(move |id, button| {
+        let _ = tx.send(ws_client::Request::DeviceAction {
+            id: id.to_string(),
+            capability: "remote".into(),
+            name: "press".into(),
+            args: serde_json::json!({ "button": button.as_str() }),
+        });
+    });
     let tx = request_tx.clone();
     ui.on_set_lock(move |id, locked| {
         let value = if locked {
@@ -441,6 +457,15 @@ fn main() {
     let act = remote_action.clone();
     ui.on_ir_rename(move |button, to| {
         act("remote", "rename", serde_json::json!({ "button": button.as_str(), "to": to.trim() }))
+    });
+    // Issue #85: "Use as a light", and the strip's colour order.
+    let act = remote_action.clone();
+    ui.on_ir_set_light(move |on, order| {
+        let mut args = serde_json::json!({ "enabled": on });
+        if !order.is_empty() {
+            args["order"] = order.as_str().into();
+        }
+        act("remote", "light", args)
     });
 
     // Its code finder for a lost remote (issue #82, ir_finder.rs): the
@@ -919,6 +944,7 @@ fn main() {
                         (Ok(_), "learn") => (true, format!("Learned \u{201C}{button}\u{201D}. Tap it to try it.")),
                         (Ok(_), "forget") => (true, format!("Deleted \u{201C}{button}\u{201D}.")),
                         (Ok(_), "rename") => (true, format!("Renamed to \u{201C}{}\u{201D}.", text_of(&args["to"]))),
+                        (Ok(found), "light") => (true, light_summary(args["enabled"] == true, found)),
                         (Ok(_), _) => (true, String::new()),
                         (Err(why), _) => (false, why.clone()),
                     };
@@ -929,10 +955,12 @@ fn main() {
                     ui.set_ir_message_ok(ok);
                     ui.set_ir_message(message.into());
                 }
-                // A cover's open / close / stop (issue #77) that failed:
-                // said under the device list, like a failed command.
+                // A cover's open / close / stop (issue #77), or an IR
+                // light's brightness step from its card (#85), that
+                // failed: said under the device list, like a failed command.
                 ws_client::Update::DeviceAction { name, result: Err(message), .. }
-                    if matches!(name.as_str(), "open" | "close" | "stop") =>
+                    if matches!(name.as_str(), "open" | "close" | "stop")
+                        || (name == "press" && ui.get_page() == setup::PAGE_DEVICES) =>
                 {
                     ui.set_device_message_ok(false);
                     ui.set_device_message(message.into());
@@ -1480,6 +1508,8 @@ let labelled: Vec<IrKeyItem> =
     ui.set_ir_labelled(std::rc::Rc::new(slint::VecModel::from(labelled)).into());
         ui.set_ir_others(std::rc::Rc::new(slint::VecModel::from(others)).into());
     ui.set_ir_buttons(std::rc::Rc::new(slint::VecModel::from(buttons)).into());
+    ui.set_ir_light(device.config.get("light").is_some_and(|l| l == "on"));
+    ui.set_ir_order(device.config.get("colour_order").cloned().unwrap_or_default().into());
     ui.set_ir_status(
         match device.online.as_deref() {
             Some("offline") => "The IR blaster is offline: buttons can't be sent or taught right now. Is it plugged in and on the WiFi?",
@@ -1488,6 +1518,30 @@ let labelled: Vec<IrKeyItem> =
         }
         .into(),
     );
+}
+
+/// Issue #85: what "Use as a light" found among the buttons, in one line.
+fn light_summary(enabled: bool, found: &serde_json::Value) -> String {
+    if !enabled {
+        return "Not used as a light: its card shows only the remote.".into();
+    }
+    let mut parts = Vec::new();
+    if found["switch"] == true {
+        parts.push("on/off".to_string());
+    }
+    match found["colors"].as_u64().unwrap_or(0) {
+        0 => {}
+        1 => parts.push("1 colour".into()),
+        n => parts.push(format!("{n} colours")),
+    }
+    if found["brightness"] == true {
+        parts.push("brightness \u{2212} / +".into());
+    }
+    if parts.is_empty() {
+        "No light buttons found yet: teach or name them On, Off or Power, Red, Green, Blue, Brighter, Dimmer.".into()
+    } else {
+        format!("On its card: {}.", parts.join(", "))
+    }
 }
 
 /// What's on a TV's screen, in words: "Live TV \u{2022} 5 Pro TV",
@@ -1609,6 +1663,21 @@ fn device_item(device: &ws_client::Device, templates: &[ws_client::Template]) ->
         muted: caps.media.as_ref().is_some_and(|m| m.muted),
         input: caps.media.as_ref().map_or(String::new(), |m| m.input.clone()).into(),
         has_remote: caps.remote.is_some(),
+        remote_learns: caps.remote.as_ref().is_some_and(|r| r.learn),
+        palette: std::rc::Rc::new(slint::VecModel::from(
+            caps.color.as_ref().map_or(vec![], |c| {
+                c.palette
+                    .iter()
+                    .map(|hex| {
+                        let (color, hex) = color_of(&ws_client::Color { hex: Some(hex.clone()), kelvin: None, palette: vec![] });
+                        ColorChip { hex: hex.into(), color }
+                    })
+                    .collect()
+            }),
+        ))
+        .into(),
+        brightness_up: caps.remote.as_ref().and_then(|r| r.brightness.as_ref()).map_or(String::new(), |b| b.up.clone()).into(),
+        brightness_down: caps.remote.as_ref().and_then(|r| r.brightness.as_ref()).map_or(String::new(), |b| b.down.clone()).into(),
         now_playing: now_playing(device).into(),
         has_cover: caps.cover.is_some(),
         cover_position: caps.cover.as_ref().and_then(|c| c.position).map_or(-1, i32::from),
