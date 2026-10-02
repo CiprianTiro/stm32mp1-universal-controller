@@ -12,7 +12,10 @@
  *   time_zone  an IANA time zone name ("Europe/Bucharest"), checked against
  *              the time zone database (chrono-tz). "UTC" until chosen. The
  *              hub's CLOCK stays on UTC (logs, certificates); this setting
- *              is for what people see, and later for automations (#47).
+ *              is for what people see, and for automations (#47).
+ *   latitude, longitude  where the hub is (degrees; north and east
+ *              positive), for sunrise and sunset (automations.rs, #47).
+ *              Not set until chosen: sun triggers wait for it.
  *
  * Who may change them: the touchscreen and any paired client (the phone
  * app). They only change how things look, nothing security-relevant.
@@ -36,6 +39,11 @@ pub struct HubSettings {
     pub accent: String,
     pub density: String,
     pub time_zone: String,
+    /* Issue #47. */
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latitude: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub longitude: Option<f64>,
 }
 
 impl Default for HubSettings {
@@ -47,6 +55,8 @@ impl Default for HubSettings {
             accent: "sky".into(),
             density: "comfortable".into(),
             time_zone: "UTC".into(),
+            latitude: None,
+            longitude: None,
         }
     }
 }
@@ -58,6 +68,8 @@ pub struct Change {
     pub accent: Option<String>,
     pub density: Option<String>,
     pub time_zone: Option<String>,
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
 }
 
 pub const SETTINGS_SCHEMA: u32 = 1;
@@ -107,6 +119,14 @@ impl Settings {
             check_time_zone(&time_zone)?;
             new.time_zone = time_zone;
         }
+        if let Some(latitude) = change.latitude {
+            check_coordinate("latitude", latitude, 90.0)?;
+            new.latitude = Some(latitude);
+        }
+        if let Some(longitude) = change.longitude {
+            check_coordinate("longitude", longitude, 180.0)?;
+            new.longitude = Some(longitude);
+        }
         if new != self.get() {
             self.save_tx.send_replace(encode(&new));
             self.current.send_replace(new.clone());
@@ -134,6 +154,15 @@ fn check_accent(accent: &str) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!("bad accent {accent:?} (an id like \"sky\")"))
+    }
+}
+
+/* Degrees: -limit..=limit. */
+fn check_coordinate(what: &str, value: f64, limit: f64) -> Result<(), String> {
+    if value.is_finite() && (-limit..=limit).contains(&value) {
+        Ok(())
+    } else {
+        Err(format!("{what} must be -{limit} to {limit} degrees, got {value}"))
     }
 }
 
@@ -168,6 +197,12 @@ pub fn decode(schema: u32, payload: &[u8]) -> Result<HubSettings, String> {
     }
     if check_time_zone(&settings.time_zone).is_err() {
         settings.time_zone = defaults.time_zone;
+    }
+    if settings.latitude.is_some_and(|v| check_coordinate("latitude", v, 90.0).is_err())
+        || settings.longitude.is_some_and(|v| check_coordinate("longitude", v, 180.0).is_err())
+    {
+        settings.latitude = None;
+        settings.longitude = None;
     }
     Ok(settings)
 }

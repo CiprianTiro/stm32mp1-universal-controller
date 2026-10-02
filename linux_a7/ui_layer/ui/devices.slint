@@ -83,7 +83,7 @@ export struct DeviceItem {
 }
 
 // On/off, big enough for a finger.
-component Toggle inherits Rectangle {
+export component Toggle inherits Rectangle {
     in property <bool> on;
     callback toggled(bool);
 

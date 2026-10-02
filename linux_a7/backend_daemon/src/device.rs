@@ -1080,6 +1080,9 @@ impl Device {
                 self.id
             ));
         }
+        if self.id == shadow::SCENES_SHADOW {
+            return Err(format!("the id {:?} is reserved (the hub's scenes in the cloud)", self.id));
+        }
         check_text("name", &self.name, 1)?;
         check_text("room", &self.room, 0)?;
         check_text("template", &self.template, 0)?;

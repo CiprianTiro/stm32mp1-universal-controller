@@ -60,11 +60,14 @@ SRC_URI = " \
     file://ui/wizard.slint \
     file://ui/remote.slint \
     file://ui/ir_remote.slint \
+    file://ui/scenes.slint \
+    file://ui/automations.slint \
     file://ui/tokens.json \
     file://ui/images/welcome.png \
     file://ui/images/pointer.png \
     file://fonts/DejaVuSans.ttf \
     file://src/main.rs \
+    file://src/automation_text.rs \
     file://src/display.rs \
     file://src/ir_finder.rs \
     file://src/ir_layout.rs \

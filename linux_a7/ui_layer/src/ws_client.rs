@@ -66,6 +66,11 @@ pub enum Request {
         density: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         time_zone: Option<String>,
+        /* Issue #47: the hub's location, for sunrise/sunset. */
+        #[serde(skip_serializing_if = "Option::is_none")]
+        latitude: Option<f64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        longitude: Option<f64>,
     },
     // Adding devices (issue #40): the wizard runs in backend_daemon; this
     // screen shows its current step and sends the answers.
@@ -97,6 +102,42 @@ pub enum Request {
         name: String,
         args: serde_json::Value,
     },
+    // Scenes (issue #47, backend_daemon's automations.rs).
+    ListAutomations,
+    RunScene { id: String },
+    DeleteScene { id: String },
+    /// "Save current state": these devices as they are now.
+    CaptureScene { name: String, devices: Vec<String> },
+    // Automations (issue #47): kept as JSON here (automation_text.rs
+    // reads and writes the few parts this screen needs).
+    SaveAutomation { automation: serde_json::Value },
+    DeleteAutomation { id: String },
+    SetAutomationEnabled { id: String, enabled: bool },
+    RunAutomation { id: String },
+    GetAutomationLog,
+}
+
+/// One line of the automation log (backend_daemon's LogEntry).
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct LogEntry {
+    pub at: u64,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub cause: String,
+    #[serde(default)]
+    pub ok: bool,
+    #[serde(default)]
+    pub detail: String,
+}
+
+/// A scene (issue #47). Its steps are only counted here.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct Scene {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub steps: Vec<serde_json::Value>,
 }
 
 /// The hub's settings (issue #39), as backend_daemon's settings.rs sends
@@ -109,6 +150,9 @@ pub struct HubSettings {
     pub accent: String,
     pub density: String,
     pub time_zone: String,
+    /* Issue #47: where the hub is (sunrise/sunset); None = not set. */
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
 }
 
 impl Default for HubSettings {
@@ -118,6 +162,8 @@ impl Default for HubSettings {
             accent: "sky".into(),
             density: "comfortable".into(),
             time_zone: "UTC".into(),
+            latitude: None,
+            longitude: None,
         }
     }
 }
@@ -426,6 +472,17 @@ enum ServerMessage {
     Pairing(Pairing),
     Clients { clients: Vec<Client> },
     Settings(HubSettings),
+    /* Issue #47: the scenes (automations: stage 3). */
+    Automations {
+        #[serde(default)]
+        scenes: Vec<Scene>,
+        #[serde(default)]
+        automations: Vec<serde_json::Value>,
+    },
+    AutomationLog {
+        #[serde(default)]
+        entries: Vec<LogEntry>,
+    },
     Ack,
     Error { message: String },
     // Events (pushed after Subscribe).
@@ -434,6 +491,8 @@ enum ServerMessage {
     EventsLost,
     SettingsChanged(HubSettings),
     FoundChanged,
+    AutomationsChanged,
+    AutomationRan { entry: LogEntry },
     #[serde(other)]
     Unknown,
 }
@@ -481,6 +540,24 @@ pub enum Update {
     /// An action's answer (issue #44): `name` is the action ("apps",
     /// "press"...), the result its data (a list) or why it failed.
     DeviceAction { name: String, args: serde_json::Value, result: Result<serde_json::Value, String> },
+    /// Issue #47: the scenes and automations (after connecting, and
+    /// whenever they change).
+    Scenes(Vec<Scene>, Vec<serde_json::Value>),
+    /// A scene ran (or failed), as asked from this screen.
+    SceneRan { id: String, result: Result<(), String> },
+    /// "Save current state" worked: the lists, the new scene included.
+    SceneSaved(Vec<Scene>, Vec<serde_json::Value>),
+    /// The editor's automation was saved: the lists, it included.
+    AutomationSaved(Vec<Scene>, Vec<serde_json::Value>),
+    /// Saving, deleting or switching an automation was refused.
+    AutomationsFailed(String),
+    /// "Run now" done (or failed).
+    AutomationRanNow { id: String, result: Result<(), String> },
+    /// The whole log (after connecting), and each new entry.
+    Log(Vec<LogEntry>),
+    LogEntry(LogEntry),
+    /// Saving or deleting a scene was refused.
+    ScenesFailed(String),
 }
 
 const BACKEND_URL: &str = "ws://127.0.0.1:8080/ws";
@@ -555,6 +632,8 @@ fn serve(socket: &mut Socket, request_rx: &mpsc::Receiver<Request>, update_tx: &
         Request::ListDevices,
         Request::ListTemplates,
         Request::ListFound,
+        Request::ListAutomations,
+        Request::GetAutomationLog,
     ]);
     let mut next_network = Instant::now();
 
@@ -616,6 +695,12 @@ fn serve(socket: &mut Socket, request_rx: &mpsc::Receiver<Request>, update_tx: &
                 outbox.push_back(Request::ListFound);
                 None
             }
+            /* Scenes changed (here, on a phone): fetch them (issue #47). */
+            ServerMessage::AutomationsChanged => {
+                outbox.push_back(Request::ListAutomations);
+                None
+            }
+            ServerMessage::AutomationRan { entry } => Some(Update::LogEntry(entry)),
             ServerMessage::EventsLost => {
                 // Missed some changes: start over from the full list.
                 outbox.push_back(Request::ListDevices);
@@ -678,6 +763,30 @@ fn to_update(request: &Request, reply: ServerMessage) -> Option<Update> {
         }
         (Request::DeviceAction { name, args, .. }, ServerMessage::Error { message }) => {
             Some(Update::DeviceAction { name: name.clone(), args: args.clone(), result: Err(message) })
+        }
+        // Scenes (issue #47).
+        (Request::CaptureScene { .. }, ServerMessage::Automations { scenes, automations }) => {
+            Some(Update::SceneSaved(scenes, automations))
+        }
+        (Request::SaveAutomation { .. }, ServerMessage::Automations { scenes, automations }) => {
+            Some(Update::AutomationSaved(scenes, automations))
+        }
+        (_, ServerMessage::Automations { scenes, automations }) => Some(Update::Scenes(scenes, automations)),
+        (_, ServerMessage::AutomationLog { entries }) => Some(Update::Log(entries)),
+        (Request::RunAutomation { id }, ServerMessage::Ack) => Some(Update::AutomationRanNow { id: id.clone(), result: Ok(()) }),
+        (Request::RunAutomation { id }, ServerMessage::Error { message }) => {
+            Some(Update::AutomationRanNow { id: id.clone(), result: Err(message) })
+        }
+        (
+            Request::SaveAutomation { .. } | Request::DeleteAutomation { .. } | Request::SetAutomationEnabled { .. },
+            ServerMessage::Error { message },
+        ) => Some(Update::AutomationsFailed(message)),
+        (Request::RunScene { id }, ServerMessage::Ack) => Some(Update::SceneRan { id: id.clone(), result: Ok(()) }),
+        (Request::RunScene { id }, ServerMessage::Error { message }) => {
+            Some(Update::SceneRan { id: id.clone(), result: Err(message) })
+        }
+        (Request::CaptureScene { .. } | Request::DeleteScene { .. }, ServerMessage::Error { message }) => {
+            Some(Update::ScenesFailed(message))
         }
         (Request::RemoveDevice { .. }, ServerMessage::Ack) => Some(Update::Removed(Ok(()))),
         (Request::RemoveDevice { .. }, ServerMessage::Error { message }) => Some(Update::Removed(Err(message))),

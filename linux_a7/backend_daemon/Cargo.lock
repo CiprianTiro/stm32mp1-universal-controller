@@ -130,6 +130,7 @@ dependencies = [
  "base64 0.22.1",
  "bluer",
  "bytes",
+ "chrono",
  "chrono-tz",
  "dbus",
  "futures-util",

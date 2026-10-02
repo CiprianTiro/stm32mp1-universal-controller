@@ -74,6 +74,21 @@ pub fn local_time(time_zone: &str) -> (u32, String) {
     (now.hour(), now.format("%H:%M").to_string())
 }
 
+/// A moment (Unix seconds) as the hub's clock showed it: "13:36:00" today,
+/// "Mon 13:36" on another day (the automation log, issue #47).
+pub fn local_moment(time_zone: &str, unix: u64) -> String {
+    let tz: Tz = time_zone.parse().unwrap_or(Tz::UTC);
+    let Some(at) = chrono::DateTime::from_timestamp(unix as i64, 0) else {
+        return String::new();
+    };
+    let at = at.with_timezone(&tz);
+    if at.date_naive() == Utc::now().with_timezone(&tz).date_naive() {
+        at.format("%H:%M:%S").to_string()
+    } else {
+        at.format("%a %H:%M").to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -8,6 +8,7 @@ use tokio::time::interval;
  * either file executes until something below explicitly spawns it. */
 mod adapters;
 mod auth;
+mod automations;
 mod ble;
 mod control;
 mod device;
@@ -169,16 +170,6 @@ async fn main() {
     let registry = adapters.clone();
     tokio::spawn(async move { registry.start_all(&starting).await });
 
-    /* Cloud sync (mqtt.rs). local_clients: how many WebSocket clients are
-     * connected right now -- ws.rs counts, health.rs (inside mqtt.rs)
-     * reports it; one shared number, hence Arc (shared ownership) +
-     * AtomicUsize (lock-free). The uplink watch (issue #61): network.rs
-     * keeps it up to date with the link carrying traffic, and mqtt.rs
-     * reconnects when it changes. */
-    let local_clients = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let (uplink_tx, uplink_rx) = tokio::sync::watch::channel(None);
-    tokio::spawn(network::watch_uplink(uplink_tx));
-    tokio::spawn(mqtt::run(control.clone(), state_changed_rx, uplink_rx, local_clients.clone()));
 
     /* The network actor (issue #61): Ethernet/WiFi status, WiFi scan,
      * connect, forget, country. Only ws.rs talks to it. */
@@ -203,6 +194,30 @@ async fn main() {
         hub_settings,
         store::writer(settings_store, settings::SETTINGS_SCHEMA),
     ));
+
+    /* Scenes and automations (issue #47, automations.rs), saved as
+     * automations.json; the engine follows every device change and wakes
+     * every minute for time and sun triggers. */
+    let automations_store = store::Store::new(&store::data_dir(), "automations.json");
+    let book = automations_store.load_or_default("scenes and automations", automations::decode);
+    let automations = std::sync::Arc::new(automations::Automations::new(
+        book,
+        store::writer(automations_store, automations::AUTOMATIONS_SCHEMA),
+        control.clone(),
+        settings.clone(),
+    ));
+    tokio::spawn(automations::run(automations.clone(), events_tx.subscribe()));
+
+    /* Cloud sync (mqtt.rs). local_clients: how many WebSocket clients are
+     * connected right now -- ws.rs counts, health.rs (inside mqtt.rs)
+     * reports it; one shared number, hence Arc (shared ownership) +
+     * AtomicUsize (lock-free). The uplink watch (issue #61): network.rs
+     * keeps it up to date with the link carrying traffic, and mqtt.rs
+     * reconnects when it changes. */
+    let local_clients = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (uplink_tx, uplink_rx) = tokio::sync::watch::channel(None);
+    tokio::spawn(network::watch_uplink(uplink_tx));
+    tokio::spawn(mqtt::run(control.clone(), state_changed_rx, uplink_rx, local_clients.clone(), automations.clone()));
 
     let clients_store = store::Store::new(&store::data_dir(), "clients.json");
     let clients = clients_store.load_or_default("paired clients", auth::decode_clients);
@@ -242,6 +257,7 @@ async fn main() {
         settings,
         discovery,
         templates,
+        automations,
     ));
 
     /* SIGTERM is what systemd sends on stop/restart; SIGINT covers Ctrl-C

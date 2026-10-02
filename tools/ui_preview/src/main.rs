@@ -34,6 +34,11 @@ mod zones;
 // The IR remote's layout (issue #82), as the hub's UI makes it.
 #[path = "../../../linux_a7/ui_layer/src/ir_layout.rs"]
 mod ir_layout;
+// Automations in words, and the simple editor's JSON (issue #47): its
+// unit tests run here (`cargo test`).
+#[path = "../../../linux_a7/ui_layer/src/automation_text.rs"]
+#[allow(dead_code)]
+mod automation_text;
 
 thread_local! {
     /// The sample devices, kept to split them into rows for each size.
@@ -52,7 +57,7 @@ fn set_size_and_rows(ui: &AppWindow, window: &MinimalSoftwareWindow, width: u32,
 
 /// The pages worth looking at, with the number app.slint uses for each.
 /// None: the welcome screen (shown until the backend first answers).
-const PAGES: [(&str, Option<i32>); 12] = [
+const PAGES: [(&str, Option<i32>); 18] = [
     ("welcome", None),
     ("devices", Some(0)),
     ("network", Some(1)),
@@ -65,6 +70,15 @@ const PAGES: [(&str, Option<i32>); 12] = [
     ("timezone", Some(8)),
     ("add-device", Some(9)),
     ("device", Some(11)),
+    // Issue #47: the scenes, and "Save current state" (its first view).
+    ("scenes", Some(14)),
+    ("new-scene", Some(15)),
+    // Automations: the list, the log, the editor (its first view), the
+    // location.
+    ("automations", Some(16)),
+    ("log", Some(17)),
+    ("new-automation", Some(18)),
+    ("location", Some(19)),
 ];
 
 /// The wizard page (10) in each kind of step (issue #40): the step's
@@ -441,6 +455,39 @@ fn fill_sample_data(ui: &AppWindow, appearance: &theme::Appearance) {
                      ..device("ac", "Bedroom AC", "Bedroom") },
         DeviceItem { has_lock: true, lock_state: "locked".into(), ..device("door", "Front door", "Hall") },
     ];
+    // Issue #47: scenes (the first two are the Devices page's quick ones on
+    // the touchscreen), and the devices "Save current state" offers.
+    let scene = |id: &str, name: &str, detail: &str| SceneItem { id: id.into(), name: name.into(), detail: detail.into() };
+    let scenes = vec![scene("cozy", "Cozy", "1 device"), scene("movie", "Movie night", "3 devices"), scene("all-off", "All off", "6 devices")];
+    ui.set_quick_scenes(Rc::new(VecModel::from(scenes[..2].to_vec())).into());
+    ui.set_scenes(Rc::new(VecModel::from(scenes)).into());
+    ui.set_scenes_message("Cozy: done".into());
+    let pick = |id: &str, name: &str, detail: &str, selected| PickItem { id: id.into(), name: name.into(), detail: detail.into(), selected };
+    ui.set_pick_devices(Rc::new(VecModel::from(vec![
+        pick("bulb", "Hall bulb", "On, 42 %, #00FF88", true),
+        pick("tv", "Living room TV", "On, volume 12", true),
+        pick("lamp-1", "Desk lamp", "Off", false),
+        pick("blind", "Living room blind", "40 % open", false),
+    ])).into());
+    ui.set_pick_count(2);
+    let automation = |id: &str, name: &str, summary: &str, enabled| AutomationItem { id: id.into(), name: name.into(), summary: summary.into(), enabled };
+    ui.set_automations(Rc::new(VecModel::from(vec![
+        automation("cozy-at-sunset", "Cozy at sunset", "15 min before sunset \u{2192} Cozy", true),
+        automation("weekday-morning", "Weekday mornings", "At 07:00, Mon\u{2013}Fri \u{2192} Bright", true),
+        automation("tv-on", "Movie when the TV turns on", "When Living room TV turns on \u{2192} Movie night (if 1 condition)", false),
+    ])).into());
+    ui.set_automations_message("Saved \u{201C}Cozy at sunset\u{201D}.".into());
+    let entry = |time: &str, name: &str, cause: &str, ok, detail: &str| LogItem { time: time.into(), name: name.into(), cause: cause.into(), ok, detail: detail.into() };
+    ui.set_log_entries(Rc::new(VecModel::from(vec![
+        entry("13:41:00", "Timer test", "13:41", true, ""),
+        entry("13:39:04", "Plug on bulb on", "Shelly plug: switch.on is true", true, ""),
+        entry("13:38:38", "Cozy", "touchscreen", true, ""),
+        entry("Thu 22:15", "All off", "at 22:15", false, "led-strip: 192.168.1.139 isn't answering (no reply within 5 s)"),
+    ])).into());
+    ui.set_editor_scenes(Rc::new(VecModel::from(vec![scene("cozy", "Cozy", ""), scene("movie", "Movie night", "")])).into());
+    ui.set_has_location(true);
+    ui.set_location_current("44.43, 26.10".into());
+    ui.set_location_text("44.43, 26.10".into());
     // Split into rows the way main.rs's DeviceRows does, for the column
     // count app.slint computes -- which depends on the window size, so the
     // rows are made again for every size (see set_size_and_rows).
