@@ -735,6 +735,17 @@ fn main() {
     let ui_weak = ui.as_weak();
     let settings = hub_settings.clone();
     let poll_timer = slint::Timer::default();
+    // Issue #72: "seen 3 min ago" ages by itself: the cards are made again
+    // every 30 s (only the ones that changed are redrawn).
+    let rows_for_ages = rows.clone();
+    let ages_timer = slint::Timer::default();
+    ages_timer.start(slint::TimerMode::Repeated, std::time::Duration::from_secs(30), move || {
+        if let Ok(mut rows) = rows_for_ages.try_borrow_mut() {
+            if rows.devices.values().any(|d| d.last_seen.is_some()) {
+                rows.refresh();
+            }
+        }
+    });
     poll_timer.start(slint::TimerMode::Repeated, POLL, move || {
         let ui = ui_weak.unwrap();
 
@@ -1511,6 +1522,20 @@ fn text_of(value: &serde_json::Value) -> String {
 
 /// A device's reachability (issue #40) as the card and details page say
 /// it: "" when all is well (or not known).
+/// "just now", "3 min ago", "2 h ago", "3 days ago" (a battery device's
+/// last report, issue #72).
+fn seen_ago(at: u64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    match now.saturating_sub(at) {
+        0..=59 => "just now".into(),
+        s @ 60..=3599 => format!("{} min ago", s / 60),
+        s @ 3600..=86399 => format!("{} h ago", s / 3600),
+        s => format!("{} days ago", s / 86400),
+    }
+}
+
 fn status_text(device: &ws_client::Device) -> &'static str {
     match device.online.as_deref() {
         Some("offline") => "Offline",
@@ -1561,7 +1586,13 @@ fn device_item(device: &ws_client::Device, templates: &[ws_client::Template]) ->
     DeviceItem {
         id: device.id.clone().into(),
         name: device.name.clone().into(),
-        room: device.room.clone().into(),
+        // Issue #72: a battery device says when it last reported.
+        room: match device.last_seen {
+            Some(at) if device.room.is_empty() => format!("seen {}", seen_ago(at)),
+            Some(at) => format!("{} \u{2022} seen {}", device.room, seen_ago(at)),
+            None => device.room.clone(),
+        }
+        .into(),
         has_switch: caps.switch.is_some(),
         on: caps.switch.as_ref().is_some_and(|s| s.on),
         has_dimmer: caps.dimmer.is_some(),

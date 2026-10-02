@@ -160,6 +160,9 @@ enum Sync {
     /* Issue #47: a scene asked for by the cloud ran -- report the scenes
      * and clear the request. */
     SceneDone,
+    /* Issue #72: what the cloud has for this device (its get/accepted at
+     * connect): keys the hub no longer reports are deleted there. */
+    CloudReported(DeviceId, Value),
 }
 
 /* `control` reads the devices and carries out cloud commands (control.rs);
@@ -222,7 +225,10 @@ pub async fn run(
     let known_shadows = shadow_list.load_or_default("cloud shadow list", shadow::decode_names);
     let shadows_tx = store::writer(shadow_list, shadow::SHADOWS_SCHEMA);
 
-    let (sync_tx, sync_rx) = mpsc::channel(32);
+    /* Room for a whole reconnect's worth of messages: a get/accepted per
+     * device (each one a CloudReported, issue #72) arrives in a burst, and
+     * this loop can't wait for room (see below) -- a full queue drops. */
+    let (sync_tx, sync_rx) = mpsc::channel(256);
     tokio::spawn(reporting_task(
         client.clone(),
         reporter,
@@ -335,7 +341,14 @@ pub async fn run(
 async fn handle_event(id: DeviceId, event: shadow::Event, payload: &[u8], control: &Control, sync_tx: &mpsc::Sender<Sync>) {
     let desired = match event {
         shadow::Event::Delta => shadow::parse_delta(payload).map(Some),
-        shadow::Event::GetAccepted => shadow::parse_get_accepted(payload),
+        shadow::Event::GetAccepted => {
+            if let Some(reported) = shadow::parse_get_reported(payload) {
+                if sync_tx.try_send(Sync::CloudReported(id.clone(), reported)).is_err() {
+                    println!("mqtt: reporting task busy, stale keys of {id} not checked this time");
+                }
+            }
+            shadow::parse_get_accepted(payload)
+        }
         shadow::Event::DeleteAccepted => {
             /* The reporting task does the removal itself (see
              * Sync::ShadowDeleted) -- that way no publish can slip in
@@ -555,6 +568,18 @@ async fn reporting_task(
                     publisher.send(&topics.device_update(shadow::SCENES_SHADOW), scenes_report(true)).await;
                     continue;
                 }
+                Sync::CloudReported(id, in_cloud) => {
+                    let Some(devices) = reporter.devices().await else { break };
+                    if let Some(report) = devices.get(&id) {
+                        let gone = shadow::deletions(&in_cloud, report);
+                        if !gone.is_null() {
+                            println!("mqtt: {id}: removing stale keys from its shadow");
+                            let document = serde_json::json!({ "state": { "reported": gone } });
+                            publisher.send(&topics.device_update(&id), document.to_string().into_bytes()).await;
+                        }
+                    }
+                    continue;
+                }
                 Sync::SceneDone => {
                     publisher.send(&topics.device_update(shadow::SCENES_SHADOW), scenes_report(true)).await;
                     continue;
@@ -640,8 +665,12 @@ async fn sync_devices(
     for id in changes.updated {
         let report = &current[&id];
         let clear = command_done == Some(&id);
+        /* Keys the last report had and this one lacks: deleted in the
+         * cloud too (shadow::deletions, issue #72). */
+        let gone = published.get(&id).map_or(Value::Null, |old| shadow::deletions(old, report));
+        let document = shadow::with_deletions(report, &gone);
         if publisher
-            .send(&topics.device_update(&id), shadow::device_report(report, clear, first))
+            .send(&topics.device_update(&id), shadow::device_report(&document, clear, first))
             .await
         {
             published.insert(id, report.clone());

@@ -1,0 +1,49 @@
+# The hub's local MQTT broker (issue #72, mosquitto_%.bbappend).
+[Unit]
+Description=Local MQTT broker for the hub's devices
+Documentation=man:mosquitto(8)
+# Its files are on userfs, written by backend-daemon (at its start).
+Wants=usr-local.mount
+After=network.target usr-local.mount backend-daemon.service
+
+[Service]
+Type=notify
+NotifyAccess=main
+User=mosquitto
+Group=mosquitto
+ExecStart=/usr/sbin/mosquitto -c /etc/mosquitto/mosquitto.conf
+# backend-daemon changed who may log in (through hub-helper).
+ExecReload=/bin/kill -HUP $MAINPID
+# Until backend-daemon has written the files (first boot), starting fails:
+# try again.
+Restart=on-failure
+RestartSec=5
+
+# --- Sandbox (the same ideas as backend-daemon's, issue #37) ----------
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+ProtectClock=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

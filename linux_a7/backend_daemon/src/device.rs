@@ -74,6 +74,13 @@ pub struct Device {
      * and never taken from a client or a file (skip_deserializing). */
     #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
     pub online: Option<Health>,
+    /* Issue #72: when the hub last heard from it (Unix seconds) -- kept for
+     * BATTERY devices (template "power": "battery"), which sleep between
+     * reports: a screen shows "seen 3 min ago" instead of "offline". Like
+     * `online`: this run of the hub only, never saved, never taken from a
+     * client, and not in the cloud shadow (it would change every report). */
+    #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
+    pub last_seen: Option<u64>,
     pub capabilities: Capabilities,
 }
 
@@ -1153,6 +1160,7 @@ pub fn migrate_v1(id: &str, properties: &HashMap<String, serde_json::Value>) -> 
         config: Default::default(),
         identity: String::new(),
         online: None,
+        last_seen: None,
         capabilities: caps,
     };
     device.check().map_err(|e| format!("{id}: {e} (had: {})", dropped.join(", ")))?;
@@ -1352,6 +1360,7 @@ mod tests {
             config: Default::default(),
             identity: String::new(),
             online: None,
+            last_seen: None,
             capabilities: Capabilities {
                 switch: Some(Switch { on: true }),
                 dimmer: Some(Dimmer { level: 80 }),

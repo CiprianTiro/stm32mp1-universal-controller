@@ -87,7 +87,7 @@ impl Adapter for Wled {
             hub,
         };
         tokio::spawn(task.run(commands_rx));
-        DeviceHandle { commands }
+        DeviceHandle::new(commands)
     }
 
     fn probe<'a>(&'a self, values: &'a SetupValues) -> BoxFuture<'a, Result<Probe, SetupError>> {
@@ -599,6 +599,7 @@ mod tests {
             config: [("host".to_string(), host.to_string())].into(),
             identity: String::new(),
             online: None,
+            last_seen: None,
             capabilities: Capabilities {
                 switch: Some(Switch { on: false }),
                 dimmer: Some(Dimmer { level: 100 }),

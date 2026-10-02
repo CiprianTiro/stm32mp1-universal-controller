@@ -112,6 +112,10 @@ pub struct Template {
      * instead of programmed -- see HttpSpec. */
     #[serde(default)]
     pub http: Option<HttpSpec>,
+    /* For adapter "mqtt" only (issue #72): the device's MQTT topics,
+     * described instead of programmed -- see MqttSpec. */
+    #[serde(default)]
+    pub mqtt: Option<MqttSpec>,
 }
 
 /* One value setup collects. */
@@ -254,6 +258,10 @@ pub enum Discovery {
     DeviceAnnounce {
         #[serde(default)]
         fill: BTreeMap<String, String>,
+        /* Issue #72: e.g. {"client_kind": "DVES"} -- a Tasmota knocking on
+         * the hub's MQTT broker without a login yet. */
+        #[serde(default, rename = "match")]
+        matches: BTreeMap<String, String>,
     },
     /* (later, #74): the devices of a vendor account. */
     CloudList {
@@ -275,7 +283,7 @@ impl Discovery {
             | Discovery::WsDiscovery { fill }
             | Discovery::NetworkScan { fill, .. }
             | Discovery::PortProbe { fill, .. }
-            | Discovery::DeviceAnnounce { fill }
+            | Discovery::DeviceAnnounce { fill, .. }
             | Discovery::CloudList { fill } => fill,
         }
     }
@@ -289,7 +297,8 @@ impl Discovery {
             Discovery::Mdns { matches, .. }
             | Discovery::Ssdp { matches, .. }
             | Discovery::UdpBroadcast { matches, .. }
-            | Discovery::UdpMulticast { matches, .. } => matches,
+            | Discovery::UdpMulticast { matches, .. }
+            | Discovery::DeviceAnnounce { matches, .. } => matches,
             _ => &NO_MATCH,
         }
     }
@@ -427,7 +436,7 @@ const ENERGY_FIELDS: [&str; 4] = ["power_w", "energy_kwh", "voltage_v", "current
 fn command_placeholders(capability: &str) -> Option<&'static [&'static str]> {
     match capability {
         "switch" => Some(&["on"]),
-        "dimmer" => Some(&["level"]),
+        "dimmer" => Some(&["level", "level255"]),
         "color" => Some(&["hex", "r", "g", "b"]),
         _ => None,
     }
@@ -455,30 +464,7 @@ impl HttpSpec {
                 return Err(format!("http.state {:?} reads nothing", request.path));
             }
             for (target, value) in &request.read {
-                let Some((capability, field)) = target.split_once('.') else {
-                    return Err(format!("http.state reads {target:?}: write <capability>.<field>"));
-                };
-                if !template.capabilities.iter().any(|c| c == capability) {
-                    return Err(format!("http.state reads {target:?}, but the template has no capability {capability:?}"));
-                }
-                let ok = match capability {
-                    "switch" => field == "on",
-                    "dimmer" => field == "level",
-                    "color" => field == "hex",
-                    "sensor" => valid_id_underscore(field),
-                    "energy" => ENERGY_FIELDS.contains(&field),
-                    _ => false,
-                };
-                if !ok {
-                    return Err(format!("http.state reads {target:?}: the http adapter doesn't know that field"));
-                }
-                if value.path().is_empty() {
-                    return Err(format!("http.state reads {target:?} from an empty path"));
-                }
-                if matches!(value, HttpValue::Full { scale: Some(s), .. } if !s.is_finite() || *s == 0.0) {
-                    return Err(format!("http.state reads {target:?}: scale must be a non-zero number"));
-                }
-                read.insert(capability);
+                read.insert(check_read(template, target, value, "http")?);
             }
         }
         for capability in &template.capabilities {
@@ -520,6 +506,205 @@ impl HttpSpec {
         }
         Ok(())
     }
+}
+
+/* ------------------------------------------------------------------ */
+/* The generic MQTT adapter's description (issue #72)                  */
+/* ------------------------------------------------------------------ */
+
+/* A device that talks to the hub's own MQTT broker (broker.rs): Tasmota,
+ * WLED's MQTT mode, ESPHome. Like the http block, the template says which
+ * topics carry its state and how it's commanded; adapters/mqtt_generic.rs
+ * carries it out. Example (Tasmota):
+ *   "mqtt": {
+ *     "user": "tasmota-{topic}",
+ *     "acl": [ { "access": "write", "topic": "stat/{topic}/#" },
+ *              { "access": "write", "topic": "tele/{topic}/#" },
+ *              { "access": "read",  "topic": "cmnd/{topic}/#" } ],
+ *     "online": { "topic": "tele/{topic}/LWT", "online": "Online", "offline": "Offline" },
+ *     "state": [ { "topic": "stat/{topic}/RESULT", "read": { "switch.on": "POWER" } } ],
+ *     "commands": { "switch": { "topic": "cmnd/{topic}/POWER", "payload": "{on}", "bool": ["OFF", "ON"] } },
+ *     "refresh": { "topic": "cmnd/{topic}/STATE", "payload": "" }
+ *   }
+ * {placeholders} in topics are the device's settings (inputs: "topic").
+ * A read's path "$" is the whole payload (Tasmota's stat/x/POWER is just
+ * "ON"); any other path is into the payload's JSON. */
+#[derive(Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct MqttSpec {
+    /* The device's login name on the broker, e.g. "tasmota-{topic}" --
+     * lower-cased, and anything but a-z 0-9 - _ becomes "-". */
+    pub user: String,
+    /* Which topics its login may use (and nothing else). */
+    pub acl: Vec<MqttRule>,
+    /* Its "last will": online/offline as the broker knows it. */
+    #[serde(default)]
+    pub online: Option<MqttOnline>,
+    pub state: Vec<MqttRead>,
+    #[serde(default)]
+    pub commands: BTreeMap<String, MqttCommand>,
+    /* Sent when the hub starts following it: "tell me your state". */
+    #[serde(default)]
+    pub refresh: Option<MqttMessage>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct MqttRule {
+    pub access: crate::broker::Access,
+    pub topic: String,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct MqttOnline {
+    pub topic: String,
+    pub online: String,
+    pub offline: String,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct MqttRead {
+    pub topic: String,
+    pub read: BTreeMap<String, HttpValue>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct MqttCommand {
+    pub topic: String,
+    /* Text with the command's placeholders ({on}, {level}, {hex}...). */
+    pub payload: String,
+    #[serde(default)]
+    pub bool: Option<[String; 2]>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct MqttMessage {
+    pub topic: String,
+    #[serde(default)]
+    pub payload: String,
+}
+
+/* The adapter that runs "mqtt" blocks. */
+pub const GENERIC_MQTT_ADAPTER: &str = "mqtt";
+
+impl MqttSpec {
+    fn check(&self, template: &Template) -> Result<(), String> {
+        let config_names: HashSet<&str> = template
+            .inputs
+            .iter()
+            .map(|i| i.id.as_str())
+            .chain(template.adapter_config.keys().map(String::as_str))
+            .collect();
+        /* A topic: placeholders known, and valid once they're filled in. */
+        let topic = |text: &str, what: &str| -> Result<(), String> {
+            check_names(text, &config_names, &[]).map_err(|e| format!("mqtt.{what}: {e}"))?;
+            let sample: String = {
+                let mut out = String::new();
+                let mut rest = text;
+                while let Some(open) = rest.find('{') {
+                    out.push_str(&rest[..open]);
+                    out.push('x');
+                    rest = rest[open..].split_once('}').map_or("", |(_, r)| r);
+                }
+                out + rest
+            };
+            if crate::broker::valid_topic(&sample) {
+                Ok(())
+            } else {
+                Err(format!("mqtt.{what}: {text:?} isn't a valid MQTT topic"))
+            }
+        };
+        check_names(&self.user, &config_names, &[]).map_err(|e| format!("mqtt.user: {e}"))?;
+        if self.acl.is_empty() {
+            return Err("mqtt.acl: the device's login needs at least one topic".into());
+        }
+        for rule in &self.acl {
+            topic(&rule.topic, "acl")?;
+        }
+        if let Some(online) = &self.online {
+            topic(&online.topic, "online")?;
+            if online.online.is_empty() || online.online == online.offline {
+                return Err("mqtt.online: two different payloads for online and offline".into());
+            }
+        }
+        if self.state.is_empty() {
+            return Err("mqtt.state: at least one topic carries the state".into());
+        }
+        let mut read = HashSet::new();
+        for message in &self.state {
+            topic(&message.topic, "state")?;
+            if message.read.is_empty() {
+                return Err(format!("mqtt.state {:?} reads nothing", message.topic));
+            }
+            for (target, value) in &message.read {
+                read.insert(check_read(template, target, value, "mqtt")?);
+            }
+        }
+        for capability in &template.capabilities {
+            let settable = command_placeholders(capability).is_some();
+            if !settable && !matches!(capability.as_str(), "sensor" | "energy") {
+                return Err(format!("the mqtt adapter can't run capability {capability:?}"));
+            }
+            if !read.contains(capability.as_str()) {
+                return Err(format!("mqtt.state never reads capability {capability:?}"));
+            }
+            if settable && !self.commands.contains_key(capability) {
+                return Err(format!("mqtt.commands has no message for {capability:?}"));
+            }
+        }
+        for (capability, command) in &self.commands {
+            let Some(allowed) = command_placeholders(capability) else {
+                return Err(format!("mqtt.commands {capability:?}: only switch, dimmer and color are set by commands"));
+            };
+            if !template.capabilities.contains(capability) {
+                return Err(format!("mqtt.commands {capability:?}: the template has no such capability"));
+            }
+            topic(&command.topic, "commands")?;
+            check_names(&command.payload, &config_names, allowed).map_err(|e| format!("mqtt.commands {capability:?}: {e}"))?;
+            if command.bool.is_some() && capability != "switch" {
+                return Err(format!("mqtt.commands {capability:?}: \"bool\" only goes with switch"));
+            }
+        }
+        if let Some(refresh) = &self.refresh {
+            topic(&refresh.topic, "refresh")?;
+            check_names(&refresh.payload, &config_names, &[]).map_err(|e| format!("mqtt.refresh: {e}"))?;
+        }
+        Ok(())
+    }
+}
+
+/* One "<capability>.<field>" a state read fills (http and mqtt blocks):
+ * a capability the template has, a field the generic adapters know.
+ * Returns the capability. */
+fn check_read<'t>(template: &Template, target: &'t str, value: &HttpValue, block: &str) -> Result<&'t str, String> {
+    let Some((capability, field)) = target.split_once('.') else {
+        return Err(format!("{block}.state reads {target:?}: write <capability>.<field>"));
+    };
+    if !template.capabilities.iter().any(|c| c == capability) {
+        return Err(format!("{block}.state reads {target:?}, but the template has no capability {capability:?}"));
+    }
+    let ok = match capability {
+        "switch" => field == "on",
+        "dimmer" => field == "level",
+        "color" => field == "hex",
+        "sensor" => valid_id_underscore(field),
+        "energy" => ENERGY_FIELDS.contains(&field),
+        _ => false,
+    };
+    if !ok {
+        return Err(format!("{block}.state reads {target:?}: the {block} adapter doesn't know that field"));
+    }
+    if value.path().is_empty() {
+        return Err(format!("{block}.state reads {target:?} from an empty path"));
+    }
+    if matches!(value, HttpValue::Full { scale: Some(s), .. } if !s.is_finite() || *s == 0.0) {
+        return Err(format!("{block}.state reads {target:?}: scale must be a non-zero number"));
+    }
+    Ok(capability)
 }
 
 /* A request path: starts with "/", and its placeholders are config values
@@ -801,6 +986,12 @@ impl Template {
             (Some(_), false) => return Err(format!("an \"http\" block goes with adapter {GENERIC_HTTP_ADAPTER:?} only")),
             (None, false) => {}
         }
+        match (&self.mqtt, self.adapter == GENERIC_MQTT_ADAPTER) {
+            (Some(mqtt), true) => mqtt.check(self)?,
+            (None, true) => return Err(format!("adapter {GENERIC_MQTT_ADAPTER:?} needs an \"mqtt\" block")),
+            (Some(_), false) => return Err(format!("an \"mqtt\" block goes with adapter {GENERIC_MQTT_ADAPTER:?} only")),
+            (None, false) => {}
+        }
 
         check_placeholders(&self.identity).map_err(|e| format!("identity: {e}"))?;
         for action in &self.reauth {
@@ -996,7 +1187,7 @@ mod tests {
     /* The hub's own list: a template using a new capability is checked
      * against what device.rs really has. */
     const ALL_CAPS: [&str; crate::device::CAPABILITY_NAMES.len()] = crate::device::CAPABILITY_NAMES;
-    const ADAPTERS: [&str; 6] = ["m4-led", "wled", "lg-webos", "ir-blaster", "wiz", "http"];
+    const ADAPTERS: [&str; 7] = ["m4-led", "wled", "lg-webos", "ir-blaster", "wiz", "http", "mqtt"];
 
     fn known() -> Known<'static> {
         Known {

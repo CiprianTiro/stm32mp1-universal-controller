@@ -8,6 +8,9 @@
  *
  * The test drives it: change_from_outside() plays "someone used the WiZ
  * app", lose_every_other() a bad WiFi, stop() "switched off at the wall".
+ * Issue #72: after a "registration", a change from outside is also PUSHED
+ * (syncPilot) to the address push_to() names -- like a real light pushes
+ * to the hub's port 38900.
  */
 use serde_json::{json, Value};
 use std::net::SocketAddr;
@@ -24,6 +27,9 @@ pub struct Sim {
 
 struct Shared {
     pilot: Mutex<Value>,
+    /* Where pushes go once registered (push_to), and whether it was. */
+    push_to: Mutex<Option<SocketAddr>>,
+    registered: AtomicBool,
     lossy: AtomicBool,
     received: AtomicU64,
 }
@@ -37,6 +43,8 @@ impl Sim {
                 "sceneId": 0, "temp": 2700, "dimming": 80
             })),
             lossy: AtomicBool::new(false),
+            push_to: Mutex::new(None),
+            registered: AtomicBool::new(false),
             received: AtomicU64::new(0),
         });
         let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
@@ -56,6 +64,22 @@ impl Sim {
 
     pub fn change_from_outside(&self, params: Value) {
         apply(&mut self.shared.pilot.lock().unwrap(), &params);
+        /* Registered: tell the hub, like a real light. */
+        let target = *self.shared.push_to.lock().unwrap();
+        if let (true, Some(target)) = (self.shared.registered.load(Ordering::Relaxed), target) {
+            let push = json!({ "method": "syncPilot", "env": "pro", "params": self.pilot() }).to_string();
+            let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+            socket.send_to(push.as_bytes(), target).unwrap();
+        }
+    }
+
+    /* Where its pushes go (the hub's listener, in tests a free port). */
+    pub fn push_to(&self, target: SocketAddr) {
+        *self.shared.push_to.lock().unwrap() = Some(target);
+    }
+
+    pub fn registered(&self) -> bool {
+        self.shared.registered.load(Ordering::Relaxed)
     }
 
     /* From now on, every other datagram received is dropped unanswered. */
@@ -90,6 +114,10 @@ async fn serve(socket: UdpSocket, shared: Arc<Shared>) {
             "setPilot" => {
                 apply(&mut shared.pilot.lock().unwrap(), &request["params"]);
                 json!({ "success": true })
+            }
+            "registration" => {
+                shared.registered.store(true, Ordering::Relaxed);
+                json!({ "mac": "a8bb50aabbcc", "success": true })
             }
             "getSystemConfig" => json!({
                 "mac": "a8bb50aabbcc", "homeId": 1234, "roomId": 1, "moduleName": "ESP01_SHRGB1C_31",

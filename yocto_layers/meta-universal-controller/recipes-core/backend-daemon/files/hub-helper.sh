@@ -6,10 +6,11 @@
 # /run/hub-helper.sock (hub-helper.socket, Accept=yes), with the connection
 # as stdin/stdout. Only root and the group hubd may connect (SocketMode=0660).
 #
-# It reads ONE word and knows exactly four. There are no arguments and the
+# It reads ONE word and knows exactly five. There are no arguments and the
 # word is never passed on to anything, so there's nothing to inject into:
 # the worst a compromised backend_daemon can do through here is open/close
-# the setup hotspot, restart avahi, or flush one file to the flash.
+# the setup hotspot, restart avahi, flush one file to the flash, or make
+# the local MQTT broker re-read its logins (issue #72).
 #
 # Answer: "OK", or "ERR <reason>". See linux_a7/backend_daemon/src/helper.rs
 # for the other side.
@@ -27,6 +28,10 @@ case "$command" in
     # fsync wpa_supplicant's config (root-only: it holds the WiFi passwords)
     # and its folder, after the backend had it saved (network.rs).
     wifi-sync)     output=$(sync "$WIFI_DIR/wpa_supplicant.conf" "$WIFI_DIR" 2>&1) ;;
+    # Issue #72: backend-daemon (broker.rs) rewrote the broker's password
+    # and access files. "or-restart": also starts it if it wasn't running
+    # yet (first boot: the files didn't exist when it first tried).
+    broker-reload) output=$(systemctl reload-or-restart mosquitto.service 2>&1) ;;
     *)
         # Not echoed back or logged in full: it came from outside.
         echo "ERR unknown command"

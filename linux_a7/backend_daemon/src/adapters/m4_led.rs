@@ -64,6 +64,7 @@ impl Adapter for M4Led {
             config: Default::default(),
             identity: String::new(),
             online: None,
+            last_seen: None,
             capabilities: Capabilities {
                 switch: Some(Switch { on: false }),
                 ..Default::default()
@@ -80,7 +81,7 @@ impl Adapter for M4Led {
             self.led_rx.clone(),
             commands_rx,
         ));
-        DeviceHandle { commands }
+        DeviceHandle::new(commands)
     }
 }
 

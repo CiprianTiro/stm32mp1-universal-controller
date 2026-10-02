@@ -128,6 +128,11 @@ impl Control {
     }
 
     /* The adapters, for the wizard's probe and actions. */
+    /* "Read your state now" for a device (a webhook, issue #72). */
+    pub fn refresh(&self, id: &str) -> bool {
+        self.adapters.refresh(id)
+    }
+
     pub fn adapters(&self) -> &Registry {
         &self.adapters
     }
@@ -245,6 +250,14 @@ impl Control {
     }
 
     /* A device's reachability, as its adapter sees it (adapters::Hub). */
+    /* Issue #72: a battery device was heard from now (Device::last_seen). */
+    pub async fn seen(&self, id: &str) {
+        let at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let _ = self.state_tx.send(Msg::Seen { id: id.to_string(), at }).await;
+    }
+
     pub async fn set_online(&self, id: &str, online: Health) -> Result<Device, String> {
         self.ask(|reply| Msg::SetOnline {
             id: id.to_string(),

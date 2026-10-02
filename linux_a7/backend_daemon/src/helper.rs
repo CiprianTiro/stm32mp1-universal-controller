@@ -43,6 +43,8 @@ pub enum Command {
     HotspotStop,
     AvahiRestart,
     WifiSync,
+    /* Issue #72: mosquitto re-reads its logins (broker.rs). */
+    BrokerReload,
 }
 
 impl Command {
@@ -52,6 +54,7 @@ impl Command {
             Command::HotspotStop => "hotspot-stop",
             Command::AvahiRestart => "avahi-restart",
             Command::WifiSync => "wifi-sync",
+            Command::BrokerReload => "broker-reload",
         }
     }
 }

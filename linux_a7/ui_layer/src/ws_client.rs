@@ -188,6 +188,9 @@ pub struct Device {
      * "unauthorized"; absent = not known (virtual devices). */
     #[serde(default)]
     pub online: Option<String>,
+    /* Issue #72: a battery device's last report (Unix seconds). */
+    #[serde(default)]
+    pub last_seen: Option<u64>,
     pub capabilities: Capabilities,
 }
 

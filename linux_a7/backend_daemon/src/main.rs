@@ -9,6 +9,7 @@ use tokio::time::interval;
 mod adapters;
 mod auth;
 mod automations;
+mod broker;
 mod ble;
 mod control;
 mod device;
@@ -29,6 +30,7 @@ mod state;
 mod store;
 mod templates;
 mod tls;
+mod webhooks;
 mod wizard;
 mod ws;
 
@@ -106,13 +108,17 @@ async fn main() {
     /* The generic HTTP adapter (issue #75) runs what templates describe:
      * it gets them once they're loaded, below. */
     let http_generic = adapters::http_generic::HttpGeneric::new();
+    /* The generic MQTT adapter (issue #72): the templates below, the
+     * local broker later. */
+    let mqtt_generic = adapters::mqtt_generic::MqttGeneric::new();
     let adapters = std::sync::Arc::new(adapters::Registry::new(vec![
         Box::new(adapters::m4_led::M4Led::new(rpmsg_tx, led_rx)),
         Box::new(adapters::wled::Wled),
         Box::new(adapters::lg_webos::LgWebos),
         Box::new(adapters::ir_blaster::IrBlaster),
-        Box::new(adapters::wiz::Wiz),
+        Box::new(adapters::wiz::Wiz::new()),
         Box::new(http_generic.clone()),
+        Box::new(mqtt_generic.clone()),
     ]));
     /* Devices' secrets (issue #40, secrets.rs): a separate hubd-only file,
      * never logged, never sent to a client. */
@@ -158,17 +164,13 @@ async fn main() {
     }
     let templates = std::sync::Arc::new(templates);
     http_generic.set_templates(templates.clone());
+    mqtt_generic.set_templates(templates.clone());
 
     /* Finding devices on the LAN (issue #40): the templates say what to
      * look for; the inbox and IP auto-update come from here. */
     let discovery = std::sync::Arc::new(discovery::Discovery::new());
     tokio::spawn(discovery::run(discovery.clone(), templates.clone(), control.clone()));
 
-    /* Every hardware device's task (adapters/), after the built-in devices
-     * (the LED) exist. */
-    let starting = control.clone();
-    let registry = adapters.clone();
-    tokio::spawn(async move { registry.start_all(&starting).await });
 
 
     /* The network actor (issue #61): Ethernet/WiFi status, WiFi scan,
@@ -236,6 +238,63 @@ async fn main() {
         }
     };
 
+    /* The local MQTT broker for devices (issue #72, broker.rs): its logins
+     * and rules, the hub's own connection to it. After the TLS identity
+     * (port 8883 uses the hub's certificate). Not fatal: without it, only
+     * devices that report through it are missing. */
+    let broker_store = store::Store::new(&store::data_dir(), "broker.json");
+    let logins = broker_store.load_or_default("broker logins", broker::decode);
+    let _broker = match broker::Broker::open(
+        broker::broker_dir(),
+        logins,
+        store::writer(broker_store, broker::BROKER_SCHEMA),
+        &tls::tls_dir(),
+    ) {
+        Ok(broker) => {
+            let broker = std::sync::Arc::new(broker);
+            tokio::spawn(broker::run(broker.clone()));
+            mqtt_generic.set_broker(broker.clone());
+            /* "New device waiting" (issue #72) goes to the inbox. */
+            broker.set_announcer(discovery.announcer());
+            /* Logins no device uses any more go: at start, and whenever a
+             * device is removed (broker::prune). */
+            let (broker_for_prune, control_for_prune, mut events) = (broker.clone(), control.clone(), events_tx.subscribe());
+            tokio::spawn(async move {
+                loop {
+                    if let Ok(devices) = control_for_prune.list().await {
+                        let in_use: Vec<String> = devices.iter().filter_map(|d| d.config.get("mqtt_user").cloned()).collect();
+                        broker_for_prune.prune(&in_use).await;
+                    }
+                    /* The next removal (or, every hour, a look anyway). */
+                    loop {
+                        match tokio::time::timeout(std::time::Duration::from_secs(3600), events.recv()).await {
+                            Ok(Ok(state::Event::Removed(_))) | Err(_) => break,
+                            Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => return,
+                            Ok(_) => continue,
+                        }
+                    }
+                }
+            });
+            Some(broker)
+        }
+        Err(e) => {
+            println!("broker: ERROR {e} -- devices can't report over MQTT");
+            None
+        }
+    };
+
+    /* Devices calling the hub (issue #72, webhooks.rs): one secret address
+     * each; a call makes the hub read that device's state at once. */
+    let webhooks = std::sync::Arc::new(webhooks::Webhooks::new(control.clone()));
+    tokio::spawn(webhooks::run(webhooks.clone()));
+
+    /* Every hardware device's task (adapters/), after the built-in devices
+     * (the LED) exist -- and after the local broker (issue #72), which the
+     * MQTT devices' tasks need from their first moment. */
+    let starting = control.clone();
+    let registry = adapters.clone();
+    tokio::spawn(async move { registry.start_all(&starting).await });
+
     /* Bluetooth setup (issue #36): while a pairing code is on the screen,
      * the phone app can send the WiFi details over Bluetooth and get paired
      * in the same step. Advertised under the same name as the setup
@@ -258,6 +317,7 @@ async fn main() {
         discovery,
         templates,
         automations,
+        webhooks,
     ));
 
     /* SIGTERM is what systemd sends on stop/restart; SIGINT covers Ctrl-C

@@ -880,6 +880,41 @@ pub fn ipv4_addresses() -> HashMap<String, Ipv4Addr> {
     ipv4_interfaces().into_iter().map(|i| (i.name, i.address)).collect()
 }
 
+/* The hub's address on the home network, for settings typed into a
+ * device (the MQTT broker, a webhook URL; issue #72): Ethernet first,
+ * then WiFi; never the setup hotspot. */
+pub fn lan_address() -> String {
+    let interfaces = ipv4_interfaces();
+    let pick = |name: &str| interfaces.iter().find(|i| i.name == name).map(|i| i.address.to_string());
+    pick("eth0")
+        .or_else(|| pick("end0"))
+        .or_else(|| pick("wlan0"))
+        .or_else(|| {
+            interfaces
+                .iter()
+                .find(|i| !i.address.is_loopback() && i.name != "uap0")
+                .map(|i| i.address.to_string())
+        })
+        .unwrap_or_else(|| "stm32mp1.local".into())
+}
+
+/* The MAC address (12 hex digits, no colons) of the interface lan_address
+ * picks -- WiZ lights want one when the hub registers for their pushes
+ * (issue #72). */
+pub fn lan_mac() -> String {
+    let address = lan_address();
+    let name = ipv4_interfaces()
+        .into_iter()
+        .find(|i| i.address.to_string() == address)
+        .map(|i| i.name)
+        .unwrap_or_default();
+    std::fs::read_to_string(format!("/sys/class/net/{name}/address"))
+        .map(|m| m.trim().replace(':', "").to_lowercase())
+        .ok()
+        .filter(|m| m.len() == 12)
+        .unwrap_or_else(|| "000000000000".into())
+}
+
 /* One interface's IPv4 network. */
 pub struct Ipv4Interface {
     pub name: String,

@@ -68,6 +68,10 @@ IMAGE_INSTALL:append:stm32mp1common = " hub-wifi"
 # QEMU's kernel has no nftables families configured, and its user-mode
 # network already hides the guest from everything but forwarded ports.
 IMAGE_INSTALL:append:stm32mp1common = " hub-hardening"
+
+# The local MQTT broker for devices (issue #72, recipes-connectivity/
+# mosquitto): WLED, Tasmota, ESPHome report to the hub through it.
+IMAGE_INSTALL:append = " mosquitto"
 # This image is the DEVELOPMENT one: SSH is open in the firewall (sshd is
 # installed above), and systemd-analyze is there to check the services'
 # sandboxing on the board (`systemd-analyze security`). The production

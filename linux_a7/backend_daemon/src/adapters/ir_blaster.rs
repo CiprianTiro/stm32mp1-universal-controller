@@ -101,7 +101,7 @@ impl Adapter for IrBlaster {
             hub,
         };
         tokio::spawn(task.run(commands_rx));
-        DeviceHandle { commands }
+        DeviceHandle::new(commands)
     }
 
     fn probe<'a>(&'a self, values: &'a SetupValues) -> BoxFuture<'a, Result<Probe, SetupError>> {
@@ -888,6 +888,7 @@ mod tests {
             config: values.plain.clone(),
             identity: String::new(),
             online: None,
+            last_seen: None,
             capabilities: Capabilities::with_defaults(&["remote".into()]).unwrap(),
         };
         let (state_tx, state_rx) = mpsc::channel(8);

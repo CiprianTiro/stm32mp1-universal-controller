@@ -11,6 +11,11 @@
 #   udp 50190  answers to the hub's SSDP searches (discovery.rs, #40)
 #   udp 50191  answers to the hub's UDP broadcast searches (WiZ bulbs;
 #              discovery.rs, #75)
+#   tcp 1883, 8883  the local MQTT broker for devices (mosquitto, #72),
+#              not on the setup hotspot
+#   tcp 8780   devices' webhook calls (webhooks.rs, #72), not on the
+#              setup hotspot
+#   udp 38900  WiZ lights' pushes (wiz.rs, #72), not on the setup hotspot
 #   on the setup hotspot's interface (uap0) only, so only while it's open:
 #     tcp 80   the setup page (hotspot.rs)
 #     udp 67   DHCP: handing out addresses to phones that join it
@@ -90,6 +95,20 @@ table inet hub {
 
         # The hub's own services.
         tcp dport @lan_tcp accept
+
+        # The local MQTT broker for devices (issue #72): plain 1883 and TLS
+        # 8883, from the home network -- NOT from the setup hotspot (a
+        # phone being set up has no business there). Every device logs in
+        # with its own password (broker.rs). When a mobile-data uplink
+        # arrives (#55), this must also exclude that interface.
+        iifname != "uap0" tcp dport { 1883, 8883 } accept
+        # Devices calling their secret webhook address (issue #72,
+        # webhooks.rs): the same rule, the same reasons.
+        iifname != "uap0" tcp dport 8780 accept
+        # WiZ lights pushing their changes (issue #72, wiz.rs): they send
+        # to this port by themselves once the hub registered with them --
+        # nothing the hub asked for at that moment, so not a "reply".
+        iifname != "uap0" udp dport 38900 accept
 
         # The setup hotspot: its interface only exists while it's open.
         iifname "uap0" tcp dport 80 accept
