@@ -591,6 +591,7 @@ impl Session {
             config,
             identity: self.identity(),
             online: None,
+            last_seen: None,
             capabilities,
         };
         ctx.control
@@ -614,8 +615,19 @@ impl Session {
                 room: self.template.defaults.room.clone(),
                 summary,
             },
+            /* Issue #72: the text may show values setup collected so far,
+             * {name} -- and {secret.name}: a device password the hub just
+             * made (mqtt_login), shown ONCE to be typed into the device.
+             * Templates come from the image, so only their authors decide
+             * which secret a page shows. */
             Some(Step::Info { text, image }) => StepKind::Info {
-                text: text.clone(),
+                text: {
+                    let mut values = self.values.plain.clone();
+                    for (name, secret) in &self.values.secret {
+                        values.insert(format!("secret.{name}"), secret.expose().to_string());
+                    }
+                    crate::discovery::fill(text, &values)
+                },
                 image: image.clone(),
             },
             Some(Step::Discover) => StepKind::Discover {
@@ -1171,6 +1183,7 @@ mod tests {
             config: Default::default(),
             identity: String::new(),
             online: None,
+            last_seen: None,
             capabilities: device::Capabilities::with_defaults(&["switch".to_string()]).unwrap(),
         };
         assert_eq!(unique_id("Kitchen strip", "wled", &[]), "kitchen-strip");
@@ -1233,7 +1246,7 @@ mod tests {
         let (templates, problems) = Templates::load(
             &dir,
             &Known {
-                adapters: &["m4-led", "wled", "lg-webos", "ir-blaster", "wiz", "http"],
+                adapters: &["m4-led", "wled", "lg-webos", "ir-blaster", "wiz", "http", "mqtt"],
                 capabilities: &device::CAPABILITY_NAMES,
             },
         );
@@ -1412,6 +1425,7 @@ mod tests {
             config: [("host".to_string(), tv.host()), ("cert_sha256".to_string(), tv.fingerprint())].into(),
             identity: String::new(),
             online: None,
+            last_seen: None,
             capabilities: device::Capabilities::with_defaults(&["switch".into(), "media".into()]).unwrap(),
         };
         let old_key = [("client_key".to_string(), Secret::new("revoked-key"))].into();

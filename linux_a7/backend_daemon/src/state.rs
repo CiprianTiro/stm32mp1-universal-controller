@@ -111,6 +111,11 @@ pub enum Msg {
         online: Health,
         reply: oneshot::Sender<Result<Device, String>>,
     },
+    /* Issue #72: a battery device was heard from (Device::last_seen). */
+    Seen {
+        id: DeviceId,
+        at: u64,
+    },
 }
 
 /* The channels the actor needs besides its mailbox (see the header). */
@@ -178,6 +183,14 @@ pub async fn run(mut rx: mpsc::Receiver<Msg>, mut devices: HashMap<DeviceId, Dev
                     }
                 }
                 let _ = reply.send(result);
+            }
+            Msg::Seen { id, at } => {
+                if let Some(device) = devices.get_mut(&id) {
+                    device.last_seen = Some(at);
+                    let device = device.clone();
+                    /* Announced (screens show "seen just now"), not saved. */
+                    changed(&out, &devices, Event::Changed(device), false);
+                }
             }
             Msg::SetOnline { id, online, reply } => {
                 let result = set_online(&mut devices, &id, online);
@@ -335,6 +348,7 @@ pub fn encode_registry(devices: &HashMap<DeviceId, Device>) -> Vec<u8> {
         .values()
         .map(|d| Device {
             online: None,
+            last_seen: None,
             ..d.clone()
         })
         .collect();
@@ -411,6 +425,7 @@ mod tests {
             config: Default::default(),
             identity: String::new(),
             online: None,
+            last_seen: None,
             capabilities: Capabilities {
                 switch: Some(Switch { on: false }),
                 dimmer: Some(Dimmer { level: 50 }),

@@ -89,6 +89,11 @@ Scenes and automations (issue #47). The JSON format is on the wiki
     python3 tools/hub_ws.py <board> delete-automation evening
     python3 tools/hub_ws.py <board> log                          what ran (since the hub started)
 
+A device's secret webhook address (issue #72): calling it makes the hub
+read that device's state at once (e.g. a Shelly's "action" on switching):
+
+    python3 tools/hub_ws.py <board> webhook <id>
+
 Remote control and other actions (issue #44): one-off requests that
 change no state by themselves -- a remote's button, typed text, a TV's
 channel list:
@@ -222,6 +227,8 @@ def build_request(args):
             return {"action": "delete_automation", "id": automation_id}
         case ["log"]:
             return {"action": "get_automation_log"}
+        case ["webhook", device_id]:
+            return {"action": "webhook_url", "id": device_id}
         case ["press", device_id, button]:
             return {"action": "device_action", "id": device_id, "capability": "remote",
                     "name": "press", "args": {"button": button}}

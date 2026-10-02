@@ -1,0 +1,59 @@
+{
+  "$comment": "WLED in its MQTT mode, over the hub's own broker (issue #72), run by the GENERIC mqtt adapter. The plain wled template (HTTP + WebSocket) needs no broker; this one is for WLED set up to report by MQTT. Format: wiki Device-Templates.",
+  "format": 1,
+  "id": "wled-mqtt",
+  "version": 1,
+  "name": "WLED light (MQTT)",
+  "category": "lighting",
+  "description": "LED strips and lamps running WLED, connected to the hub's MQTT broker: changes show up at once.",
+  "adapter": "mqtt",
+  "capabilities": ["switch", "dimmer", "color"],
+  "inputs": [
+    {
+      "id": "topic",
+      "type": "text",
+      "label": "Topic",
+      "hint": "A short name for the light's messages, e.g. kitchen_strip (letters, digits, - and _)",
+      "validate": { "min_length": 1, "max_length": 32 }
+    }
+  ],
+  "discovery": [
+    { "method": "device_announce", "match": { "client_kind": "WLED" }, "fill": { "name": "{client_id}" } }
+  ],
+  "setup": [
+    {
+      "id": "guided",
+      "label": "Connect it to the hub",
+      "steps": [
+        { "type": "form", "fields": ["topic"] },
+        { "type": "confirm_on_device", "action": "mqtt_login", "hint": "Making the light's own login on the hub…", "timeout_s": 15 },
+        {
+          "type": "info",
+          "text": "Open the light's WLED page (Config → Sync Interfaces → MQTT), tick Enable MQTT and enter:\n\nBroker: {mqtt_host}\nPort: {mqtt_port}\nUsername: {mqtt_user}\nPassword: {secret.mqtt_password}\nDevice Topic: wled/{topic}\n\nSave: WLED connects to the hub. Then tap Next."
+        },
+        { "type": "test" }
+      ]
+    }
+  ],
+  "errors": {
+    "timeout": "The light hasn't connected to the hub yet. Check WLED's MQTT settings (broker, username, password, device topic) and that it's on the same WiFi."
+  },
+  "identity": "{mqtt_user}",
+  "defaults": { "name": "LED strip" },
+  "mqtt": {
+    "user": "wled-{topic}",
+    "acl": [
+      { "access": "readwrite", "topic": "wled/{topic}/#" }
+    ],
+    "online": { "topic": "wled/{topic}/status", "online": "online", "offline": "offline" },
+    "state": [
+      { "topic": "wled/{topic}/g", "read": { "switch.on": "$", "dimmer.level": { "path": "$", "scale": 0.392157 } } },
+      { "topic": "wled/{topic}/c", "read": { "color.hex": "$" } }
+    ],
+    "commands": {
+      "switch": { "topic": "wled/{topic}", "payload": "{on}", "bool": ["OFF", "ON"] },
+      "dimmer": { "topic": "wled/{topic}", "payload": "{level255}" },
+      "color": { "topic": "wled/{topic}/col", "payload": "#{hex}" }
+    }
+  }
+}

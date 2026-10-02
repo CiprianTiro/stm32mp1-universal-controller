@@ -1,0 +1,61 @@
+{
+  "$comment": "Tasmota relay/plug over the hub's own MQTT broker (issue #72), run by the GENERIC mqtt adapter -- this file is all there is. Format: wiki Device-Templates.",
+  "format": 1,
+  "id": "tasmota-switch",
+  "version": 2,
+  "name": "Tasmota switch",
+  "category": "plugs",
+  "description": "A relay, plug or ESP board running the free Tasmota firmware. It reports to the hub by itself (MQTT): changes show up at once.",
+  "adapter": "mqtt",
+  "capabilities": ["switch"],
+  "inputs": [
+    {
+      "id": "topic",
+      "type": "text",
+      "label": "Topic",
+      "hint": "A short name for the device's messages, e.g. kitchen_plug (letters, digits, - and _)",
+      "validate": { "min_length": 1, "max_length": 32 }
+    }
+  ],
+  "discovery": [
+    { "method": "device_announce", "match": { "client_kind": "DVES" }, "fill": { "name": "{client_id}" } }
+  ],
+  "setup": [
+    {
+      "id": "guided",
+      "label": "Connect it to the hub",
+      "steps": [
+        { "type": "form", "fields": ["topic"] },
+        { "type": "confirm_on_device", "action": "mqtt_login", "hint": "Making the device's own login on the hub…", "timeout_s": 15 },
+        {
+          "type": "info",
+          "text": "Open the device's web page (Tasmota: Configuration → Configure MQTT) and enter:\n\nHost: {mqtt_host}\nPort: {mqtt_port}\nUser: {mqtt_user}\nPassword: {secret.mqtt_password}\nTopic: {topic}\n\nSave: the device restarts and connects to the hub. Then tap Next."
+        },
+        { "type": "test" }
+      ]
+    }
+  ],
+  "errors": {
+    "timeout": "The device hasn't connected to the hub yet. Check the MQTT settings on its web page (host, user, password, topic), and that it's on the same WiFi."
+  },
+  "identity": "{mqtt_user}",
+  "defaults": { "name": "Switch" },
+  "mqtt": {
+    "user": "tasmota-{topic}",
+    "acl": [
+      { "access": "write", "topic": "tele/{topic}/#" },
+      { "access": "write", "topic": "stat/{topic}/#" },
+      { "access": "read", "topic": "cmnd/{topic}/#" }
+    ],
+    "online": { "topic": "tele/{topic}/LWT", "online": "Online", "offline": "Offline" },
+    "state": [
+      { "topic": "stat/{topic}/POWER", "read": { "switch.on": "$" } },
+      { "topic": "stat/{topic}/RESULT", "read": { "switch.on": "POWER" } },
+      { "topic": "tele/{topic}/STATE", "read": { "switch.on": "POWER" } }
+    ],
+    "commands": {
+      "switch": { "topic": "cmnd/{topic}/POWER", "payload": "{on}", "bool": ["OFF", "ON"] }
+    },
+    "refresh": { "topic": "cmnd/{topic}/STATE", "payload": "" }
+  }
+}

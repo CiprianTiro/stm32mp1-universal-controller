@@ -100,6 +100,17 @@ impl Secrets {
         self.save(&all);
     }
 
+    /* Every device that has a secret of this name, with its value (issue
+     * #72: the webhook tokens, looked up by token). */
+    pub fn all_named(&self, name: &str) -> Vec<(DeviceId, Secret)> {
+        self.all
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|(device, secrets)| secrets.get(name).map(|s| (device.clone(), s.clone())))
+            .collect()
+    }
+
     /* Forgets all of a device's secrets (the device was removed). */
     pub fn remove(&self, device: &str) {
         let mut all = self.all.lock().unwrap();

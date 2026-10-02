@@ -52,6 +52,7 @@ SRC_URI = " \
     file://src/adapters/channels.rs \
     file://src/adapters/lg_webos.rs \
     file://src/adapters/m4_led.rs \
+    file://src/adapters/mqtt_generic.rs \
     file://src/adapters/esp_prov/mod.rs \
     file://src/adapters/esp_prov/ble.rs \
     file://src/adapters/esp_prov/pb.rs \
@@ -64,6 +65,7 @@ SRC_URI = " \
     file://src/auth.rs \
     file://src/automations.rs \
     file://src/ble.rs \
+    file://src/broker.rs \
     file://src/control.rs \
     file://src/device.rs \
     file://src/discovery.rs \
@@ -85,6 +87,7 @@ SRC_URI = " \
     file://src/templates.rs \
     file://templates \
     file://src/tls.rs \
+    file://src/webhooks.rs \
     file://src/wizard.rs \
     file://src/ws.rs \
     file://patched/rumqttc \

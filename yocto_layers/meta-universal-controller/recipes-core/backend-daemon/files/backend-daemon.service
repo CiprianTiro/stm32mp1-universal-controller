@@ -75,6 +75,8 @@ ProtectSystem=strict
 ReadWritePaths=-/usr/local/var/lib/universal-controller
 ReadWritePaths=-/usr/local/etc/universal-controller/tls
 ReadWritePaths=-/usr/local/etc/universal-controller/secrets
+#   the local MQTT broker's logins and access rules (issue #72, broker.rs)
+ReadWritePaths=-/usr/local/etc/universal-controller/broker
 #   and three folders in /run (RAM) that systemd creates for it, owned by
 #   hubd: its WiFi control socket ends (network.rs), the hotspot's hostapd
 #   config (hotspot.rs), the one-interface avahi config (network.rs).

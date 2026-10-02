@@ -50,6 +50,8 @@
  *   set_automation_enabled {id, enabled}   -> automations {...}
  *   run_scene {id}, run_automation {id}    -> ack once done (error: what failed)
  *   get_automation_log                     -> automation_log {entries}
+ *   webhook_url {id}                       -> webhook {url} (issue #72: the device's
+ *                                             secret address, made the first time)
  *        after subscribe also: automations_changed (list again),
  *        automation_ran {entry}
  *   list_found                             -> found {devices: [...]} (the "Found on
@@ -113,6 +115,7 @@ use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
 use crate::auth::{self, Auth};
 use crate::automations::{self, Automations};
+use crate::webhooks::Webhooks;
 use crate::control::Control;
 use crate::hotspot::{self, Hotspot};
 use crate::discovery::{self, Discovery};
@@ -302,6 +305,10 @@ enum ClientRequest {
         id: String,
     },
     GetAutomationLog,
+    /* Issue #72: a device's secret webhook address. */
+    WebhookUrl {
+        id: DeviceId,
+    },
 }
 
 impl ClientRequest {
@@ -436,6 +443,9 @@ enum ServerMessage {
     AutomationRan {
         entry: automations::LogEntry,
     },
+    Webhook {
+        url: String,
+    },
     Error {
         message: String,
     },
@@ -465,6 +475,8 @@ struct AppState {
     templates: Arc<Templates>,
     /* Scenes and automations (issue #47). */
     automations: Arc<Automations>,
+    /* Devices calling the hub (issue #72). */
+    webhooks: Arc<Webhooks>,
 }
 
 /* Counts one connected client for as long as it exists: +1 when created,
@@ -509,6 +521,7 @@ pub async fn run(
     discovery: Arc<Discovery>,
     templates: Arc<Templates>,
     automations: Arc<Automations>,
+    webhooks: Arc<Webhooks>,
 ) {
     let fingerprint = Arc::new(identity.as_ref().map(|i| i.fingerprint.clone()).unwrap_or_default());
     let state = AppState {
@@ -523,6 +536,7 @@ pub async fn run(
         discovery,
         templates,
         automations,
+        webhooks,
     };
     /* The same routes behind both doors; `Extension(Door)` tells the
      * handler which one a connection used. */
@@ -1231,6 +1245,10 @@ async fn handle_request(req: ClientRequest, app_state: &AppState) -> ServerMessa
         ClientRequest::SetAutomationEnabled { id, enabled } => {
             book_or_error(&app_state.automations, app_state.automations.set_enabled(&id, enabled))
         }
+        ClientRequest::WebhookUrl { id } => match app_state.webhooks.url_for(&id).await {
+            Ok(url) => ServerMessage::Webhook { url },
+            Err(message) => ServerMessage::Error { message },
+        },
         ClientRequest::GetAutomationLog => ServerMessage::AutomationLog {
             entries: app_state.automations.log(),
         },
@@ -1336,7 +1354,7 @@ mod tests {
                     cmd.refuse("can't reach 192.168.1.139: timed out");
                 }
             });
-            DeviceHandle { commands }
+            DeviceHandle::new(commands)
         }
     }
 
@@ -1350,6 +1368,7 @@ mod tests {
             config: Default::default(),
             identity: String::new(),
             online: None,
+            last_seen: None,
             capabilities: Capabilities {
                 switch: Some(Switch { on: false }),
                 ..Default::default()
@@ -1389,6 +1408,7 @@ mod tests {
                 control.clone(),
                 Arc::new(Settings::new(HubSettings::default(), watch::channel(Vec::new()).0)),
             )),
+            webhooks: Arc::new(Webhooks::new(control.clone())),
         };
         let router = Router::new()
             .route("/ws", get(ws_handler))

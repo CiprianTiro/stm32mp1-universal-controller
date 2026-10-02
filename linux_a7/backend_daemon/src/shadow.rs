@@ -208,6 +208,71 @@ pub fn reported(device: &Device) -> Value {
     })
 }
 
+/* Keys a report no longer has (issue #72's fix of a #34 leftover).
+ *
+ * AWS MERGES every report into the shadow: a key that's simply left out
+ * stays there. A colour switching from {"hex": ...} to {"kelvin": ...}
+ * then showed BOTH in the cloud; a TV's channel stayed after Live TV
+ * closed; a sensor reading moved elsewhere stayed forever. The fix: next
+ * to the new report, every key that `old` had and `new` lacks is sent as
+ * null ("delete" in a shadow update) -- recursively, through the objects
+ * both have. Lists are replaced whole by AWS, nothing to do there.
+ * Returns Null when nothing has to go. */
+pub fn deletions(old: &Value, new: &Value) -> Value {
+    let (Some(old), Some(new)) = (old.as_object(), new.as_object()) else {
+        return Value::Null;
+    };
+    let mut gone = serde_json::Map::new();
+    for (key, old_value) in old {
+        match new.get(key) {
+            None if !old_value.is_null() => {
+                gone.insert(key.clone(), Value::Null);
+            }
+            Some(new_value) => {
+                let inner = deletions(old_value, new_value);
+                if !inner.is_null() {
+                    gone.insert(key.clone(), inner);
+                }
+            }
+            None => {}
+        }
+    }
+    if gone.is_empty() {
+        Value::Null
+    } else {
+        Value::Object(gone)
+    }
+}
+
+/* `report` with `deletions`' nulls added where the report has nothing. */
+pub fn with_deletions(report: &Value, deletions: &Value) -> Value {
+    let (Some(report_map), Some(deletions)) = (report.as_object(), deletions.as_object()) else {
+        return report.clone();
+    };
+    let mut merged = report_map.clone();
+    for (key, deletion) in deletions {
+        match merged.get(key) {
+            None => {
+                merged.insert(key.clone(), deletion.clone());
+            }
+            Some(inner) => {
+                let combined = with_deletions(inner, deletion);
+                merged.insert(key.clone(), combined);
+            }
+        }
+    }
+    Value::Object(merged)
+}
+
+/* What the cloud HAS for a device: the "reported" part of a get/accepted
+ * answer (asked for at every connect). With deletions(), what's in the
+ * cloud but no longer on the hub -- left from earlier sessions -- is
+ * removed too, not only what changed since connecting. */
+pub fn parse_get_reported(payload: &[u8]) -> Option<Value> {
+    let doc: Value = serde_json::from_slice(payload).ok()?;
+    doc["state"]["reported"].as_object().map(|o| Value::Object(o.clone()))
+}
+
 /* The top-level keys devices reported before #34 ({"on": true,
  * "brightness": 80}). AWS MERGES every report into the shadow, so they
  * would otherwise stay there forever, next to the new "capabilities". The
@@ -292,6 +357,40 @@ pub fn decode_names(schema: u32, payload: &[u8]) -> Result<BTreeSet<DeviceId>, S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /* Issue #72: keys a report no longer has are deleted in the cloud. */
+    #[test]
+    fn stale_keys_are_deleted() {
+        let old = json!({"name": "Bulb", "capabilities": {
+            "color": {"hex": "#FFFFFF"},
+            "media": {"volume": 3, "channel": {"id": "5"}},
+            "sensor": {"readings": {"power": {"value": 1.0}, "temperature": {"value": 30.0}}}}});
+        let new = json!({"name": "Bulb", "capabilities": {
+            "color": {"kelvin": 2700},
+            "media": {"volume": 3},
+            "sensor": {"readings": {"temperature": {"value": 31.0}}}}});
+        let gone = deletions(&old, &new);
+        assert_eq!(gone, json!({"capabilities": {
+            "color": {"hex": null},
+            "media": {"channel": null},
+            "sensor": {"readings": {"power": null}}}}));
+        let merged = with_deletions(&new, &gone);
+        assert_eq!(merged["capabilities"]["color"], json!({"kelvin": 2700, "hex": null}));
+        assert_eq!(merged["capabilities"]["sensor"]["readings"]["temperature"]["value"], 31.0);
+        /* Nothing gone: nothing added. */
+        assert_eq!(deletions(&new, &new), Value::Null);
+        assert_eq!(deletions(&Value::Null, &new), Value::Null);
+        /* A whole capability gone. */
+        assert_eq!(deletions(&json!({"capabilities": {"remote": {"buttons": []}}}), &json!({"capabilities": {}})),
+                   json!({"capabilities": {"remote": null}}));
+    }
+
+    #[test]
+    fn the_cloud_reported_part_is_read() {
+        let doc = br#"{"state": {"reported": {"name": "Bulb"}, "delta": {"x": 1}}, "version": 9}"#;
+        assert_eq!(parse_get_reported(doc), Some(json!({"name": "Bulb"})));
+        assert_eq!(parse_get_reported(br#"{"state": {}}"#), None);
+    }
 
     /* Issue #47: the scenes as a list (replaced whole by AWS), the run
      * request cleared on demand, and the name reserved for devices. */

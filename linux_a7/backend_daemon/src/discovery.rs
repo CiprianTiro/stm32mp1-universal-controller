@@ -87,6 +87,10 @@ struct Entry {
 }
 
 pub struct Discovery {
+    /* Issue #72: devices announcing themselves (broker.rs: a device
+     * knocking on the MQTT broker without a login). Taken by run(). */
+    announcements: Mutex<Option<mpsc::Receiver<Vars>>>,
+    announcer: mpsc::Sender<Vars>,
     /* Keyed by template + identity (or address, without an identity). */
     entries: Mutex<BTreeMap<String, Entry>>,
     /* Bumped whenever the list may have changed: ws.rs tells subscribed
@@ -98,11 +102,20 @@ pub struct Discovery {
 
 impl Discovery {
     pub fn new() -> Self {
+        let (announcer, announcements) = mpsc::channel(32);
         Discovery {
+            announcements: Mutex::new(Some(announcements)),
+            announcer,
             entries: Mutex::new(BTreeMap::new()),
             changed: watch::Sender::new(0),
             wake: Notify::new(),
         }
+    }
+
+    /* Where announcements go (see `announcements`): {address},
+     * {client_id}, {client_kind}. */
+    pub fn announcer(&self) -> mpsc::Sender<Vars> {
+        self.announcer.clone()
     }
 
     /* A search round now (the wizard's discover step, "Search again"). */
@@ -163,7 +176,7 @@ impl Discovery {
 
 /* What a discovery method saw, before a template turns it into a Found:
  * {address}, {port}, {name}, {uuid}, {txt.<key>}, {header.<Name>}. */
-type Vars = BTreeMap<String, String>;
+pub type Vars = BTreeMap<String, String>;
 
 /* Fills a template text's {placeholders} from `vars`. An unknown one
  * becomes "" (a device that doesn't send some value). Also the wizard's,
@@ -309,6 +322,17 @@ pub async fn run(discovery: Arc<Discovery>, templates: Arc<Templates>, control: 
             }
         });
     }
+    /* Devices announcing themselves (issue #72): passed in as "announce". */
+    if let Some(mut announcements) = discovery.announcements.lock().unwrap().take() {
+        let seen_tx = seen_tx.clone();
+        tokio::spawn(async move {
+            while let Some(vars) = announcements.recv().await {
+                if seen_tx.send(("announce".to_string(), vars)).await.is_err() {
+                    return;
+                }
+            }
+        });
+    }
     drop(seen_tx);
 
     /* Sightings -> Found, per matching template. */
@@ -321,6 +345,7 @@ pub async fn run(discovery: Arc<Discovery>, templates: Arc<Templates>, control: 
                     templates::Discovery::Ssdp { search, .. } => what == format!("ssdp:{search}"),
                     templates::Discovery::UdpBroadcast { port, .. } => what == format!("udp:{port}"),
                     templates::Discovery::UdpMulticast { group, port, .. } => what == format!("mcast:{group}:{port}"),
+                    templates::Discovery::DeviceAnnounce { .. } => what == "announce",
                     _ => false,
                 };
                 if !matches || !matches_template(method, &vars) {

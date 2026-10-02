@@ -81,8 +81,10 @@ impl Adapter for HttpGeneric {
             spec: self.spec(&device.template),
             hub,
         };
-        tokio::spawn(task.run(commands_rx));
-        DeviceHandle { commands }
+        /* Issue #72: a webhook can ask for the state at once. */
+        let refresh = Arc::new(tokio::sync::Notify::new());
+        tokio::spawn(task.run(commands_rx, refresh.clone()));
+        DeviceHandle::new(commands).with_refresh(refresh)
     }
 
     fn probe<'a>(&'a self, values: &'a SetupValues) -> BoxFuture<'a, Result<Probe, SetupError>> {
@@ -106,7 +108,7 @@ struct Task {
 }
 
 impl Task {
-    async fn run(self, mut commands: mpsc::Receiver<DeviceCmd>) {
+    async fn run(self, mut commands: mpsc::Receiver<DeviceCmd>, refresh: Arc<tokio::sync::Notify>) {
         let (Some(spec), Some(host)) = (self.spec.clone(), self.config.get("host").cloned()) else {
             /* No template (removed from the hub) or no address: stay put
              * and say why. */
@@ -126,6 +128,8 @@ impl Task {
         loop {
             tokio::select! {
                 _ = tokio::time::sleep(wait) => {}
+                /* "Read your state now" (a webhook): the poll comes early. */
+                _ = refresh.notified() => {}
                 cmd = commands.recv() => match cmd {
                     None => return,
                     Some(cmd) => {
@@ -225,7 +229,7 @@ async fn read_state(spec: &HttpSpec, host: &str, config: &BTreeMap<String, Strin
 }
 
 /* "a.b.0.c" in a JSON value: object keys, list indexes. */
-fn json_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
+pub(crate) fn json_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
     path.split('.').try_fold(value, |v, key| match v {
         Value::Object(map) => map.get(key),
         Value::Array(items) => items.get(key.parse::<usize>().ok()?),
@@ -235,7 +239,7 @@ fn json_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
 
 /* A device's value -> the capability field's. Lenient about types: an
  * "on" may be true, 1 or "ON"; a number may come as text. */
-fn convert(capability: &str, value: &Value, how: &HttpValue) -> Option<Value> {
+pub(crate) fn convert(capability: &str, value: &Value, how: &HttpValue) -> Option<Value> {
     let number = || match value {
         Value::Number(n) => n.as_f64(),
         Value::String(s) => s.trim().parse::<f64>().ok(),
@@ -252,7 +256,15 @@ fn convert(capability: &str, value: &Value, how: &HttpValue) -> Option<Value> {
             },
             _ => return None,
         })),
-        "dimmer" => Some(json!(number()?.round().clamp(0.0, 100.0) as u8)),
+        /* "scale" for devices counting 0-255 (WLED over MQTT, #72):
+         * 100/255 = 0.392157 turns their number into 0-100 %. */
+        "dimmer" => {
+            let scale = match how {
+                HttpValue::Full { scale, .. } => scale.unwrap_or(1.0),
+                HttpValue::Path(_) => 1.0,
+            };
+            Some(json!((number()? * scale).round().clamp(0.0, 100.0) as u8))
+        }
         "color" => {
             let text = value.as_str()?;
             let hex = if text.starts_with('#') { text.to_string() } else { format!("#{text}") };
@@ -282,7 +294,7 @@ fn convert(capability: &str, value: &Value, how: &HttpValue) -> Option<Value> {
 /* ------------------------------------------------------------------ */
 
 /* A command's values, as JSON (typed: true, 50, "FF8800"). */
-fn command_vars(capability: &str, value: &Value) -> Result<Map<String, Value>, String> {
+pub(crate) fn command_vars(capability: &str, value: &Value) -> Result<Map<String, Value>, String> {
     let mut vars = Map::new();
     match capability {
         "switch" => {
@@ -291,6 +303,8 @@ fn command_vars(capability: &str, value: &Value) -> Result<Map<String, Value>, S
         "dimmer" => {
             let level = value["level"].as_u64().ok_or("dimmer needs {\"level\": 0-100}")?.min(100);
             vars.insert("level".into(), json!(level));
+            /* The same as 0-255, for devices counting that way (#72). */
+            vars.insert("level255".into(), json!((level * 255 + 50) / 100));
         }
         "color" => {
             /* A white temperature becomes its RGB: the generic adapter
@@ -485,6 +499,7 @@ mod tests {
             config: [("host".to_string(), host.to_string())].into(),
             identity: String::new(),
             online: None,
+            last_seen: None,
             capabilities: Capabilities::with_defaults(&template.capabilities).unwrap(),
         }
     }

@@ -1,0 +1,58 @@
+{
+  "$comment": "A battery-powered Tasmota sensor in deep sleep, over the hub's own MQTT broker (issue #72), run by the GENERIC mqtt adapter. It wakes every few minutes, reports, sleeps: the hub shows when it was last seen. Format: wiki Device-Templates.",
+  "format": 1,
+  "id": "tasmota-sensor-battery",
+  "version": 1,
+  "name": "Tasmota sensor (battery)",
+  "category": "sensors",
+  "description": "A battery-powered ESP running Tasmota in deep sleep (DeepSleepTime): it wakes, reports its sensor values and sleeps again. Temperature and humidity from the usual sensors (DS18B20, AM2301/DHT, SHT3x, BME280).",
+  "adapter": "mqtt",
+  "capabilities": ["sensor"],
+  "power": "battery",
+  "report_interval_s": 300,
+  "inputs": [
+    {
+      "id": "topic",
+      "type": "text",
+      "label": "Topic",
+      "hint": "A short name for the sensor's messages, e.g. garden_sensor (letters, digits, - and _)",
+      "validate": { "min_length": 1, "max_length": 32 }
+    }
+  ],
+  "setup": [
+    {
+      "id": "guided",
+      "label": "Connect it to the hub",
+      "steps": [
+        { "type": "form", "fields": ["topic"] },
+        { "type": "confirm_on_device", "action": "mqtt_login", "hint": "Making the sensor's own login on the hub…", "timeout_s": 15 },
+        {
+          "type": "info",
+          "text": "Open the sensor's web page (Tasmota: Configuration → Configure MQTT) and enter:\n\nHost: {mqtt_host}\nPort: {mqtt_port}\nUser: {mqtt_user}\nPassword: {secret.mqtt_password}\nTopic: {topic}\n\nSave. Then, in its Console, type DeepSleepTime 300 (it then wakes every 5 minutes to report). Tap Next while it's awake."
+        },
+        { "type": "test" }
+      ]
+    }
+  ],
+  "errors": {
+    "timeout": "The sensor hasn't connected to the hub yet. Check its MQTT settings, and that it's awake (it only connects every few minutes in deep sleep)."
+  },
+  "identity": "{mqtt_user}",
+  "defaults": { "name": "Sensor" },
+  "mqtt": {
+    "user": "tasmota-{topic}",
+    "acl": [
+      { "access": "write", "topic": "tele/{topic}/#" },
+      { "access": "write", "topic": "stat/{topic}/#" },
+      { "access": "read", "topic": "cmnd/{topic}/#" }
+    ],
+    "online": { "topic": "tele/{topic}/LWT", "online": "Online", "offline": "Offline" },
+    "state": [
+      { "topic": "tele/{topic}/SENSOR", "read": { "sensor.temperature": { "path": "DS18B20.Temperature", "unit": "°C" } } },
+      { "topic": "tele/{topic}/SENSOR", "read": { "sensor.temperature": { "path": "AM2301.Temperature", "unit": "°C" }, "sensor.humidity": { "path": "AM2301.Humidity", "unit": "%" } } },
+      { "topic": "tele/{topic}/SENSOR", "read": { "sensor.temperature": { "path": "SHT3X.Temperature", "unit": "°C" }, "sensor.humidity": { "path": "SHT3X.Humidity", "unit": "%" } } },
+      { "topic": "tele/{topic}/SENSOR", "read": { "sensor.temperature": { "path": "BME280.Temperature", "unit": "°C" }, "sensor.humidity": { "path": "BME280.Humidity", "unit": "%" } } },
+      { "topic": "tele/{topic}/STATE", "read": { "sensor.wifi_signal": { "path": "Wifi.Signal", "unit": "dBm" } } }
+    ]
+  }
+}

@@ -34,6 +34,7 @@ pub mod http_generic;
 pub mod ir_blaster;
 pub mod lg_webos;
 pub mod m4_led;
+pub mod mqtt_generic;
 pub mod net;
 pub mod wiz;
 pub mod wled;
@@ -53,7 +54,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Mutex;
-use tokio::sync::{mpsc, oneshot};
+use std::sync::Arc;
+use tokio::sync::{mpsc, oneshot, Notify};
 
 use crate::control::Control;
 use crate::device::{Device, Health};
@@ -101,6 +103,20 @@ impl DeviceCmd {
 /* How to reach a running device task. */
 pub struct DeviceHandle {
     pub commands: mpsc::Sender<DeviceCmd>,
+    /* Issue #72: "read your state now" (a webhook said something changed).
+     * Only tasks that poll have one; for the others it would mean nothing. */
+    pub refresh: Option<Arc<Notify>>,
+}
+
+impl DeviceHandle {
+    pub fn new(commands: mpsc::Sender<DeviceCmd>) -> Self {
+        DeviceHandle { commands, refresh: None }
+    }
+
+    pub fn with_refresh(mut self, refresh: Arc<Notify>) -> Self {
+        self.refresh = Some(refresh);
+        self
+    }
 }
 
 /* What a device task may do to the hub: report state, and read or store
@@ -124,6 +140,17 @@ impl Hub {
         if let Err(e) = self.control.set_online(id, online).await {
             println!("adapters: could not record whether {id} is online: {e}");
         }
+    }
+
+    /* The device as the hub knows it now (issue #72: a task that hasn't
+     * heard from its device yet falls back to the saved state). */
+    pub async fn device(&self, id: &str) -> Option<Device> {
+        self.control.get(id).await.ok().flatten()
+    }
+
+    /* Issue #72: a battery device reported (Device::last_seen). */
+    pub async fn seen(&self, id: &str) {
+        self.control.seen(id).await;
     }
 
     pub fn secrets(&self, id: &str) -> DeviceSecrets {
@@ -232,6 +259,8 @@ pub struct Registry {
     /* std Mutex, not tokio's: only held for a quick map lookup, never
      * across an .await. */
     running: Mutex<HashMap<DeviceId, mpsc::Sender<DeviceCmd>>>,
+    /* Their "read your state now" signals (issue #72), where they have one. */
+    refreshers: Mutex<HashMap<DeviceId, Arc<Notify>>>,
 }
 
 impl Registry {
@@ -239,6 +268,7 @@ impl Registry {
         Registry {
             adapters: adapters.into_iter().map(|a| (a.id(), a)).collect(),
             running: Mutex::new(HashMap::new()),
+            refreshers: Mutex::new(HashMap::new()),
         }
     }
 
@@ -282,12 +312,29 @@ impl Registry {
         };
         let handle = adapter.start(device, Hub { control: control.clone() });
         self.running.lock().unwrap().insert(device.id.clone(), handle.commands);
+        match handle.refresh {
+            Some(refresh) => self.refreshers.lock().unwrap().insert(device.id.clone(), refresh),
+            None => self.refreshers.lock().unwrap().remove(&device.id),
+        };
     }
 
     /* Stops a device's task (the device was removed): dropping the only
      * sender ends the task's command loop. */
     pub fn stop(&self, id: &str) {
         self.running.lock().unwrap().remove(id);
+        self.refreshers.lock().unwrap().remove(id);
+    }
+
+    /* "Read your state now" (a webhook, issue #72). false: this device's
+     * task has nothing to refresh (it's told by the device anyway). */
+    pub fn refresh(&self, id: &str) -> bool {
+        match self.refreshers.lock().unwrap().get(id) {
+            Some(refresh) => {
+                refresh.notify_one();
+                true
+            }
+            None => false,
+        }
     }
 
     /* A command for a hardware device (already checked by control.rs). */

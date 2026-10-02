@@ -29,19 +29,25 @@
  *                       in the WiZ app: "Fireplace", "Ocean"...) the colour
  *                       keeps changing: not reported.
  *
+ * PUSHES (issue #72): a light the hub has "registered" with sends a
+ * syncPilot message to the hub's UDP port 38900 whenever its state
+ * changes -- in the WiZ app, by its own schedule, by a command. The
+ * registration lapses after ~30 s, so each task renews it every
+ * REGISTER_EVERY. One listener (Pushes) serves every light; a push is
+ * matched to its light by MAC. While pushes arrive, polling slows to
+ * POLL_WHILE_PUSHED -- only a safety net.
+ *
  * THE DEVICE'S TASK: UDP has no connection to keep, so the task asks
  * getPilot every POLL_EVERY (changes made in the WiZ app show up within
  * that) and after every command (the confirmation). Each request is tried
  * a few times: UDP may lose a packet. A bulb that doesn't answer is
  * offline; asked again every RETRY..RETRY_MAX (switched off at the wall,
  * it can be for days).
- * (WiZ lights can also PUSH their state, after a "registration" with the
- * hub's address -- needs another open port and renewing every few
- * seconds; polling is simpler and enough for now.)
  */
 use serde_json::{json, Value};
-use std::time::Duration;
-use tokio::sync::mpsc;
+use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
+use tokio::sync::{broadcast, mpsc};
 
 use super::net::{self, NetError};
 use super::wled::{hex_to_rgb, rgb_to_hex};
@@ -59,12 +65,78 @@ const POLL_EVERY: Duration = Duration::from_secs(if cfg!(test) { 1 } else { 5 })
 /* ...and, while it doesn't, from RETRY_MIN, doubling to RETRY_MAX. */
 const RETRY_MIN: Duration = Duration::from_secs(if cfg!(test) { 1 } else { 5 });
 const RETRY_MAX: Duration = Duration::from_secs(60);
+/* Pushes (see the header): the hub's port (fixed by WiZ), how often the
+ * registration is renewed, how often to poll while pushes arrive. */
+pub const PUSH_PORT: u16 = 38900;
+const REGISTER_EVERY: Duration = Duration::from_secs(if cfg!(test) { 1 } else { 20 });
+const POLL_WHILE_PUSHED: Duration = Duration::from_secs(30);
 /* What WiZ lights accept. */
 const MIN_DIMMING: u8 = 10;
 const MIN_KELVIN: u16 = 2200;
 const MAX_KELVIN: u16 = 6500;
 
-pub struct Wiz;
+/* The one listener for every light's pushes: (MAC, params). */
+#[derive(Clone)]
+struct Pushes {
+    tx: broadcast::Sender<(String, Value)>,
+}
+
+impl Pushes {
+    /* Opens the port and starts reading it. None if it can't be opened
+     * (then the lights are only polled, as before). */
+    fn open(port: u16) -> Option<(Pushes, u16)> {
+        let socket = std::net::UdpSocket::bind(("0.0.0.0", port))
+            .and_then(|s| s.set_nonblocking(true).map(|()| s))
+            .map_err(|e| println!("wiz: can't listen for pushes on UDP {port}: {e} (polling only)"))
+            .ok()?;
+        let bound = socket.local_addr().ok()?.port();
+        let socket = tokio::net::UdpSocket::from_std(socket).ok()?;
+        let (tx, _) = broadcast::channel(64);
+        let pushes = Pushes { tx };
+        let sender = pushes.tx.clone();
+        tokio::spawn(async move {
+            let mut buf = [0u8; 2048];
+            while let Ok((len, _)) = socket.recv_from(&mut buf).await {
+                let Ok(message) = serde_json::from_slice::<Value>(&buf[..len]) else { continue };
+                if message["method"] == "syncPilot" {
+                    if let Some(mac) = message["params"]["mac"].as_str() {
+                        let _ = sender.send((mac.to_lowercase(), message["params"].clone()));
+                    }
+                }
+            }
+        });
+        println!("wiz: listening for pushes on UDP {bound}");
+        Some((pushes, bound))
+    }
+}
+
+pub struct Wiz {
+    /* The port pushes are listened for (PUSH_PORT; tests: 0, any free). */
+    push_port: u16,
+    /* Opened at the first light (and the port really bound). */
+    pushes: OnceLock<Option<(Pushes, u16)>>,
+}
+
+impl Wiz {
+    pub fn new() -> Self {
+        Wiz { push_port: PUSH_PORT, pushes: OnceLock::new() }
+    }
+
+    /* Tests: any free port; push_port() says which. */
+    #[cfg(test)]
+    fn for_tests() -> Self {
+        Wiz { push_port: 0, pushes: OnceLock::new() }
+    }
+
+    fn pushes(&self) -> Option<(Pushes, u16)> {
+        self.pushes.get_or_init(|| Pushes::open(self.push_port)).clone()
+    }
+
+    #[cfg(test)]
+    fn push_port(&self) -> u16 {
+        self.pushes().map_or(0, |(_, port)| port)
+    }
+}
 
 impl Adapter for Wiz {
     fn id(&self) -> &'static str {
@@ -76,12 +148,16 @@ impl Adapter for Wiz {
         let task = Task {
             id: device.id.clone(),
             host: device.config.get("host").cloned(),
+            mac: device.config.get("mac").map(|m| m.replace(':', "").to_lowercase()),
+            pushes: self.pushes().map(|(p, _)| p.tx.subscribe()),
             has_color: device.capabilities.color.is_some(),
             has_dimmer: device.capabilities.dimmer.is_some(),
             hub,
         };
-        tokio::spawn(task.run(commands_rx));
-        DeviceHandle { commands }
+        /* Issue #72: a webhook can ask for the state at once. */
+        let refresh = Arc::new(tokio::sync::Notify::new());
+        tokio::spawn(task.run(commands_rx, refresh.clone()));
+        DeviceHandle::new(commands).with_refresh(refresh)
     }
 
     fn probe<'a>(&'a self, values: &'a SetupValues) -> BoxFuture<'a, Result<Probe, SetupError>> {
@@ -93,6 +169,9 @@ impl Adapter for Wiz {
 struct Task {
     id: String,
     host: Option<String>,
+    /* Its MAC (setup's probe saved it): which pushes are its. */
+    mac: Option<String>,
+    pushes: Option<broadcast::Receiver<(String, Value)>>,
     /* Only the capabilities the device was created with are reported. */
     has_color: bool,
     has_dimmer: bool,
@@ -100,7 +179,7 @@ struct Task {
 }
 
 impl Task {
-    async fn run(self, mut commands: mpsc::Receiver<DeviceCmd>) {
+    async fn run(mut self, mut commands: mpsc::Receiver<DeviceCmd>, refresh: Arc<tokio::sync::Notify>) {
         let Some(host) = self.host.clone() else {
             println!("wiz: {} has no address (config \"host\")", self.id);
             self.hub.set_online(&self.id, Health::Offline).await;
@@ -116,9 +195,27 @@ impl Task {
         let mut retry = RETRY_MIN;
         /* Log a failing light once per outage, not once per attempt. */
         let mut online = None;
+        /* Pushes: renew the registration on this timer; when one came. */
+        let mut register = tokio::time::interval(REGISTER_EVERY);
+        let mut last_push: Option<Instant> = None;
+        let mut pushes = self.pushes.take();
         loop {
             tokio::select! {
                 _ = tokio::time::sleep(wait) => {}
+                _ = register.tick(), if pushes.is_some() && self.mac.is_some() => {
+                    self.register(&host).await;
+                    continue;
+                }
+                push = next_push(&mut pushes) => {
+                    let Some((mac, params)) = push else { continue };
+                    if Some(&mac) == self.mac.as_ref() && self.report(&params).await.is_ok() {
+                        last_push = Some(Instant::now());
+                        online = Some(true);
+                    }
+                    continue;
+                }
+                /* "Read your state now" (a webhook): the poll comes early. */
+                _ = refresh.notified() => {}
                 cmd = commands.recv() => match cmd {
                     None => return,
                     Some(cmd) => {
@@ -136,7 +233,9 @@ impl Task {
                     }
                     online = Some(true);
                     retry = RETRY_MIN;
-                    wait = POLL_EVERY;
+                    /* Pushes arriving: polling is only the safety net. */
+                    let pushed = last_push.is_some_and(|t| t.elapsed() < REGISTER_EVERY * 3);
+                    wait = if pushed { POLL_WHILE_PUSHED } else { POLL_EVERY };
                 }
                 Err(e) => {
                     if online != Some(false) {
@@ -149,6 +248,18 @@ impl Task {
                 }
             }
         }
+    }
+
+    /* "Send me your changes" (see the header). Its answer isn't needed:
+     * the pushes are the proof. */
+    async fn register(&self, host: &str) {
+        let params = json!({
+            "phoneIp": crate::network::lan_address(),
+            "phoneMac": crate::network::lan_mac(),
+            "register": true,
+            "id": "1",
+        });
+        let _ = request(host, "registration", params).await;
     }
 
     /* getPilot -> report. */
@@ -189,6 +300,20 @@ impl Task {
         /* Online after the state (see wled.rs). */
         self.hub.set_online(&self.id, Health::Online).await;
         Ok(())
+    }
+}
+
+/* The next push, or never (no listener). */
+async fn next_push(pushes: &mut Option<broadcast::Receiver<(String, Value)>>) -> Option<(String, Value)> {
+    match pushes {
+        Some(rx) => loop {
+            match rx.recv().await {
+                Ok(push) => return Some(push),
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Closed) => return std::future::pending().await,
+            }
+        },
+        None => std::future::pending().await,
     }
 }
 
@@ -349,6 +474,7 @@ mod tests {
             config: [("host".to_string(), host.to_string())].into(),
             identity: String::new(),
             online: None,
+            last_seen: None,
             capabilities: Capabilities {
                 switch: Some(Switch { on: false }),
                 dimmer: Some(Dimmer { level: 100 }),
@@ -364,7 +490,7 @@ mod tests {
     #[tokio::test]
     async fn follows_and_commands_a_simulated_bulb() {
         let sim = Sim::start().await;
-        let mut hub = TestHub::start(bulb(&sim.host()), Box::new(Wiz)).await;
+        let mut hub = TestHub::start(bulb(&sim.host()), Box::new(Wiz::for_tests())).await;
 
         /* The first poll reports the real state: on, 80 %, warm white. */
         let d = hub.until(|d| d.online == Some(Health::Online)).await;
@@ -398,12 +524,42 @@ mod tests {
         hub.registry.stop("bulb");
     }
 
+    /* Issue #72: registered, the light pushes its changes; polling slows
+     * down to a safety net. */
+    #[tokio::test]
+    async fn pushes_are_followed() {
+        let sim = Sim::start().await;
+        let wiz = Wiz::for_tests();
+        sim.push_to(format!("127.0.0.1:{}", wiz.push_port()).parse().unwrap());
+        let mut light = bulb(&sim.host());
+        light.config.insert("mac".into(), "a8bb50aabbcc".into());
+        let mut hub = TestHub::start(light, Box::new(wiz)).await;
+        hub.until(|d| d.online == Some(Health::Online)).await;
+        for _ in 0..30 {
+            if sim.registered() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(sim.registered(), "the hub registered for pushes");
+
+        sim.change_from_outside(json!({"temp": 3000}));
+        hub.until(|d| d.capabilities.color.as_ref().and_then(|c| c.kelvin) == Some(3000)).await;
+        /* Pushes flow: the poll is now 30 s away -- this one can only come
+         * as a push. */
+        let started = Instant::now();
+        sim.change_from_outside(json!({"dimming": 40}));
+        hub.until(|d| d.capabilities.dimmer == Some(Dimmer { level: 40 })).await;
+        assert!(started.elapsed() < Duration::from_millis(800), "{:?}", started.elapsed());
+        hub.registry.stop("bulb");
+    }
+
     #[tokio::test]
     async fn lost_packets_are_retried() {
         let sim = Sim::start().await;
         /* Every other datagram is "lost": each request still succeeds. */
         sim.lose_every_other();
-        let mut hub = TestHub::start(bulb(&sim.host()), Box::new(Wiz)).await;
+        let mut hub = TestHub::start(bulb(&sim.host()), Box::new(Wiz::for_tests())).await;
         hub.until(|d| d.online == Some(Health::Online)).await;
         for level in [20, 40, 60] {
             let d = hub.control.command("bulb", "dimmer", json!({"level": level})).await.unwrap();
@@ -419,13 +575,13 @@ mod tests {
             plain: [("host".to_string(), sim.host())].into(),
             ..Default::default()
         };
-        let found = Wiz.probe(&values).await.unwrap();
+        let found = Wiz::for_tests().probe(&values).await.unwrap();
         assert_eq!(found.values["mac"], "a8bb50aabbcc");
         assert_eq!(found.summary, "WiZ ESP01_SHRGB1C_31, firmware 1.26.0");
         /* Gone: on the LAN that's a timeout; here, on localhost, the
          * kernel says at once that nothing listens (unreachable). */
         sim.stop();
-        let kind = Wiz.probe(&values).await.unwrap_err().kind;
+        let kind = Wiz::for_tests().probe(&values).await.unwrap_err().kind;
         assert!(matches!(kind, ErrorKind::Timeout | ErrorKind::Unreachable), "{kind:?}");
     }
 
@@ -441,8 +597,8 @@ mod tests {
             plain: [("host".to_string(), host.clone())].into(),
             ..Default::default()
         };
-        println!("probe: {:?}", Wiz.probe(&values).await.unwrap());
-        let mut hub = TestHub::start(bulb(&host), Box::new(Wiz)).await;
+        println!("probe: {:?}", Wiz::for_tests().probe(&values).await.unwrap());
+        let mut hub = TestHub::start(bulb(&host), Box::new(Wiz::for_tests())).await;
         let found = hub.until(|d| d.online == Some(Health::Online)).await;
         println!("found: {:?}", found.capabilities);
         for (capability, value) in [
