@@ -9,6 +9,8 @@
 #   udp 5353   mDNS: answering "where is stm32mp1.local?" (avahi), and
 #              devices answering the hub's own searches (discovery.rs, #40)
 #   udp 50190  answers to the hub's SSDP searches (discovery.rs, #40)
+#   udp 50191  answers to the hub's UDP broadcast searches (WiZ bulbs;
+#              discovery.rs, #75)
 #   on the setup hotspot's interface (uap0) only, so only while it's open:
 #     tcp 80   the setup page (hotspot.rs)
 #     udp 67   DHCP: handing out addresses to phones that join it
@@ -78,6 +80,13 @@ table inet hub {
         # port (SSDP_PORT there; keep them equal) and only reads SSDP
         # answers on it.
         udp dport 50190 accept
+
+        # Answers to the hub's UDP BROADCAST device searches (issue #75,
+        # WiZ bulbs): the same problem -- an answer comes from the
+        # device's address, not the broadcast address asked, so it isn't
+        # seen as a reply. discovery.rs sends those probes from this port
+        # only (UDP_PORT there; keep them equal).
+        udp dport 50191 accept
 
         # The hub's own services.
         tcp dport @lan_tcp accept

@@ -96,15 +96,22 @@ async fn main() {
     tokio::spawn(rpmsg::run(rpmsg_rx, led_tx));
 
     /* The adapters (issue #40): the code for each device family's
-     * protocol: the board's LED through the M4, WLED lights, LG TVs. And the one door
+     * protocol: the board's LED through the M4, WLED lights, LG TVs, WiZ
+     * bulbs, and simple HTTP devices described by their template (#75).
+     * And the one door
      * for device commands (control.rs, issue #34): the WebSocket clients
      * and the cloud both go through it; it hands hardware commands to the
      * device's adapter. */
+    /* The generic HTTP adapter (issue #75) runs what templates describe:
+     * it gets them once they're loaded, below. */
+    let http_generic = adapters::http_generic::HttpGeneric::new();
     let adapters = std::sync::Arc::new(adapters::Registry::new(vec![
         Box::new(adapters::m4_led::M4Led::new(rpmsg_tx, led_rx)),
         Box::new(adapters::wled::Wled),
         Box::new(adapters::lg_webos::LgWebos),
         Box::new(adapters::ir_blaster::IrBlaster),
+        Box::new(adapters::wiz::Wiz),
+        Box::new(http_generic.clone()),
     ]));
     /* Devices' secrets (issue #40, secrets.rs): a separate hubd-only file,
      * never logged, never sent to a client. */
@@ -149,6 +156,7 @@ async fn main() {
         }
     }
     let templates = std::sync::Arc::new(templates);
+    http_generic.set_templates(templates.clone());
 
     /* Finding devices on the LAN (issue #40): the templates say what to
      * look for; the inbox and IP auto-update come from here. */

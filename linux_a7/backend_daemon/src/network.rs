@@ -877,13 +877,35 @@ fn read_trimmed(path: &str) -> Option<String> {
 /* Every interface's IPv4 address, via getifaddrs() -- the C library call
  * `ip addr` itself uses. */
 pub fn ipv4_addresses() -> HashMap<String, Ipv4Addr> {
-    let mut result = HashMap::new();
+    ipv4_interfaces().into_iter().map(|i| (i.name, i.address)).collect()
+}
+
+/* One interface's IPv4 network. */
+pub struct Ipv4Interface {
+    pub name: String,
+    pub address: Ipv4Addr,
+    pub netmask: Ipv4Addr,
+}
+
+impl Ipv4Interface {
+    /* The address that reaches every device on this interface's network
+     * ("directed broadcast"): the network part of the address with all
+     * host bits set -- 192.168.1.141/24 -> 192.168.1.255. */
+    pub fn broadcast(&self) -> Ipv4Addr {
+        Ipv4Addr::from(u32::from(self.address) | !u32::from(self.netmask))
+    }
+}
+
+/* Every interface's IPv4 address and netmask. */
+pub fn ipv4_interfaces() -> Vec<Ipv4Interface> {
+    let mut result = Vec::new();
     let mut list: *mut libc::ifaddrs = std::ptr::null_mut();
     /* SAFETY: getifaddrs allocates a linked list and stores its head in
      * `list`; we only read it, following ifa_next until null, and hand it
-     * back to freeifaddrs exactly once. ifa_addr may be null (interfaces
-     * without an address) and is checked before use; it's only cast to
-     * sockaddr_in when its family says it IS one (AF_INET). */
+     * back to freeifaddrs exactly once. ifa_addr and ifa_netmask may be
+     * null (interfaces without an address) and are checked before use;
+     * they're only cast to sockaddr_in when the family says it IS one
+     * (AF_INET). */
     unsafe {
         if libc::getifaddrs(&mut list) != 0 {
             return result;
@@ -894,8 +916,19 @@ pub fn ipv4_addresses() -> HashMap<String, Ipv4Addr> {
             if !ifa.ifa_addr.is_null() && (*ifa.ifa_addr).sa_family as i32 == libc::AF_INET {
                 let addr = &*(ifa.ifa_addr as *const libc::sockaddr_in);
                 let name = std::ffi::CStr::from_ptr(ifa.ifa_name).to_string_lossy().into_owned();
+                /* No netmask: treat it as a single address (/32). */
+                let netmask = if ifa.ifa_netmask.is_null() {
+                    Ipv4Addr::BROADCAST
+                } else {
+                    let mask = &*(ifa.ifa_netmask as *const libc::sockaddr_in);
+                    Ipv4Addr::from(u32::from_be(mask.sin_addr.s_addr))
+                };
                 /* s_addr is in network byte order (big-endian). */
-                result.insert(name, Ipv4Addr::from(u32::from_be(addr.sin_addr.s_addr)));
+                result.push(Ipv4Interface {
+                    name,
+                    address: Ipv4Addr::from(u32::from_be(addr.sin_addr.s_addr)),
+                    netmask,
+                });
             }
             entry = ifa.ifa_next;
         }
@@ -907,6 +940,18 @@ pub fn ipv4_addresses() -> HashMap<String, Ipv4Addr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn directed_broadcasts() {
+        let iface = |address: &str, netmask: &str| Ipv4Interface {
+            name: "eth0".into(),
+            address: address.parse().unwrap(),
+            netmask: netmask.parse().unwrap(),
+        };
+        assert_eq!(iface("192.168.1.141", "255.255.255.0").broadcast(), Ipv4Addr::new(192, 168, 1, 255));
+        assert_eq!(iface("10.4.3.2", "255.255.0.0").broadcast(), Ipv4Addr::new(10, 4, 255, 255));
+        assert_eq!(iface("10.4.3.2", "255.255.255.255").broadcast(), Ipv4Addr::new(10, 4, 3, 2));
+    }
 
     #[test]
     fn ssids_are_unescaped() {
