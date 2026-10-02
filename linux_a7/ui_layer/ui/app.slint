@@ -21,7 +21,10 @@ import "../fonts/DejaVuSans.ttf";
 // screens (issue #61).
 import { Theme, Splash, Glyphs } from "theme.slint";
 import { HeaderButton } from "common.slint";
-import { DeviceItem, MediaInputItem, ColorChip, DeviceList } from "devices.slint";
+import { DeviceItem, MediaInputItem, ColorChip, DeviceRow } from "devices.slint";
+import { TileItem, TileRow, FilterChip, TileGrid, FilterBar } from "tiles.slint";
+import { Icon } from "icons.slint";
+import { IconButton, NavBar, SceneChip, BigLevel } from "home.slint";
 import { TemplateItem, FoundItem, FieldItem, ChoiceItem, VariantItem, AddDevicePage, WizardPage, DevicePage } from "wizard.slint";
 import { RemoteItem, RemotePage } from "remote.slint";
 import { IrRemotePage, IrKeyItem, IrRow } from "ir_remote.slint";
@@ -33,7 +36,7 @@ import { AutomationItem, LogItem, AutomationsPage, LogPage, NewAutomationPage, L
 
 // Re-exported so main.rs can use these types (the Rust side only sees what
 // the main file exports).
-export { NetStatus, WifiNetwork, DeviceItem, MediaInputItem, ColorChip, ClientItem, AccentItem, ZoneItem }
+export { NetStatus, WifiNetwork, DeviceItem, MediaInputItem, ColorChip, TileItem, TileRow, FilterChip, ClientItem, AccentItem, ZoneItem }
 export { TemplateItem, FoundItem, FieldItem, ChoiceItem, VariantItem, RemoteItem, IrKeyItem, IrRow }
 export { SceneItem, PickItem, AutomationItem, LogItem }
 // The design tokens (issue #39): main.rs's theme.rs sets them.
@@ -102,17 +105,29 @@ component WelcomeScreen inherits Rectangle {
 // React/Flutter/etc. "widget". `AppWindow` is the name main.rs's generated
 // code (via `slint::include_modules!()`) will know this as.
 export component AppWindow inherits Window {
-    // The devices (issue #34), one DeviceItem per device, kept up to date
-    // by main.rs from backend_daemon's events -- split into rows of
-    // `columns` cards (issue #38; see DeviceList). "in property": Rust
-    // writes it, this file only reads it.
-    in property <[[DeviceItem]]> device-rows;
-
-    // How many device cards side by side (issue #38), by the window's
-    // width: the touchscreen (480 px) 1, like a phone; a monitor at
-    // 800x600 2; at 1280x720 3. `out`: main.rs reads it to split the
-    // devices into rows.
-    out property <int> columns: root.width < 600px ? 1 : root.width < 1000px ? 2 : 3;
+    // The devices (issue #34), kept up to date by main.rs from
+    // backend_daemon's events. Since issue #95 as tiles (tiles.slint):
+    // rows of `tile-columns` tiles, a room's heading before its tiles,
+    // only the ones the filter bar's chip `device-filter` selects. "in
+    // property": Rust writes it, this file only reads it.
+    in property <[TileRow]> tile-rows;
+    in property <[FilterChip]> filter-chips;
+    in-out property <string> device-filter: "all";
+    // Tiles side by side: 2 on the touchscreen, 3 at 800x600, 4 wider.
+    out property <int> tile-columns: root.width < 600px ? 2 : root.width < 1000px ? 3 : 4;
+    // The device whose controls page (page 20) is open: its full card
+    // (devices.slint's DeviceRow), and whether it's a favourite.
+    in property <DeviceItem> controls-item;
+    // Where a device's Remote and Details pages go back to: the controls
+    // page if they were opened from it, else the Devices page.
+    in-out property <int> device-back: 0;
+    in property <bool> controls-favourite;
+    // Its tile (tiles.rs): the icon, the state line, the tint.
+    in property <TileItem> controls-tile;
+    // The home screen's clock (issue #95): "22:31" and "Good evening -
+    // Friday 3 October", set by main.rs in the hub's time zone.
+    in property <string> clock-time;
+    in property <string> clock-date;
 
     // The mouse pointer (issue #38), drawn by this file at the bottom:
     // Slint's software renderer doesn't draw one by itself. main.rs follows
@@ -177,7 +192,6 @@ export component AppWindow inherits Window {
     // All of them (the Scenes page), and the first few for the Devices
     // page's quick buttons (main.rs picks how many fit).
     in property <[SceneItem]> scenes;
-    in property <[SceneItem]> quick-scenes;
     in property <string> scenes-message;
     in property <bool> scenes-message-ok: true;
     // The scene being run right now ("" = none).
@@ -297,6 +311,12 @@ export component AppWindow inherits Window {
     callback set-cover-position(string, int);
     callback set-climate(string, string, float, string);
     callback set-lock(string, bool);
+    // Issue #95: a filter chip tapped, a tile's controls opened, "Turn
+    // all off" (the lights on), a device starred or not.
+    callback pick-filter(string);
+    callback open-controls(string);
+    callback all-off();
+    callback set-favourite(string, bool);
     // Issue #85: an IR light's colour chip, and its brightness -/+ (a
     // press of that device's remote button).
     callback set-color(string, string);
@@ -430,61 +450,76 @@ export component AppWindow inherits Window {
 
     // The normal screen: a top bar (title, network indicator), then every
     // device, drawn from its capabilities (devices.slint).
+    // Issue #95: the bottom bar's height on the four main places (Home,
+    // Scenes, Automations, Settings), 0 elsewhere.
+    property <length> nav-height: (page == 0 || page == 4 || page == 14 || page == 16) && ever-connected ? 68px : 0px;
+
     if page == 0: VerticalLayout {
+        y: 0;
+        height: parent.height - nav-height;
         padding: Theme.space-s;
+        padding-left: Theme.space-l;
+        padding-right: Theme.space-l;
         spacing: Theme.space-s;
 
+        // The clock, the greeting and the date (issue #95: the hub is a
+        // wall panel), then add-a-device and the network.
         HorizontalLayout {
-            height: Theme.touch-height;
             spacing: Theme.space-s;
-            Text {
-                text: "Devices";
-                color: Theme.text;
-                font-size: Theme.font-title;
-                vertical-alignment: center;
+            VerticalLayout {
                 horizontal-stretch: 1;
-            }
-            // Add a device (issue #40): square, the header is full on the
-            // 480 px touchscreen.
-            HeaderButton {
-                text: "+";
-                width: Theme.touch-height;
-                clicked => {
-                    root.open-add-device();
+                alignment: center;
+                Text {
+                    text: root.clock-time;
+                    color: Theme.text;
+                    font-size: Theme.font-display;
+                }
+                Text {
+                    text: root.clock-date;
+                    color: Theme.text-muted;
+                    font-size: Theme.font-body;
+                    overflow: elide;
                 }
             }
-            HeaderButton {
-                text: "Settings";
-                clicked => {
-                    page = 4;
-                }
-            }
-            NetIndicator {
-                net: root.net;
-                clicked => {
-                    net-message = "";
-                    network-back = 0;
-                    page = 1;
-                    wifi-scan();
+            VerticalLayout {
+                alignment: center;
+                HorizontalLayout {
+                    spacing: Theme.space-s;
+                    // Add a device (issue #40).
+                    IconButton {
+                        icon: "add";
+                        clicked => {
+                            root.open-add-device();
+                        }
+                    }
+                    NetIndicator {
+                        net: root.net;
+                        compact: true;
+                        clicked => {
+                            net-message = "";
+                            network-back = 0;
+                            page = 1;
+                            wifi-scan();
+                        }
+                    }
                 }
             }
         }
 
-        // Scenes (issue #47): one tap runs one; "Scenes" opens the list.
-        if scenes.length > 0: HorizontalLayout {
-            height: Theme.touch-height;
-            spacing: Theme.space-s;
-            for scene in quick-scenes: HeaderButton {
-                text: scene-running == scene.id ? "\u{2026}" : scene.name;
-                horizontal-stretch: 1;
-                clicked => {
-                    root.run-scene(scene.id);
-                }
-            }
-            HeaderButton {
-                text: "Scenes";
-                clicked => {
-                    root.open-scenes();
+        // Scenes (issue #47): one tap runs one; all of them, scrolled
+        // sideways when they don't fit.
+        if scenes.length > 0: Flickable {
+            height: 44px;
+            content-width: max(self.width, scene-row.preferred-width);
+            scene-row := HorizontalLayout {
+                spacing: Theme.space-s;
+                alignment: start;
+                for scene in scenes: SceneChip {
+                    text: scene.name;
+                    running: scene-running == scene.id;
+                    clicked => {
+                        root.run-scene(scene.id);
+                    }
                 }
             }
         }
@@ -529,10 +564,172 @@ export component AppWindow inherits Window {
             }
         }
 
-        DeviceList {
+        // Issue #95: what to show -- summaries ("3 on", "18 W", "2
+        // offline"), All, Favourites, the rooms -- then the tiles.
+        FilterBar {
+            chips: root.filter-chips;
+            selected: root.device-filter;
+            pick(id) => {
+                root.pick-filter(id);
+            }
+        }
+        // The lights that are on: all off with one tap.
+        if device-filter == "lights": HeaderButton {
+            text: "Turn all off";
+            clicked => {
+                root.all-off();
+            }
+        }
+        TileGrid {
             vertical-stretch: 1;
-            rows: root.device-rows;
-            columns: root.columns;
+            rows: root.tile-rows;
+            columns: root.tile-columns;
+            empty-text: root.filter-chips.length == 0 ? "No devices yet.\n\nTap + to add one." : "Nothing here right now.";
+            toggle(id, on) => {
+                root.set-switch(id, on);
+            }
+            open(id) => {
+                root.open-controls(id);
+            }
+        }
+    }
+
+    // Issue #95: one device's controls -- its full card, as the Devices
+    // page showed every device until then -- with a star and its details.
+    if page == 20: VerticalLayout {
+        width: min(parent.width, Theme.content-max-width);
+        x: (parent.width - self.width) / 2;
+        padding: Theme.space-l;
+        spacing: Theme.space-m;
+        property <bool> lit: controls-tile.on && controls-tile.status == "";
+        // Back, the star (Favourites), the details page.
+        HorizontalLayout {
+            spacing: Theme.space-s;
+            IconButton {
+                icon: "back";
+                clicked => {
+                    device-back = 0;
+                    page = 0;
+                }
+            }
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+            IconButton {
+                icon: root.controls-favourite ? "star" : "star-outline";
+                tint: root.controls-favourite ? Theme.accent : Theme.text-muted;
+                clicked => {
+                    root.set-favourite(root.controls-item.id, !root.controls-favourite);
+                }
+            }
+            IconButton {
+                icon: "info";
+                clicked => {
+                    root.open-device(root.controls-item.id);
+                }
+            }
+        }
+        // The device: its icon glowing in its colour while on, its name and
+        // state, and -- if it has one -- a big power button.
+        Rectangle {
+            height: 104px;
+            border-radius: Theme.radius-medium * 2;
+            background: lit ? controls-tile.tint.mix(Theme.surface, 0.22) : Theme.surface;
+            animate background { duration: 180ms; }
+            HorizontalLayout {
+                padding: Theme.space-l;
+                spacing: Theme.space-l;
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 64px;
+                        height: 64px;
+                        border-radius: self.height / 2;
+                        background: lit ? controls-tile.tint : Theme.surface-pressed;
+                        animate background { duration: 180ms; }
+                        Icon {
+                            width: 32px;
+                            height: 32px;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            kind: controls-tile.icon;
+                            color: lit ? controls-tile.on-tint : Theme.text-muted;
+                        }
+                    }
+                }
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    alignment: center;
+                    spacing: Theme.space-xxs;
+                    Text {
+                        text: controls-item.name;
+                        color: Theme.text;
+                        font-size: Theme.font-heading;
+                        overflow: elide;
+                    }
+                    Text {
+                        text: controls-tile.status != "" ? controls-tile.status : controls-tile.state;
+                        color: controls-tile.status != "" ? Theme.error : Theme.text-muted;
+                        font-size: Theme.font-body;
+                        overflow: elide;
+                    }
+                    if controls-item.room != "": Text {
+                        text: controls-item.room;
+                        color: Theme.text-muted;
+                        font-size: Theme.font-caption;
+                        overflow: elide;
+                    }
+                }
+                if controls-item.has-switch: VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 64px;
+                        height: 64px;
+                        border-radius: self.height / 2;
+                        background: power-touch.pressed ? Theme.surface-pressed
+                            : controls-item.on ? controls-tile.tint : Theme.surface-pressed;
+                        animate background { duration: 180ms; }
+                        Icon {
+                            width: 32px;
+                            height: 32px;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            kind: "power-button";
+                            color: controls-item.on ? controls-tile.on-tint : Theme.text;
+                        }
+                        power-touch := TouchArea {
+                            clicked => {
+                                root.set-switch(controls-item.id, !controls-item.on);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if device-message != "": Text {
+            text: device-message;
+            color: device-message-ok ? Theme.ok : Theme.error;
+            font-size: Theme.font-body;
+            wrap: word-wrap;
+        }
+        // Brightness: a big slider in the light's colour.
+        if controls-item.has-dimmer: BigLevel {
+            level: controls-item.level;
+            tint: controls-tile.tint;
+            enabled: !controls-item.has-switch || controls-item.on;
+            set(level) => {
+                root.set-level(controls-item.id, level);
+            }
+        }
+        // Everything else the old card had (colours, remote, media,
+        // cover, climate, lock...), without its name, switch and level.
+        if controls-item.has-color || controls-item.has-media || controls-item.has-remote || controls-item.has-cover
+            || controls-item.has-climate || controls-item.has-lock || controls-item.sensor-text != ""
+            || controls-item.energy-text != "" || controls-item.can-reauth: DeviceRow {
+            // As tall as its content; the space below stays empty.
+            vertical-stretch: 0;
+            in-sheet: true;
+            item: root.controls-item;
             set-switch(id, on) => {
                 root.set-switch(id, on);
             }
@@ -570,6 +767,9 @@ export component AppWindow inherits Window {
                 root.device-press(id, button);
             }
         }
+        Rectangle {
+            vertical-stretch: 1;
+        }
     }
 
     if page == 13: IrRemotePage {
@@ -592,7 +792,7 @@ export component AppWindow inherits Window {
         question: root.ir-question;
         detail: root.ir-detail;
         back => {
-            page = 0;
+            page = device-back;
         }
         press(button) => {
             root.ir-press(button);
@@ -649,7 +849,7 @@ export component AppWindow inherits Window {
             root.remote-more();
         }
         back => {
-            page = 0;
+            page = device-back;
         }
         press(button) => {
             root.remote-press(button);
@@ -765,7 +965,7 @@ export component AppWindow inherits Window {
         has-remote: root.dev-has-remote;
         remote-learns: root.dev-remote-learns;
         back => {
-            page = 0;
+            page = device-back;
         }
         open-remote => {
             root.open-remote(root.dev-id);
@@ -785,7 +985,8 @@ export component AppWindow inherits Window {
     if page == 14: ScenesPage {
         width: min(parent.width, Theme.content-max-width);
         x: (parent.width - self.width) / 2;
-        height: parent.height;
+        y: 0;
+        height: parent.height - nav-height;
         scenes: root.scenes;
         message: root.scenes-message;
         message-ok: root.scenes-message-ok;
@@ -830,7 +1031,8 @@ export component AppWindow inherits Window {
     if page == 16: AutomationsPage {
         width: min(parent.width, Theme.content-max-width);
         x: (parent.width - self.width) / 2;
-        height: parent.height;
+        y: 0;
+        height: parent.height - nav-height;
         automations: root.automations;
         message: root.automations-message;
         message-ok: root.automations-message-ok;
@@ -911,7 +1113,8 @@ export component AppWindow inherits Window {
         // Issue #38: centred, at most Theme.content-max-width wide.
         width: min(parent.width, Theme.content-max-width);
         x: (parent.width - self.width) / 2;
-        height: parent.height;
+        y: 0;
+        height: parent.height - nav-height;
         network-detail: root.net.uplink == "ethernet" ? "Connected by cable"
             : root.net.uplink == "wifi" ? ("WiFi " + root.net.wifi-ssid) : "Offline";
         client-count: root.clients.length;
@@ -1146,6 +1349,26 @@ export component AppWindow inherits Window {
         }
         pick(item) => {
             root.pick-zone(item);
+        }
+    }
+
+    // Issue #95: the bottom bar on the four main places.
+    if nav-height > 0: NavBar {
+        y: parent.height - self.height;
+        width: parent.width;
+        height: nav-height;
+        current: page == 14 ? 1 : page == 16 ? 2 : page == 4 ? 3 : 0;
+        go(place) => {
+            if (place == 0) {
+                device-back = 0;
+                page = 0;
+            } else if (place == 1) {
+                root.open-scenes();
+            } else if (place == 2) {
+                root.open-automations();
+            } else {
+                page = 4;
+            }
         }
     }
 

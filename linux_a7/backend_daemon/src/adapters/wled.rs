@@ -602,6 +602,7 @@ mod tests {
             identity: String::new(),
             online: None,
             last_seen: None,
+            favourite: false,
             capabilities: Capabilities {
                 switch: Some(Switch { on: false }),
                 dimmer: Some(Dimmer { level: 100 }),

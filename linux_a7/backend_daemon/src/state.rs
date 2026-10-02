@@ -65,11 +65,13 @@ pub enum Msg {
         device: Device,
         reply: oneshot::Sender<Result<Device, String>>,
     },
-    /* Rename it or move it to another room (None = leave as is). */
+    /* Rename it, move it to another room, star it (issue #95) (None =
+     * leave as is). */
     UpdateInfo {
         id: DeviceId,
         name: Option<String>,
         room: Option<String>,
+        favourite: Option<bool>,
         reply: oneshot::Sender<Result<Device, String>>,
     },
     /* Change some of an adapter's settings (issue #40), e.g. the new
@@ -155,8 +157,8 @@ pub async fn run(mut rx: mpsc::Receiver<Msg>, mut devices: HashMap<DeviceId, Dev
                 }
                 let _ = reply.send(result);
             }
-            Msg::UpdateInfo { id, name, room, reply } => {
-                let result = update_info(&mut devices, &id, name, room);
+            Msg::UpdateInfo { id, name, room, favourite, reply } => {
+                let result = update_info(&mut devices, &id, name, room, favourite);
                 if let Ok((device, true)) = &result {
                     changed(&out, &devices, Event::Changed(device.clone()), true);
                 }
@@ -258,6 +260,7 @@ fn update_info(
     id: &str,
     name: Option<String>,
     room: Option<String>,
+    favourite: Option<bool>,
 ) -> Result<(Device, bool), String> {
     let current = devices.get(id).ok_or_else(|| format!("unknown device {id:?}"))?;
     let mut new = current.clone();
@@ -266,6 +269,9 @@ fn update_info(
     }
     if let Some(room) = room {
         new.room = room;
+    }
+    if let Some(favourite) = favourite {
+        new.favourite = favourite;
     }
     if new == *current {
         return Ok((new, false));
@@ -383,6 +389,7 @@ pub fn encode_registry(devices: &HashMap<DeviceId, Device>) -> Vec<u8> {
         .map(|d| Device {
             online: None,
             last_seen: None,
+            favourite: false,
             ..d.clone()
         })
         .collect();
@@ -460,6 +467,7 @@ mod tests {
             identity: String::new(),
             online: None,
             last_seen: None,
+            favourite: false,
             capabilities: Capabilities {
                 switch: Some(Switch { on: false }),
                 dimmer: Some(Dimmer { level: 50 }),
@@ -606,11 +614,12 @@ mod tests {
             id: "lamp-1".into(),
             name: Some("Desk lamp".into()),
             room: Some("Office".into()),
+            favourite: Some(true),
             reply,
         })
         .await
         .unwrap();
-        assert_eq!((d.name.as_str(), d.room.as_str()), ("Desk lamp", "Office"));
+        assert_eq!((d.name.as_str(), d.room.as_str(), d.favourite), ("Desk lamp", "Office", true));
         assert!(matches!(a.events.recv().await.unwrap(), Event::Changed(_)));
 
         ask(&a.tx, |reply| Msg::RemoveDevice { id: "lamp-1".into(), reply }).await.unwrap();

@@ -1111,6 +1111,7 @@ mod tests {
             identity: String::new(),
             online: None,
             last_seen: None,
+            favourite: false,
             capabilities: Capabilities::with_defaults(&["remote".into()]).unwrap(),
         };
         let (state_tx, state_rx) = mpsc::channel(8);

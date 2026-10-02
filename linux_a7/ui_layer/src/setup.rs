@@ -59,6 +59,11 @@ pub struct Setup {
     /// A session left with Back while one of its steps was still running
     /// (a test, the TV's prompt): that step's late answer is ignored.
     cancelled: String,
+    /// Back was sent and its answer is awaited. If the hub can't go back
+    /// (a device picked from "found on your network" starts at its test
+    /// step: there is no earlier step in that session), Back leaves the
+    /// wizard instead of showing "this is the first step" forever (#95).
+    going_back: bool,
 }
 
 fn model<T: Clone + 'static>(items: Vec<T>) -> ModelRc<T> {
@@ -153,6 +158,18 @@ impl Setup {
             return;
         }
         let kind = text(&get("step"));
+        // Going back onto a step that runs by itself (the test, waiting for
+        // the device): it would run at once and lead forward again to the
+        // step Back was pressed on -- Back seemed to do nothing (#95). Go
+        // back past it; with nothing before it, the hub answers with an
+        // error and show_error leaves.
+        let runs_by_itself = kind == "test" || kind == "confirm_on_device" || kind == "provision_ble";
+        if self.going_back && runs_by_itself {
+            self.session = text(&get("session"));
+            let _ = tx.send(Request::WizardBack { session: self.session.clone() });
+            return;
+        }
+        self.going_back = false;
         // A secret revealed on the last step is hidden again on this one.
         ui.set_wizard_reveal(false);
         self.session = text(&get("session"));
@@ -235,7 +252,7 @@ impl Setup {
         self.show_fields(ui);
         ui.set_page(PAGE_WIZARD);
 
-        if kind == "test" || kind == "confirm_on_device" || kind == "provision_ble" {
+        if runs_by_itself {
             self.answer(ui, tx, Map::new());
         }
         ui.set_wizard_busy(self.busy);
@@ -274,8 +291,14 @@ impl Setup {
 
     /// A refused answer: the step stays, with the reason. If it's about
     /// one field (a mistyped address), the keyboard opens on it.
-    pub fn show_error(&mut self, ui: &AppWindow, session: &str, field: Option<&str>, message: &str, detail: &str) {
+    pub fn show_error(&mut self, ui: &AppWindow, tx: &Sender<Request>, session: &str, field: Option<&str>, message: &str, detail: &str) {
         if !self.cancelled.is_empty() && session == self.cancelled {
+            return;
+        }
+        if self.going_back {
+            // No step to go back to: leave, as Back on the first step does.
+            self.going_back = false;
+            self.leave(ui, tx);
             return;
         }
         self.busy = false;
@@ -292,6 +315,22 @@ impl Setup {
             }
             _ => {}
         }
+    }
+
+    /// The connection to backend_daemon was lost (issue #95: a Back
+    /// waiting for its answer then waited forever, and Back seemed to do
+    /// nothing). The hub forgets its setup sessions when it restarts, so
+    /// this one is over: say so, and let Back leave at once.
+    pub fn connection_lost(&mut self, ui: &AppWindow) {
+        if ui.get_page() != PAGE_WIZARD {
+            return;
+        }
+        self.busy = false;
+        ui.set_wizard_busy(false);
+        // number 0: Back cancels and leaves (see back()).
+        self.number = 0;
+        ui.set_wizard_error("The connection to the hub was lost: this setup has to start again. Tap Back.".into());
+        ui.set_wizard_detail("".into());
     }
 
     /// Done: the device added (or updated). Back to the device list.
@@ -407,18 +446,25 @@ impl Setup {
             return;
         }
         if self.number <= 1 || self.busy {
-            if self.busy {
-                self.cancelled = self.session.clone();
-            }
-            let _ = tx.send(Request::WizardCancel { session: self.session.clone() });
-            self.busy = false;
-            ui.set_wizard_busy(false);
-            ui.set_page(if self.back_page == 0 { PAGE_ADD } else { self.back_page });
+            self.leave(ui, tx);
             return;
         }
         self.busy = true;
+        self.going_back = true;
         ui.set_wizard_busy(true);
         let _ = tx.send(Request::WizardBack { session: self.session.clone() });
+    }
+
+    /// Ends this setup and goes back to where it was started from.
+    fn leave(&mut self, ui: &AppWindow, tx: &Sender<Request>) {
+        if self.busy {
+            self.cancelled = self.session.clone();
+        }
+        let _ = tx.send(Request::WizardCancel { session: self.session.clone() });
+        self.busy = false;
+        self.going_back = false;
+        ui.set_wizard_busy(false);
+        ui.set_page(if self.back_page == 0 { PAGE_ADD } else { self.back_page });
     }
 
     /// Another way in (e.g. "Enter the address" instead of searching).

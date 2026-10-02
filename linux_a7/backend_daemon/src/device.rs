@@ -81,6 +81,10 @@ pub struct Device {
      * client, and not in the cloud shadow (it would change every report). */
     #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
     pub last_seen: Option<u64>,
+    /* Issue #95: starred by someone, shown under "Favourites" on the
+     * screens. Saved, and in the cloud shadow (the app shares it). */
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub favourite: bool,
     pub capabilities: Capabilities,
 }
 
@@ -1250,6 +1254,7 @@ pub fn migrate_v1(id: &str, properties: &HashMap<String, serde_json::Value>) -> 
         identity: String::new(),
         online: None,
         last_seen: None,
+        favourite: false,
         capabilities: caps,
     };
     device.check().map_err(|e| format!("{id}: {e} (had: {})", dropped.join(", ")))?;
@@ -1452,6 +1457,7 @@ mod tests {
             identity: String::new(),
             online: None,
             last_seen: None,
+            favourite: false,
             capabilities: Capabilities {
                 switch: Some(Switch { on: true }),
                 dimmer: Some(Dimmer { level: 80 }),

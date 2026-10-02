@@ -142,11 +142,12 @@ impl Control {
         self.ask(|reply| Msg::AddDevice { device, reply }).await?
     }
 
-    pub async fn update_info(&self, id: &str, name: Option<String>, room: Option<String>) -> Result<Device, String> {
+    pub async fn update_info(&self, id: &str, name: Option<String>, room: Option<String>, favourite: Option<bool>) -> Result<Device, String> {
         self.ask(|reply| Msg::UpdateInfo {
             id: id.to_string(),
             name,
             room,
+            favourite,
             reply,
         })
         .await?

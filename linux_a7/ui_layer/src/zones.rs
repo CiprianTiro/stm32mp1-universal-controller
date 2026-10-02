@@ -89,8 +89,33 @@ pub fn local_moment(time_zone: &str, unix: u64) -> String {
     }
 }
 
+/// The home screen's clock (issue #95), at `unix` in the hub's time zone:
+/// ("22:31", "Good evening \u{2022} Friday 3 October").
+pub fn clock(time_zone: &str, unix: u64) -> (String, String) {
+    let tz: Tz = time_zone.parse().unwrap_or(Tz::UTC);
+    let Some(at) = chrono::DateTime::from_timestamp(unix as i64, 0) else {
+        return (String::new(), String::new());
+    };
+    let at = at.with_timezone(&tz);
+    let greeting = match chrono::Timelike::hour(&at) {
+        5..=11 => "Good morning",
+        12..=17 => "Good afternoon",
+        18..=22 => "Good evening",
+        _ => "Good night",
+    };
+    (at.format("%H:%M").to_string(), format!("{greeting} \u{2022} {}", at.format("%A %-d %B")))
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_clock_is_in_the_hub_time_zone() {
+        /* 2026-10-02 19:31 UTC = 22:31 in Bucharest (summer time). */
+        let (time, date) = super::clock("Europe/Bucharest", 1_790_969_460);
+        assert_eq!(time, "22:31");
+        assert_eq!(date, "Good evening \u{2022} Friday 2 October");
+    }
+
     use super::*;
 
     #[test]

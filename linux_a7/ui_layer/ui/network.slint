@@ -7,6 +7,7 @@
 // ui_layer: nothing here decides whether a connection worked, it shows
 // what the backend says.
 
+import { Icon } from "icons.slint";
 import { ListView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { PageHeader, ActionButton } from "common.slint";
@@ -65,14 +66,28 @@ export component SignalBars inherits Rectangle {
 // traffic. Tapping it opens the network screen.
 export component NetIndicator inherits Rectangle {
     in property <NetStatus> net;
+    // Issue #95: icon only, a round button (the home screen's top bar).
+    in property <bool> compact;
     callback clicked();
 
     height: Theme.touch-height;
-    width: 190px;
-    border-radius: Theme.radius-medium;
+    width: compact ? Theme.touch-height : 190px;
+    border-radius: compact ? self.height / 2 : Theme.radius-medium;
     background: touch.pressed ? Theme.surface-pressed : Theme.surface;
 
-    HorizontalLayout {
+    if compact && net.uplink == "wifi": SignalBars {
+        bars: net.wifi-bars;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+    }
+    if compact && net.uplink != "wifi": Icon {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        kind: net.uplink == "ethernet" ? "ethernet" : net.hotspot-active ? "hotspot" : "wifi-off";
+        color: net.uplink == "" && !net.hotspot-active ? Theme.error : Theme.text;
+    }
+
+    if !compact: HorizontalLayout {
         padding-left: Theme.space-l;
         padding-right: Theme.space-l;
         spacing: Theme.space-s;

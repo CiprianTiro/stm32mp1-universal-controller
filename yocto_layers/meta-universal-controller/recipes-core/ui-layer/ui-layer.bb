@@ -62,6 +62,10 @@ SRC_URI = " \
     file://ui/ir_remote.slint \
     file://ui/scenes.slint \
     file://ui/automations.slint \
+    file://ui/tiles.slint \
+    file://ui/icons.slint \
+    file://ui/home.slint \
+    file://ui/icons/ \
     file://ui/tokens.json \
     file://ui/images/welcome.png \
     file://ui/images/pointer.png \
@@ -76,6 +80,7 @@ SRC_URI = " \
     file://src/theme.rs \
     file://src/zones.rs \
     file://src/ws_client.rs \
+    file://src/tiles.rs \
     file://ui-layer.service \
 "
 

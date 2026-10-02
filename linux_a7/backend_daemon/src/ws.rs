@@ -24,7 +24,8 @@
  *   list_devices                           -> devices {devices: [...]}
  *   get_device {id}                        -> device {device} (null: unknown)
  *   add_device {device}                    -> device {device}
- *   update_device_info {id, name?, room?}  -> device {device}
+ *   update_device_info {id, name?, room?, favourite?}
+ *                                          -> device {device} (favourite: #95)
  *   remove_device {id}                     -> ack
  *   command {id, capability, value}        -> device {device}
  *   device_action {id, capability, name, args?}
@@ -169,6 +170,8 @@ enum ClientRequest {
         name: Option<String>,
         #[serde(default)]
         room: Option<String>,
+        #[serde(default)]
+        favourite: Option<bool>,
     },
     RemoveDevice {
         id: DeviceId,
@@ -1192,7 +1195,9 @@ async fn handle_request(req: ClientRequest, app_state: &AppState) -> ServerMessa
             Err(message) => ServerMessage::Error { message },
         },
         ClientRequest::AddDevice { device: new } => device(control.add(new).await),
-        ClientRequest::UpdateDeviceInfo { id, name, room } => device(control.update_info(&id, name, room).await),
+        ClientRequest::UpdateDeviceInfo { id, name, room, favourite } => {
+            device(control.update_info(&id, name, room, favourite).await)
+        }
         ClientRequest::RemoveDevice { id } => ack_or_error(control.remove(&id).await),
         ClientRequest::Command { id, capability, value } => device(control.command(&id, &capability, value).await),
         ClientRequest::DeviceAction { id, capability, name, args } => {
@@ -1369,6 +1374,7 @@ mod tests {
             identity: String::new(),
             online: None,
             last_seen: None,
+            favourite: false,
             capabilities: Capabilities {
                 switch: Some(Switch { on: false }),
                 ..Default::default()

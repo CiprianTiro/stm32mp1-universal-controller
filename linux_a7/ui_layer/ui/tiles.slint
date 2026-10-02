@@ -1,0 +1,273 @@
+// tiles.slint -- the Devices page for many devices (issue #95): small
+// tiles in a grid, grouped by room, with a bar of filter chips above.
+//
+// Until #95 every device was a full card (devices.slint's DeviceRow) with
+// all its controls: on the 480 x 800 touchscreen 3-4 devices fitted. Now
+// the page shows what most taps want -- what's on, switch it -- and the
+// full card moves to its own "controls" page (app.slint, page 20):
+//
+//   tap a tile             its main action: on/off (a device that has one
+//                          and is reachable), else its controls
+//   tap the tile's arrow   its controls (sliders, colours, remote, ...)
+//
+// The pattern of Apple Home and Google Home, which handle dozens of
+// devices. main.rs builds every value shown here (the state line, the
+// icon, the rows); this file only draws them and reports taps.
+
+import { ListView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { Icon } from "icons.slint";
+
+// One device as a tile.
+export struct TileItem {
+    id: string,
+    name: string,
+    // One line: "On \u{2022} 42 %", "18.4 W", "40 % open", "21.5 °C".
+    state: string,
+    // icons.slint's kind: "light", "plug", "tv", ...
+    icon: string,
+    on: bool,
+    // A tap switches it (it has on/off, and it's reachable).
+    can-toggle: bool,
+    // The colour it glows in while on: a light's own colour, else the
+    // accent.
+    tint: color,
+    // Readable on the tint: dark on a light colour, white on a dark one.
+    on-tint: color,
+    // "" or why it can't be used: "Offline", "Needs pairing again".
+    status: string,
+    // A level to show as a bar along the tile's bottom (a light's
+    // brightness, a blind's position), -1 = none.
+    level: int,
+    // Starred: a small star by its arrow.
+    favourite: bool,
+}
+
+// A row of the grid: a room's heading (tiles empty), or up to `columns`
+// tiles.
+export struct TileRow {
+    header: string,
+    tiles: [TileItem],
+}
+
+// A chip of the filter bar: a summary ("3 on", "18 W", "2 offline") or a
+// place (All, Favourites, a room). `id` is what main.rs filters by.
+export struct FilterChip {
+    id: string,
+    label: string,
+    // icons.slint's kind, "" = none.
+    icon: string,
+    // Draws attention (offline devices).
+    warn: bool,
+}
+
+component DeviceTile inherits Rectangle {
+    in property <TileItem> item;
+    callback toggle(string, bool);
+    callback open(string);
+
+    property <bool> lit: item.on && item.status == "";
+
+    height: 108px;
+    border-radius: Theme.radius-medium * 2;
+    clip: true;
+    // On: tinted with its colour, so a glance shows what's on.
+    background: touch.pressed ? Theme.surface-pressed
+        : lit ? item.tint.mix(Theme.surface, 0.22) : Theme.surface;
+    animate background { duration: 180ms; }
+    border-width: lit ? 1px : 0;
+    border-color: item.tint.mix(Theme.surface, 0.6);
+    // Not reachable: dimmed (its values may be stale).
+    opacity: item.status == "" ? 1 : 0.6;
+
+    // The whole tile: the main action.
+    touch := TouchArea {
+        clicked => {
+            if (item.can-toggle) {
+                root.toggle(item.id, !item.on);
+            } else {
+                root.open(item.id);
+            }
+        }
+    }
+
+    // The icon in a circle: filled with the tint while on.
+    Rectangle {
+        x: Theme.space-m;
+        y: Theme.space-m;
+        width: 40px;
+        height: 40px;
+        border-radius: self.height / 2;
+        background: lit ? item.tint : Theme.surface-pressed;
+        animate background { duration: 180ms; }
+        Icon {
+            kind: item.icon;
+            color: lit ? item.on-tint : Theme.text-muted;
+        }
+    }
+
+    // The arrow: the device's controls. Its own TouchArea, over the
+    // tile's, at least a finger wide.
+    Rectangle {
+        x: parent.width - self.width;
+        y: 0;
+        width: 48px;
+        height: 56px;
+        background: arrow.pressed ? Theme.surface-pressed : transparent;
+        border-radius: Theme.radius-medium;
+        Icon {
+            kind: "chevron";
+            color: Theme.text-muted;
+        }
+        arrow := TouchArea {
+            clicked => {
+                root.open(item.id);
+            }
+        }
+    }
+    if item.favourite: Icon {
+        x: parent.width - 48px - 14px;
+        y: 16px;
+        width: 16px;
+        height: 16px;
+        kind: "star";
+        color: Theme.accent;
+    }
+
+    // Its level, as a bar along the bottom edge (the tile's rounded
+    // corners clip it).
+    if item.level >= 0: Rectangle {
+        x: 0;
+        y: parent.height - 4px;
+        width: parent.width;
+        height: 4px;
+        background: Theme.surface-pressed;
+        Rectangle {
+            x: 0;
+            width: parent.width * item.level / 100;
+            background: lit ? item.tint : Theme.text-muted;
+        }
+    }
+
+    VerticalLayout {
+        x: Theme.space-m;
+        y: 56px;
+        width: parent.width - 2 * Theme.space-m;
+        height: parent.height - 56px - Theme.space-s;
+        alignment: end;
+        Text {
+            text: item.name;
+            color: Theme.text;
+            font-size: Theme.font-body;
+            overflow: elide;
+        }
+        Text {
+            text: item.status != "" ? item.status : item.state;
+            color: item.status != "" ? Theme.error : Theme.text-muted;
+            font-size: Theme.font-caption;
+            overflow: elide;
+        }
+    }
+}
+
+// The grid: rows of tiles, a room's heading before its tiles. Scrolls.
+export component TileGrid inherits Rectangle {
+    in property <[TileRow]> rows;
+    in property <int> columns: 2;
+    in property <string> empty-text: "No devices yet";
+    callback toggle(string, bool);
+    callback open(string);
+
+    if rows.length == 0: Text {
+        text: empty-text;
+        color: Theme.text-muted;
+        font-size: Theme.font-subtitle;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        wrap: word-wrap;
+    }
+
+    ListView {
+        for row in rows: VerticalLayout {
+            padding-bottom: Theme.space-s;
+            if row.header != "": Text {
+                text: row.header;
+                color: Theme.text-muted;
+                font-size: Theme.font-body;
+                height: 32px;
+                vertical-alignment: bottom;
+            }
+            if row.header == "": HorizontalLayout {
+                spacing: Theme.space-s;
+                for t in row.tiles: DeviceTile {
+                    // Exactly 1/columns of the width (minus the gaps), as
+                    // the cards did (#38): columns line up row after row.
+                    width: (parent.width - (columns - 1) * parent.spacing) / columns;
+                    item: t;
+                    toggle(id, on) => {
+                        root.toggle(id, on);
+                    }
+                    open(id) => {
+                        root.open(id);
+                    }
+                }
+                // The last row of a room may be short: keep the width.
+                for i in columns - row.tiles.length: Rectangle {
+                    width: (parent.width - (columns - 1) * parent.spacing) / columns;
+                }
+            }
+        }
+    }
+}
+
+// The filter bar: one row of chips, scrolled sideways when they don't
+// fit (many rooms on the 480 px touchscreen).
+export component FilterBar inherits Rectangle {
+    in property <[FilterChip]> chips;
+    in property <string> selected;
+    callback pick(string);
+
+    height: 40px;
+
+    Flickable {
+        content-width: max(self.width, row.preferred-width);
+        row := HorizontalLayout {
+            spacing: Theme.space-s;
+            alignment: start;
+            for chip in chips: Rectangle {
+                property <bool> on: chip.id == root.selected;
+                height: 40px;
+                border-radius: self.height / 2;
+                background: on ? Theme.accent : (chip-touch.pressed ? Theme.surface-pressed : Theme.surface);
+                border-width: chip.warn && !on ? 1px : 0;
+                border-color: Theme.error;
+                HorizontalLayout {
+                    padding-left: chip.icon != "" ? Theme.space-m : Theme.space-l;
+                    padding-right: Theme.space-l;
+                    spacing: Theme.space-xs;
+                    alignment: center;
+                    if chip.icon != "": VerticalLayout {
+                        alignment: center;
+                        Icon {
+                            kind: chip.icon;
+                            width: 20px;
+                            height: 20px;
+                            color: on ? Theme.on-accent : chip.warn ? Theme.error : Theme.text;
+                        }
+                    }
+                    Text {
+                        text: chip.label;
+                        color: on ? Theme.on-accent : Theme.text;
+                        font-size: Theme.font-body;
+                        vertical-alignment: center;
+                    }
+                }
+                chip-touch := TouchArea {
+                    clicked => {
+                        root.pick(chip.id);
+                    }
+                }
+            }
+        }
+    }
+}
