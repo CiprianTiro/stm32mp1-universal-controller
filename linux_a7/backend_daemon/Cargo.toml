@@ -22,6 +22,10 @@ serde_json = "1"
 # names are needed: no default features (no serde, no case-insensitive
 # lookup).
 chrono-tz = { version = "0.10", default-features = false, features = ["std"] }
+# Dates and times in the hub's time zone for automations (issue #47):
+# already in the build through chrono-tz; no default features (no system
+# time zone lookup -- the time zone is the hub's setting).
+chrono = { version = "0.4", default-features = false, features = ["std"] }
 axum = { version = "0.7", features = ["ws"] }
 # MQTT over TLS with a client certificate (mutual TLS), as AWS IoT Core
 # requires -- see src/mqtt.rs. rustls is a pure-Rust TLS stack; its crypto

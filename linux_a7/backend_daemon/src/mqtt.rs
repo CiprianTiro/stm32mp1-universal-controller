@@ -11,7 +11,11 @@
  *     deleting a device's shadow in the cloud removes the device, and
  *     removing a device locally deletes its shadow;
  *   - reports the hub's own health (health.rs, #29) to the classic shadow
- *     every report interval.
+ *     every report interval;
+ *   - lists the hub's scenes in the named shadow "hub-scenes" (issue #47),
+ *     and runs one when the cloud sets desired {"run": "<scene id>"}. A
+ *     run request still pending at (re)connect is cleared, NOT carried
+ *     out: a scene asked for hours ago shouldn't switch the lights now.
  *
  * The topics and JSON are AWS IoT's real Device Shadow format, so the same
  * code works against AWS and against the development Mosquitto broker in
@@ -41,6 +45,7 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 use tokio::sync::{mpsc, watch};
 
+use crate::automations::{self, Automations};
 use crate::control::Control;
 use crate::health;
 use crate::shadow;
@@ -152,6 +157,9 @@ enum Sync {
     CommandDone(DeviceId),
     /* This device's shadow was deleted (in the console, or by us). */
     ShadowDeleted(DeviceId),
+    /* Issue #47: a scene asked for by the cloud ran -- report the scenes
+     * and clear the request. */
+    SceneDone,
 }
 
 /* `control` reads the devices and carries out cloud commands (control.rs);
@@ -164,6 +172,7 @@ pub async fn run(
     state_changed_rx: watch::Receiver<()>,
     uplink_rx: watch::Receiver<Option<String>>,
     local_clients: Arc<AtomicUsize>,
+    automations: Arc<Automations>,
 ) {
     let config = match Config::from_env() {
         Ok(Some(config)) => config,
@@ -224,6 +233,7 @@ pub async fn run(
         config.report_interval,
         known_shadows,
         shadows_tx,
+        automations.clone(),
     ));
 
     let topics = shadow::Topics::new(&config.thing);
@@ -300,6 +310,10 @@ pub async fn run(
                 let Some((id, event)) = topics.parse(&publish.topic) else {
                     continue;
                 };
+                if id == shadow::SCENES_SHADOW {
+                    handle_scenes_event(event, &publish.payload, &automations, &sync_tx);
+                    continue;
+                }
                 handle_event(id, event, &publish.payload, &control, &sync_tx).await;
             }
             Ok(_) => {}
@@ -351,6 +365,42 @@ async fn handle_event(id: DeviceId, event: shadow::Event, payload: &[u8], contro
         Ok(None) => {} /* nothing pending */
         Err(e) => println!("mqtt: ignoring malformed message for {id}: {e}"),
     }
+}
+
+/* Issue #47: a message on the scenes shadow. A run request runs the scene
+ * in a task of its own (devices can be slow); the report afterwards
+ * clears the request. Deleted in the console: published again. */
+fn handle_scenes_event(event: shadow::Event, payload: &[u8], automations: &Arc<Automations>, sync_tx: &mpsc::Sender<Sync>) {
+    let desired = match event {
+        shadow::Event::Delta => shadow::parse_delta(payload),
+        /* Only asked for at connect -- which doesn't happen for this
+         * shadow (pending requests are dropped, see the header). */
+        shadow::Event::GetAccepted => return,
+        shadow::Event::DeleteAccepted => {
+            let _ = sync_tx.try_send(Sync::SceneDone);
+            return;
+        }
+    };
+    let scene = match desired {
+        Ok(desired) => desired["run"].as_str().map(str::to_string),
+        Err(e) => {
+            println!("mqtt: ignoring malformed message for the scenes: {e}");
+            None
+        }
+    };
+    let (automations, sync_tx) = (automations.clone(), sync_tx.clone());
+    tokio::spawn(async move {
+        match scene {
+            Some(id) => {
+                println!("mqtt: the cloud runs scene {id}");
+                if let Err(e) = automations.run_scene(&id, automations::Asker::Cloud).await {
+                    println!("mqtt: scene {id}: {e}");
+                }
+            }
+            None => println!("mqtt: the scenes shadow only takes {{\"run\": \"<scene id>\"}}, ignored"),
+        }
+        let _ = sync_tx.try_send(Sync::SceneDone);
+    });
 }
 
 /* Turns what the cloud wants into commands, one per capability, each
@@ -451,7 +501,11 @@ async fn reporting_task(
     interval: Duration,
     known_shadows: BTreeSet<DeviceId>,
     shadows_tx: watch::Sender<Vec<u8>>,
+    automations: Arc<Automations>,
 ) {
+    /* Issue #47: the scenes shadow is published when the scenes change. */
+    let mut scenes_rx = automations.subscribe();
+    let scenes_report = |clear_desired: bool| shadow::scenes_report(&automations::scene_list(&automations.book()), clear_desired);
     let mut published: HashMap<DeviceId, Value> = known_shadows.into_iter().map(|id| (id, Value::Null)).collect();
     /* The id set last handed to shadows_tx. */
     let mut saved_names: BTreeSet<DeviceId> = published.keys().cloned().collect();
@@ -496,6 +550,13 @@ async fn reporting_task(
                     }
                     let system = reporter.system(devices.len());
                     publisher.send(&topics.classic_update(), shadow::classic_report(&system, true)).await;
+                    /* The scenes, and any stale run request cleared (see
+                     * the header). */
+                    publisher.send(&topics.device_update(shadow::SCENES_SHADOW), scenes_report(true)).await;
+                    continue;
+                }
+                Sync::SceneDone => {
+                    publisher.send(&topics.device_update(shadow::SCENES_SHADOW), scenes_report(true)).await;
                     continue;
                 }
                 Sync::CommandDone(id) => {
@@ -531,6 +592,11 @@ async fn reporting_task(
                     }
                 }
             },
+            Ok(()) = scenes_rx.changed() => {
+                scenes_rx.mark_unchanged();
+                publisher.send(&topics.device_update(shadow::SCENES_SHADOW), scenes_report(false)).await;
+                continue;
+            }
             _ = tick.tick() => {
                 let Some(devices) = reporter.devices().await else { break };
                 let system = reporter.system(devices.len());
@@ -639,7 +705,7 @@ async fn wait_for_time_sync() {
  * sync to the kernel by clearing the STA_UNSYNC flag; adjtimex() with no
  * changes requested just reads that status back. This is the same check
  * `timedatectl` uses for "System clock synchronized: yes". */
-fn clock_synced() -> bool {
+pub(crate) fn clock_synced() -> bool {
     // SAFETY: an all-zero timex means "modes = 0", i.e. read-only query;
     // adjtimex only fills in the struct we own.
     let mut tx: libc::timex = unsafe { std::mem::zeroed() };

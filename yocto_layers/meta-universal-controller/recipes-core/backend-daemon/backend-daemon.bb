@@ -62,6 +62,7 @@ SRC_URI = " \
     file://src/adapters/wiz.rs \
     file://src/adapters/wled.rs \
     file://src/auth.rs \
+    file://src/automations.rs \
     file://src/ble.rs \
     file://src/control.rs \
     file://src/device.rs \

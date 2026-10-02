@@ -28,11 +28,14 @@ import { IrRemotePage, IrKeyItem, IrRow } from "ir_remote.slint";
 import { ClientItem, SettingsPage, ClientsPage, PairingPage } from "settings.slint";
 import { NetStatus, WifiNetwork, NetIndicator, NetworkPage, PasswordPage, CountryPage } from "network.slint";
 import { AccentItem, ZoneItem, AppearancePage, TimeZonePage } from "appearance.slint";
+import { SceneItem, PickItem, ScenesPage, CaptureScenePage } from "scenes.slint";
+import { AutomationItem, LogItem, AutomationsPage, LogPage, NewAutomationPage, LocationPage } from "automations.slint";
 
 // Re-exported so main.rs can use these types (the Rust side only sees what
 // the main file exports).
 export { NetStatus, WifiNetwork, DeviceItem, MediaInputItem, ClientItem, AccentItem, ZoneItem }
 export { TemplateItem, FoundItem, FieldItem, ChoiceItem, VariantItem, RemoteItem, IrKeyItem, IrRow }
+export { SceneItem, PickItem, AutomationItem, LogItem }
 // The design tokens (issue #39): main.rs's theme.rs sets them.
 export { Theme }
 
@@ -169,6 +172,62 @@ export component AppWindow inherits Window {
 
     // ---- Paired devices and pairing (issue #35) ----------------------
     in property <[ClientItem]> clients;
+
+    // ---- Scenes (issue #47, scenes.slint) -------------------------------
+    // All of them (the Scenes page), and the first few for the Devices
+    // page's quick buttons (main.rs picks how many fit).
+    in property <[SceneItem]> scenes;
+    in property <[SceneItem]> quick-scenes;
+    in property <string> scenes-message;
+    in property <bool> scenes-message-ok: true;
+    // The scene being run right now ("" = none).
+    in property <string> scene-running;
+    // "Save current state": the devices to pick from, the name typed.
+    in property <[PickItem]> pick-devices;
+    in property <int> pick-count;
+    in-out property <string> scene-name;
+    in property <string> capture-message;
+    in property <bool> capture-busy;
+    callback run-scene(string);
+    callback delete-scene(string);
+    callback open-scenes();
+    callback open-capture();
+    callback toggle-pick(int);
+    callback capture-scene(string);
+
+    // ---- Automations (issue #47, automations.slint) ---------------------
+    in property <[AutomationItem]> automations;
+    in property <string> automations-message;
+    in property <bool> automations-message-ok: true;
+    in property <string> automation-running;
+    in property <[LogItem]> log-entries;
+    // The editor: devices that switch on/off, whether the hub knows where
+    // it is, the name typed, how saving went.
+    in property <[SceneItem]> switch-devices;
+    // The scenes to choose from (its own copy: a new one each time the
+    // editor opens, which also makes it start over).
+    in property <[SceneItem]> editor-scenes;
+    in property <bool> has-location;
+    in-out property <string> automation-name;
+    in property <string> automation-message;
+    in property <bool> automation-busy;
+    // The location page: what's typed, what's set ("" = not set).
+    in-out property <string> location-text;
+    in property <string> location-current;
+    in property <string> location-message;
+    callback open-automations();
+    callback set-automation-enabled(string, bool);
+    callback run-automation(string);
+    callback delete-automation(string);
+    callback open-log();
+    callback new-automation();
+    pure callback suggest-automation-name(int, int, int, int, string, string) -> string;
+    // name, when, hour, minute, offset, days, device id, scene id
+    callback save-automation(string, int, int, int, int, int, string, string);
+    callback open-location(int);
+    callback save-location(string);
+    // Where the location page goes back to (Settings or the editor).
+    in-out property <int> location-back: 4;
     in-out property <string> clients-message;
     // The pairing screen, filled in by main.rs (see PairingPage).
     in property <string> pairing-state;
@@ -399,6 +458,25 @@ export component AppWindow inherits Window {
                     network-back = 0;
                     page = 1;
                     wifi-scan();
+                }
+            }
+        }
+
+        // Scenes (issue #47): one tap runs one; "Scenes" opens the list.
+        if scenes.length > 0: HorizontalLayout {
+            height: Theme.touch-height;
+            spacing: Theme.space-s;
+            for scene in quick-scenes: HeaderButton {
+                text: scene-running == scene.id ? "\u{2026}" : scene.name;
+                horizontal-stretch: 1;
+                clicked => {
+                    root.run-scene(scene.id);
+                }
+            }
+            HeaderButton {
+                text: "Scenes";
+                clicked => {
+                    root.open-scenes();
                 }
             }
         }
@@ -684,6 +762,132 @@ export component AppWindow inherits Window {
         }
     }
 
+    // Scenes (issue #47).
+    if page == 14: ScenesPage {
+        width: min(parent.width, Theme.content-max-width);
+        x: (parent.width - self.width) / 2;
+        height: parent.height;
+        scenes: root.scenes;
+        message: root.scenes-message;
+        message-ok: root.scenes-message-ok;
+        running: root.scene-running;
+        back => {
+            page = 0;
+        }
+        run(id) => {
+            root.run-scene(id);
+        }
+        delete(id) => {
+            root.delete-scene(id);
+        }
+        new-scene => {
+            root.open-capture();
+        }
+    }
+    if page == 15: CaptureScenePage {
+        width: min(parent.width, Theme.content-max-width);
+        x: (parent.width - self.width) / 2;
+        height: parent.height;
+        devices: root.pick-devices;
+        selected-count: root.pick-count;
+        name <=> root.scene-name;
+        message: root.capture-message;
+        busy: root.capture-busy;
+        back => {
+            page = 14;
+        }
+        toggle(index) => {
+            root.toggle-pick(index);
+        }
+        backspace => {
+            root.scene-name = drop-last(root.scene-name);
+        }
+        save => {
+            root.capture-scene(root.scene-name);
+        }
+    }
+
+    // Automations (issue #47).
+    if page == 16: AutomationsPage {
+        width: min(parent.width, Theme.content-max-width);
+        x: (parent.width - self.width) / 2;
+        height: parent.height;
+        automations: root.automations;
+        message: root.automations-message;
+        message-ok: root.automations-message-ok;
+        running: root.automation-running;
+        back => {
+            page = 4;
+        }
+        set-enabled(id, on) => {
+            root.set-automation-enabled(id, on);
+        }
+        run(id) => {
+            root.run-automation(id);
+        }
+        delete(id) => {
+            root.delete-automation(id);
+        }
+        open-log => {
+            root.open-log();
+        }
+        new-automation => {
+            root.new-automation();
+        }
+    }
+    if page == 17: LogPage {
+        width: min(parent.width, Theme.content-max-width);
+        x: (parent.width - self.width) / 2;
+        height: parent.height;
+        entries: root.log-entries;
+        back => {
+            page = 16;
+        }
+    }
+    if page == 18: NewAutomationPage {
+        width: min(parent.width, Theme.content-max-width);
+        x: (parent.width - self.width) / 2;
+        height: parent.height;
+        scenes: root.editor-scenes;
+        switch-devices: root.switch-devices;
+        has-location: root.has-location;
+        message: root.automation-message;
+        busy: root.automation-busy;
+        name <=> root.automation-name;
+        back => {
+            page = 16;
+        }
+        backspace => {
+            root.automation-name = drop-last(root.automation-name);
+        }
+        open-location => {
+            root.open-location(18);
+        }
+        suggest(when, hour, minute, offset, device, scene) => {
+            return root.suggest-automation-name(when, hour, minute, offset, device, scene);
+        }
+        save(when, hour, minute, offset, days, device, scene) => {
+            root.save-automation(root.automation-name, when, hour, minute, offset, days, device, scene);
+        }
+    }
+    if page == 19: LocationPage {
+        width: min(parent.width, Theme.content-max-width);
+        x: (parent.width - self.width) / 2;
+        height: parent.height;
+        text <=> root.location-text;
+        current: root.location-current;
+        message: root.location-message;
+        back => {
+            page = root.location-back;
+        }
+        backspace => {
+            root.location-text = drop-last(root.location-text);
+        }
+        save(text) => {
+            root.save-location(text);
+        }
+    }
+
     if page == 4: SettingsPage {
         // Issue #38: centred, at most Theme.content-max-width wide.
         width: min(parent.width, Theme.content-max-width);
@@ -695,6 +899,18 @@ export component AppWindow inherits Window {
         appearance-detail: (setting-mode == "auto" ? "Auto" : setting-mode == "light" ? "Light" : "Dark")
             + ", " + setting-accent-name + ", " + setting-density;
         time-zone-detail: setting-time-zone + ", " + local-time;
+        scenes-detail: scenes.length == 0 ? "None yet" : scenes.length == 1 ? "1 scene" : scenes.length + " scenes";
+        automations-detail: automations.length == 0 ? "None yet" : automations.length == 1 ? "1 automation" : automations.length + " automations";
+        location-detail: location-current == "" ? "Not set (needed for sunrise and sunset)" : location-current;
+        open-scenes => {
+            root.open-scenes();
+        }
+        open-automations => {
+            root.open-automations();
+        }
+        open-location => {
+            root.open-location(4);
+        }
         back => {
             page = 0;
         }

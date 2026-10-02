@@ -18,6 +18,7 @@ pub struct TestHub {
     pub control: Control,
     pub registry: Arc<Registry>,
     events: broadcast::Receiver<Event>,
+    events_tx: broadcast::Sender<Event>,
     id: String,
 }
 
@@ -29,7 +30,7 @@ impl TestHub {
         let (events_tx, events) = broadcast::channel(64);
         let outputs = Outputs {
             changed_tx: watch::channel(()).0,
-            events_tx,
+            events_tx: events_tx.clone(),
             save_tx: watch::channel(Vec::new()).0,
         };
         tokio::spawn(state::run(state_rx, [(id.clone(), device)].into(), outputs));
@@ -41,8 +42,14 @@ impl TestHub {
             control,
             registry,
             events,
+            events_tx,
             id,
         }
+    }
+
+    /* Every device change from now on (automations.rs's tests). */
+    pub fn events(&self) -> broadcast::Receiver<Event> {
+        self.events_tx.subscribe()
     }
 
     /* Waits (up to 10 s) for the device to look like `wanted`. */

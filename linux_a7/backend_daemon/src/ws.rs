@@ -37,10 +37,21 @@
  *        events_lost (too slow to keep up: list_devices again)
  *   get_network_status, wifi_scan, wifi_connect, wifi_forget,
  *   set_wifi_country                       -> see network.rs (#61)
- *   get_settings                           -> settings {mode, accent, density, time_zone}
- *   set_settings {mode?, accent?, density?, time_zone?}
- *                                          -> settings {...} (see settings.rs, #39)
- *        after subscribe also: settings_changed {mode, accent, density, time_zone}
+ *   get_settings                           -> settings {mode, accent, density, time_zone,
+ *                                             latitude?, longitude?}
+ *   set_settings {mode?, accent?, density?, time_zone?, latitude?, longitude?}
+ *                                          -> settings {...} (see settings.rs, #39, #47)
+ *        after subscribe also: settings_changed {...}
+ * Scenes and automations (issue #47, automations.rs):
+ *   list_automations                       -> automations {scenes, automations}
+ *   save_scene {scene} / delete_scene {id} -> automations {...}
+ *   capture_scene {name, devices: [ids]}   -> automations {...} ("save current state")
+ *   save_automation {automation} / delete_automation {id}
+ *   set_automation_enabled {id, enabled}   -> automations {...}
+ *   run_scene {id}, run_automation {id}    -> ack once done (error: what failed)
+ *   get_automation_log                     -> automation_log {entries}
+ *        after subscribe also: automations_changed (list again),
+ *        automation_ran {entry}
  *   list_found                             -> found {devices: [...]} (the "Found on
  *                                             your network" inbox, discovery.rs, #40)
  *   discover_now                           -> ack (a search round now)
@@ -101,6 +112,7 @@ use std::time::Duration;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
 use crate::auth::{self, Auth};
+use crate::automations::{self, Automations};
 use crate::control::Control;
 use crate::hotspot::{self, Hotspot};
 use crate::discovery::{self, Discovery};
@@ -255,7 +267,41 @@ enum ClientRequest {
         density: Option<String>,
         #[serde(default)]
         time_zone: Option<String>,
+        /* Issue #47: the hub's location, for sunrise and sunset. */
+        #[serde(default)]
+        latitude: Option<f64>,
+        #[serde(default)]
+        longitude: Option<f64>,
     },
+    /* Scenes and automations (issue #47, automations.rs). */
+    ListAutomations,
+    SaveScene {
+        scene: automations::Scene,
+    },
+    DeleteScene {
+        id: String,
+    },
+    CaptureScene {
+        name: String,
+        devices: Vec<DeviceId>,
+    },
+    RunScene {
+        id: String,
+    },
+    SaveAutomation {
+        automation: automations::Automation,
+    },
+    DeleteAutomation {
+        id: String,
+    },
+    SetAutomationEnabled {
+        id: String,
+        enabled: bool,
+    },
+    RunAutomation {
+        id: String,
+    },
+    GetAutomationLog,
 }
 
 impl ClientRequest {
@@ -378,6 +424,18 @@ enum ServerMessage {
         settings: HubSettings,
     },
     FoundChanged,
+    /* Issue #47. */
+    Automations {
+        #[serde(flatten)]
+        book: automations::Book,
+    },
+    AutomationLog {
+        entries: Vec<automations::LogEntry>,
+    },
+    AutomationsChanged,
+    AutomationRan {
+        entry: automations::LogEntry,
+    },
     Error {
         message: String,
     },
@@ -405,6 +463,8 @@ struct AppState {
     discovery: Arc<Discovery>,
     /* What the wizard can add (issue #40). */
     templates: Arc<Templates>,
+    /* Scenes and automations (issue #47). */
+    automations: Arc<Automations>,
 }
 
 /* Counts one connected client for as long as it exists: +1 when created,
@@ -448,6 +508,7 @@ pub async fn run(
     settings: Arc<Settings>,
     discovery: Arc<Discovery>,
     templates: Arc<Templates>,
+    automations: Arc<Automations>,
 ) {
     let fingerprint = Arc::new(identity.as_ref().map(|i| i.fingerprint.clone()).unwrap_or_default());
     let state = AppState {
@@ -461,6 +522,7 @@ pub async fn run(
         settings,
         discovery,
         templates,
+        automations,
     };
     /* The same routes behind both doors; `Extension(Door)` tells the
      * handler which one a connection used. */
@@ -610,6 +672,14 @@ fn background(
         ClientRequest::Command { .. } | ClientRequest::DeviceAction { .. } => {
             Ok(Box::pin(async move { Next::Send(handle_request(req, &app).await) }))
         }
+        /* A scene may wait for slow devices (a TV waking). */
+        ClientRequest::RunScene { id } => {
+            let asker = if session.door == Door::Local { automations::Asker::Screen } else { automations::Asker::App };
+            Ok(Box::pin(async move { Next::Send(ack_or_error(app.automations.run_scene(&id, asker).await)) }))
+        }
+        ClientRequest::RunAutomation { id } => {
+            Ok(Box::pin(async move { Next::Send(ack_or_error(app.automations.run_automation_now(&id).await)) }))
+        }
         ClientRequest::WizardStart { .. }
         | ClientRequest::WizardAnswer { .. }
         | ClientRequest::WizardBack { .. }
@@ -646,6 +716,9 @@ async fn handle_socket(mut socket: WebSocket, app_state: AppState, door: Door, p
     let mut events: Option<broadcast::Receiver<Event>> = None;
     let mut settings_rx: Option<watch::Receiver<HubSettings>> = None;
     let mut found_rx: Option<watch::Receiver<u64>> = None;
+    /* Issue #47: the scenes/automations list, and what ran. */
+    let mut automations_rx: Option<watch::Receiver<u64>> = None;
+    let mut ran_rx: Option<broadcast::Receiver<automations::LogEntry>> = None;
     /* The device this client is adding, if any (wizard.rs). While one of
      * its steps runs in the background, the session is with that work. */
     let mut wizard: Option<wizard::Session> = None;
@@ -678,7 +751,13 @@ async fn handle_socket(mut socket: WebSocket, app_state: AppState, door: Door, p
                             Next::Queued
                         }
                         Err(req) => {
-                            let subscriptions = Subscriptions { events: &mut events, settings: &mut settings_rx, found: &mut found_rx };
+                            let subscriptions = Subscriptions {
+                                events: &mut events,
+                                settings: &mut settings_rx,
+                                found: &mut found_rx,
+                                automations: &mut automations_rx,
+                                ran: &mut ran_rx,
+                            };
                             handle_message(req, &mut session, subscriptions, &mut wizard, &app_state).await
                         }
                     },
@@ -704,6 +783,9 @@ async fn handle_socket(mut socket: WebSocket, app_state: AppState, door: Door, p
             }
             /* The inbox changed (issue #40), also only while subscribed. */
             Some(()) = next_found(&mut found_rx), if found_rx.is_some() => Next::Send(ServerMessage::FoundChanged),
+            /* Scenes / automations changed, or one ran (issue #47). */
+            Some(()) = next_found(&mut automations_rx), if automations_rx.is_some() => Next::Send(ServerMessage::AutomationsChanged),
+            Some(entry) = next_ran(&mut ran_rx), if ran_rx.is_some() => Next::Send(ServerMessage::AutomationRan { entry }),
             Ok(id) = revocations.recv() => {
                 if session.client.as_ref().is_some_and(|c| c.id == id) {
                     println!("ws.rs: {id} was removed on the hub, closing its connection");
@@ -754,6 +836,8 @@ struct Subscriptions<'a> {
     events: &'a mut Option<broadcast::Receiver<Event>>,
     settings: &'a mut Option<watch::Receiver<HubSettings>>,
     found: &'a mut Option<watch::Receiver<u64>>,
+    automations: &'a mut Option<watch::Receiver<u64>>,
+    ran: &'a mut Option<broadcast::Receiver<automations::LogEntry>>,
 }
 
 /* Checks what this session may do, then carries the request out. */
@@ -794,6 +878,11 @@ async fn handle_message(
             let mut rx = app_state.discovery.subscribe();
             rx.mark_unchanged();
             *subscriptions.found = Some(rx);
+            /* And scenes / automations (issue #47). */
+            let mut rx = app_state.automations.subscribe();
+            rx.mark_unchanged();
+            *subscriptions.automations = Some(rx);
+            *subscriptions.ran = Some(app_state.automations.subscribe_log());
             Next::Send(ServerMessage::Ack)
         }
         ClientRequest::Pair { code, client_name } => match auth.pair(&code, &client_name) {
@@ -1035,6 +1124,22 @@ async fn next_found(rx: &mut Option<watch::Receiver<u64>>) -> Option<()> {
     Some(())
 }
 
+/* The next log entry for a subscribed client (issue #47). A client too
+ * slow to keep up just misses some (it can get_automation_log). */
+async fn next_ran(rx: &mut Option<broadcast::Receiver<automations::LogEntry>>) -> Option<automations::LogEntry> {
+    let receiver = rx.as_mut()?;
+    loop {
+        match receiver.recv().await {
+            Ok(entry) => return Some(entry),
+            Err(broadcast::error::RecvError::Lagged(_)) => continue,
+            Err(broadcast::error::RecvError::Closed) => {
+                *rx = None;
+                return None;
+            }
+        }
+    }
+}
+
 /* The next settings change for a subscribed client (issue #39). None:
  * settings.rs is gone (shutting down) -- then stop listening. */
 async fn next_settings(rx: &mut Option<watch::Receiver<HubSettings>>) -> Option<HubSettings> {
@@ -1045,6 +1150,14 @@ async fn next_settings(rx: &mut Option<watch::Receiver<HubSettings>>) -> Option<
     }
     let settings = receiver.borrow_and_update().clone();
     Some(settings)
+}
+
+/* The scenes and automations after a change, or why it was refused. */
+fn book_or_error(automations: &Automations, result: Result<(), String>) -> ServerMessage {
+    match result {
+        Ok(()) => ServerMessage::Automations { book: automations.book() },
+        Err(message) => ServerMessage::Error { message },
+    }
 }
 
 /* Carries out one request. Device requests go through control.rs;
@@ -1089,15 +1202,42 @@ async fn handle_request(req: ClientRequest, app_state: &AppState) -> ServerMessa
             accent,
             density,
             time_zone,
+            latitude,
+            longitude,
         } => match app_state.settings.update(settings::Change {
             mode,
             accent,
             density,
             time_zone,
+            latitude,
+            longitude,
         }) {
             Ok(settings) => ServerMessage::Settings { settings },
             Err(message) => ServerMessage::Error { message },
         },
+        /* Issue #47: every change answers with the whole list. */
+        ClientRequest::ListAutomations => ServerMessage::Automations {
+            book: app_state.automations.book(),
+        },
+        ClientRequest::SaveScene { scene } => book_or_error(&app_state.automations, app_state.automations.save_scene(scene).await.map(|_| ())),
+        ClientRequest::DeleteScene { id } => book_or_error(&app_state.automations, app_state.automations.delete_scene(&id)),
+        ClientRequest::CaptureScene { name, devices } => {
+            book_or_error(&app_state.automations, app_state.automations.capture_scene(&name, &devices).await.map(|_| ()))
+        }
+        ClientRequest::SaveAutomation { automation } => {
+            book_or_error(&app_state.automations, app_state.automations.save_automation(automation).await.map(|_| ()))
+        }
+        ClientRequest::DeleteAutomation { id } => book_or_error(&app_state.automations, app_state.automations.delete_automation(&id)),
+        ClientRequest::SetAutomationEnabled { id, enabled } => {
+            book_or_error(&app_state.automations, app_state.automations.set_enabled(&id, enabled))
+        }
+        ClientRequest::GetAutomationLog => ServerMessage::AutomationLog {
+            entries: app_state.automations.log(),
+        },
+        /* Normally run in the background (see background()); here only
+         * for a client that isn't trusted -- refused before this anyway. */
+        ClientRequest::RunScene { id } => ack_or_error(app_state.automations.run_scene(&id, automations::Asker::App).await),
+        ClientRequest::RunAutomation { id } => ack_or_error(app_state.automations.run_automation_now(&id).await),
         /* Handled in handle_message (they concern the session or auth.rs). */
         ClientRequest::Hello
         | ClientRequest::Subscribe
@@ -1233,7 +1373,7 @@ mod tests {
         let control = Control::new(state_tx, registry.clone(), secrets);
         registry.start_all(&control).await;
         let state = AppState {
-            control,
+            control: control.clone(),
             auth: Arc::new(Auth::new(Vec::new(), watch::channel(Vec::new()).0)),
             hotspot: Hotspot::new(mpsc::channel(1).0),
             fingerprint: Arc::new(String::new()),
@@ -1243,6 +1383,12 @@ mod tests {
             settings: Arc::new(Settings::new(HubSettings::default(), watch::channel(Vec::new()).0)),
             discovery: Arc::new(Discovery::new()),
             templates: Arc::new(Templates::default()),
+            automations: Arc::new(Automations::new(
+                Default::default(),
+                watch::channel(Vec::new()).0,
+                control.clone(),
+                Arc::new(Settings::new(HubSettings::default(), watch::channel(Vec::new()).0)),
+            )),
         };
         let router = Router::new()
             .route("/ws", get(ws_handler))

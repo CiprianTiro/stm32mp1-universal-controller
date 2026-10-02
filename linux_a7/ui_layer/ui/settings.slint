@@ -59,11 +59,18 @@ export component SettingsPage inherits Rectangle {
     // Issue #39, e.g. "Dark, Sky, comfortable" / "Europe/Bucharest, 14:05".
     in property <string> appearance-detail;
     in property <string> time-zone-detail;
+    // Issue #47, e.g. "2 scenes".
+    in property <string> scenes-detail;
+    in property <string> automations-detail;
+    in property <string> location-detail;
     callback back();
     callback open-network();
     callback open-clients();
     callback open-appearance();
     callback open-time-zone();
+    callback open-scenes();
+    callback open-automations();
+    callback open-location();
 
     background: Theme.background;
 
@@ -106,6 +113,27 @@ export component SettingsPage inherits Rectangle {
             detail: time-zone-detail;
             clicked => {
                 open-time-zone();
+            }
+        }
+        MenuRow {
+            title: "Scenes";
+            detail: scenes-detail;
+            clicked => {
+                open-scenes();
+            }
+        }
+        MenuRow {
+            title: "Automations";
+            detail: automations-detail;
+            clicked => {
+                open-automations();
+            }
+        }
+        MenuRow {
+            title: "Location";
+            detail: location-detail;
+            clicked => {
+                open-location();
             }
         }
     }

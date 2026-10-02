@@ -68,6 +68,27 @@ Allowed for every paired client; the hub's screen follows at once.
   mode: dark | light | auto, accent: sky | emerald | amber | violet | rose,
   density: comfortable | compact, time_zone: an IANA name.
 
+The hub's location, for sunrise/sunset automations (issue #47), in degrees
+(north and east positive), e.g. Bucharest:
+
+    python3 tools/hub_ws.py <board> set-location 44.43 26.10
+
+Scenes and automations (issue #47). The JSON format is on the wiki
+(Automations page); saving checks it like the hub would run it:
+
+    python3 tools/hub_ws.py <board> automations                  scenes + automations
+    python3 tools/hub_ws.py <board> save-scene '{"name": "Movie", "steps": [
+        {"device": "lamp-1", "capability": "dimmer", "value": {"level": 20}}]}'
+    python3 tools/hub_ws.py <board> run-scene movie
+    python3 tools/hub_ws.py <board> delete-scene movie
+    python3 tools/hub_ws.py <board> save-automation '{"name": "Evening",
+        "triggers": [{"type": "sun", "event": "sunset", "offset_min": -15}],
+        "steps": [{"scene": "movie"}]}'
+    python3 tools/hub_ws.py <board> disable-automation evening   (enable-automation)
+    python3 tools/hub_ws.py <board> run-automation evening       its steps now (testing)
+    python3 tools/hub_ws.py <board> delete-automation evening
+    python3 tools/hub_ws.py <board> log                          what ran (since the hub started)
+
 Remote control and other actions (issue #44): one-off requests that
 change no state by themselves -- a remote's button, typed text, a TV's
 channel list:
@@ -181,6 +202,26 @@ def build_request(args):
             return {"action": "get_settings"}
         case ["set-settings", *pairs] if pairs and all("=" in p for p in pairs):
             return {"action": "set_settings", **dict(p.split("=", 1) for p in pairs)}
+        case ["set-location", latitude, longitude]:
+            return {"action": "set_settings", "latitude": float(latitude), "longitude": float(longitude)}
+        case ["automations"]:
+            return {"action": "list_automations"}
+        case ["save-scene", scene]:
+            return {"action": "save_scene", "scene": json.loads(scene)}
+        case ["run-scene", scene_id]:
+            return {"action": "run_scene", "id": scene_id}
+        case ["delete-scene", scene_id]:
+            return {"action": "delete_scene", "id": scene_id}
+        case ["save-automation", automation]:
+            return {"action": "save_automation", "automation": json.loads(automation)}
+        case ["enable-automation" | "disable-automation" as what, automation_id]:
+            return {"action": "set_automation_enabled", "id": automation_id, "enabled": what.startswith("enable")}
+        case ["run-automation", automation_id]:
+            return {"action": "run_automation", "id": automation_id}
+        case ["delete-automation", automation_id]:
+            return {"action": "delete_automation", "id": automation_id}
+        case ["log"]:
+            return {"action": "get_automation_log"}
         case ["press", device_id, button]:
             return {"action": "device_action", "id": device_id, "capability": "remote",
                     "name": "press", "args": {"button": button}}

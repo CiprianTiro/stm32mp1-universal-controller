@@ -1,0 +1,634 @@
+// automations.slint -- automations on the touchscreen (issue #47): the list
+// (on/off, run now, delete), the log of what ran, a simple editor, and the
+// hub's location (for sunrise and sunset).
+//
+// backend_daemon runs automations (automations.rs); these pages list them
+// and pass taps on. The editor here makes the two common kinds only:
+//   "At <time / sunrise / sunset> on <days>, run <scene>"
+//   "When <device> turns <on / off>, run <scene>"
+// Everything else (conditions, thresholds, several steps) is made with the
+// app or hub_ws.py -- and still listed, switched and run here.
+
+import { ListView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { PageHeader, ActionButton, Choice } from "common.slint";
+import { Keyboard } from "keyboard.slint";
+import { Toggle } from "devices.slint";
+import { SceneItem } from "scenes.slint";
+
+// One automation, as the list shows it.
+export struct AutomationItem {
+    id: string,
+    name: string,
+    // "At 07:30, Mon–Fri → Cozy"
+    summary: string,
+    enabled: bool,
+}
+
+// One line of the log.
+export struct LogItem {
+    // "13:36:00" (today) or "Mon 13:36"
+    time: string,
+    name: string,
+    // Why it ran: "13:36", "Shelly plug: switch.on is true", "touchscreen".
+    cause: string,
+    ok: bool,
+    detail: string,
+}
+
+// The text being typed (the keyboard below types into it).
+component TypedField inherits Rectangle {
+    in property <string> text;
+    height: Theme.touch-height;
+    border-radius: Theme.radius-medium;
+    background: Theme.surface;
+    border-width: 2px;
+    border-color: Theme.accent;
+    Text {
+        x: Theme.space-l;
+        width: parent.width - 2 * Theme.space-l;
+        text: root.text + "|";
+        color: Theme.text;
+        font-size: Theme.font-heading;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+}
+
+// A small caption above a group of choices.
+component Caption inherits Text {
+    color: Theme.text-muted;
+    font-size: Theme.font-caption;
+}
+
+// The automations: each with on/off, Run now and Delete (asks first).
+export component AutomationsPage inherits Rectangle {
+    in property <[AutomationItem]> automations;
+    in property <string> message;
+    in property <bool> message-ok: true;
+    in property <string> running;
+    callback back();
+    callback set-enabled(string, bool);
+    callback run(string);
+    callback delete(string);
+    callback open-log();
+    callback new-automation();
+
+    property <string> confirm-delete;
+
+    background: Theme.background;
+
+    VerticalLayout {
+        padding: Theme.space-l;
+        spacing: Theme.space-m;
+
+        PageHeader {
+            title: "Automations";
+            back => {
+                confirm-delete = "";
+                root.back();
+            }
+        }
+
+        if message != "": Text {
+            text: message;
+            color: message-ok ? Theme.ok : Theme.error;
+            font-size: Theme.font-body;
+            wrap: word-wrap;
+        }
+
+        if automations.length == 0: Text {
+            text: "No automations yet. An automation runs a scene by itself: at a time, at sunrise or sunset, or when a device turns on or off.";
+            color: Theme.text-muted;
+            font-size: Theme.font-body;
+            wrap: word-wrap;
+        }
+
+        ListView {
+            vertical-stretch: 1;
+            for item in automations: VerticalLayout {
+                padding-bottom: Theme.space-s;
+                Rectangle {
+                    border-radius: Theme.radius-medium;
+                    background: Theme.surface;
+                    // Switched off: dimmed, like an offline device.
+                    opacity: item.enabled ? 1 : 0.6;
+                    VerticalLayout {
+                        padding: Theme.space-l;
+                        spacing: Theme.space-s;
+                        HorizontalLayout {
+                            spacing: Theme.space-m;
+                            VerticalLayout {
+                                alignment: center;
+                                horizontal-stretch: 1;
+                                Text {
+                                    text: item.name;
+                                    color: Theme.text;
+                                    font-size: Theme.font-subtitle;
+                                    overflow: elide;
+                                }
+                                Text {
+                                    text: item.summary;
+                                    color: Theme.text-muted;
+                                    font-size: Theme.font-caption;
+                                    wrap: word-wrap;
+                                }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                Toggle {
+                                    on: item.enabled;
+                                    toggled(on) => {
+                                        root.set-enabled(item.id, on);
+                                    }
+                                }
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: Theme.space-s;
+                            alignment: end;
+                            ActionButton {
+                                text: confirm-delete == item.id ? "Delete?" : "Delete";
+                                destructive: confirm-delete == item.id;
+                                clicked => {
+                                    if (confirm-delete == item.id) {
+                                        confirm-delete = "";
+                                        root.delete(item.id);
+                                    } else {
+                                        confirm-delete = item.id;
+                                    }
+                                }
+                            }
+                            ActionButton {
+                                text: running == item.id ? "Running\u{2026}" : "Run now";
+                                enabled: running == "";
+                                clicked => {
+                                    confirm-delete = "";
+                                    root.run(item.id);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: Theme.space-s;
+            ActionButton {
+                text: "Log";
+                horizontal-stretch: 1;
+                clicked => {
+                    confirm-delete = "";
+                    root.open-log();
+                }
+            }
+            ActionButton {
+                text: "New automation";
+                primary: true;
+                horizontal-stretch: 2;
+                clicked => {
+                    confirm-delete = "";
+                    root.new-automation();
+                }
+            }
+        }
+    }
+
+    Timer {
+        interval: 4s;
+        running: confirm-delete != "";
+        triggered => {
+            confirm-delete = "";
+        }
+    }
+}
+
+// What ran, newest first (the hub keeps the last 200, since it started).
+export component LogPage inherits Rectangle {
+    in property <[LogItem]> entries;
+    callback back();
+
+    background: Theme.background;
+
+    VerticalLayout {
+        padding: Theme.space-l;
+        spacing: Theme.space-m;
+
+        PageHeader {
+            title: "What ran";
+            back => {
+                root.back();
+            }
+        }
+
+        if entries.length == 0: Text {
+            text: "Nothing has run since the hub started.";
+            color: Theme.text-muted;
+            font-size: Theme.font-body;
+            wrap: word-wrap;
+        }
+
+        ListView {
+            vertical-stretch: 1;
+            for entry in entries: VerticalLayout {
+                padding-bottom: Theme.space-s;
+                Rectangle {
+                    border-radius: Theme.radius-medium;
+                    background: Theme.surface;
+                    VerticalLayout {
+                        padding: Theme.space-m;
+                        padding-left: Theme.space-l;
+                        spacing: Theme.space-xxs;
+                        HorizontalLayout {
+                            spacing: Theme.space-m;
+                            Text {
+                                text: entry.time;
+                                color: Theme.text-muted;
+                                font-size: Theme.font-body;
+                            }
+                            Text {
+                                text: entry.name;
+                                color: entry.ok ? Theme.text : Theme.error;
+                                font-size: Theme.font-body;
+                                horizontal-stretch: 1;
+                                overflow: elide;
+                            }
+                        }
+                        Text {
+                            text: entry.cause;
+                            color: Theme.text-muted;
+                            font-size: Theme.font-caption;
+                            overflow: elide;
+                        }
+                        if entry.detail != "": Text {
+                            text: entry.detail;
+                            color: Theme.error;
+                            font-size: Theme.font-caption;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// The simple editor: 0 = when, 1 = which scene, 2 = its name.
+export component NewAutomationPage inherits Rectangle {
+    in property <[SceneItem]> scenes;
+    // Devices that can be switched on and off (id, name).
+    in property <[SceneItem]> switch-devices;
+    in property <bool> has-location;
+    in property <string> message;
+    in property <bool> busy;
+    in-out property <string> name;
+    callback back();
+    callback backspace();
+    callback open-location();
+    // The name to suggest for these choices (main.rs: automation_text).
+    pure callback suggest(int, int, int, int, string, string) -> string;
+    // when, hour, minute, offset, days (bit 0 = Monday), device id, scene id.
+    callback save(int, int, int, int, int, string, string);
+
+    property <int> view: 0;
+    // 0 at a time, 1 sunrise, 2 sunset, 3 device on, 4 device off
+    // (automation_text.rs's WHEN_*).
+    property <int> when: 0;
+    property <int> hour: 7;
+    property <int> minute: 0;
+    property <int> offset: 0;
+    property <int> days: 127;
+    property <string> device-id;
+    property <string> device-name;
+    property <string> scene-id;
+    property <string> scene-name;
+    property <[int]> bits: [1, 2, 4, 8, 16, 32, 64];
+    property <[string]> day-names: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    // The "when" is complete: a device picked, the location known.
+    property <bool> when-ok: when >= 3 ? device-id != "" : (when == 0 || has-location) && days != 0;
+
+    background: Theme.background;
+
+    VerticalLayout {
+        padding: Theme.space-l;
+        spacing: Theme.space-m;
+
+        PageHeader {
+            title: view == 0 ? "When?" : view == 1 ? "Run which scene?" : "Name it";
+            back => {
+                if (view > 0) {
+                    view -= 1;
+                } else {
+                    root.back();
+                }
+            }
+        }
+
+        // ---- 0: when ----
+        if view == 0: HorizontalLayout {
+            spacing: Theme.space-xs;
+            Choice {
+                text: "Time";
+                selected: when == 0;
+                clicked => {
+                    when = 0;
+                }
+            }
+            Choice {
+                text: "Sunrise";
+                selected: when == 1;
+                clicked => {
+                    when = 1;
+                }
+            }
+            Choice {
+                text: "Sunset";
+                selected: when == 2;
+                clicked => {
+                    when = 2;
+                }
+            }
+        }
+        if view == 0: HorizontalLayout {
+            spacing: Theme.space-xs;
+            Choice {
+                text: "Device turns on";
+                selected: when == 3;
+                clicked => {
+                    when = 3;
+                }
+            }
+            Choice {
+                text: "Device turns off";
+                selected: when == 4;
+                clicked => {
+                    when = 4;
+                }
+            }
+        }
+
+        // The time: hours and minutes, each with - / +.
+        if view == 0 && when == 0: HorizontalLayout {
+            spacing: Theme.space-m;
+            alignment: center;
+            ActionButton {
+                text: "\u{2212}";
+                clicked => {
+                    hour = Math.mod(hour + 23, 24);
+                }
+            }
+            ActionButton {
+                text: "+";
+                clicked => {
+                    hour = Math.mod(hour + 1, 24);
+                }
+            }
+            Text {
+                text: (hour < 10 ? "0" : "") + hour + ":" + (minute < 10 ? "0" : "") + minute;
+                color: Theme.text;
+                font-size: Theme.font-title;
+                vertical-alignment: center;
+                horizontal-alignment: center;
+                min-width: 110px;
+            }
+            ActionButton {
+                text: "\u{2212}";
+                clicked => {
+                    minute = Math.mod(minute + 55, 60);
+                }
+            }
+            ActionButton {
+                text: "+";
+                clicked => {
+                    minute = Math.mod(minute + 5, 60);
+                }
+            }
+        }
+        if view == 0 && when == 0: Caption {
+            text: "Hours on the left, minutes (5 at a time) on the right.";
+            horizontal-alignment: center;
+        }
+
+        // Sunrise / sunset: the location first, then minutes before/after.
+        if view == 0 && (when == 1 || when == 2) && !has-location: VerticalLayout {
+            spacing: Theme.space-s;
+            Text {
+                text: "Sunrise and sunset need the hub's location.";
+                color: Theme.error;
+                font-size: Theme.font-body;
+                wrap: word-wrap;
+            }
+            ActionButton {
+                text: "Set the location";
+                clicked => {
+                    root.open-location();
+                }
+            }
+        }
+        if view == 0 && (when == 1 || when == 2) && has-location: HorizontalLayout {
+            spacing: Theme.space-m;
+            alignment: center;
+            ActionButton {
+                text: "\u{2212}5";
+                enabled: offset > -180;
+                clicked => {
+                    offset -= 5;
+                }
+            }
+            Text {
+                text: offset == 0 ? "At " + (when == 1 ? "sunrise" : "sunset")
+                    : offset < 0 ? (-offset) + " min before" : offset + " min after";
+                color: Theme.text;
+                font-size: Theme.font-subtitle;
+                vertical-alignment: center;
+                horizontal-alignment: center;
+                min-width: 180px;
+            }
+            ActionButton {
+                text: "+5";
+                enabled: offset < 180;
+                clicked => {
+                    offset += 5;
+                }
+            }
+        }
+
+        // The days, for the scheduled kinds.
+        if view == 0 && when <= 2: Caption {
+            text: days == 127 ? "Every day" : days == 0 ? "Pick at least one day" : "On these days";
+        }
+        if view == 0 && when <= 2: HorizontalLayout {
+            spacing: Theme.space-xxs;
+            for day[i] in day-names: Choice {
+                text: day;
+                selected: Math.mod(Math.floor(days / bits[i]), 2) == 1;
+                clicked => {
+                    days = self.selected ? days - bits[i] : days + bits[i];
+                }
+            }
+        }
+
+        // The device, for "turns on / off".
+        if view == 0 && when >= 3: Caption {
+            text: switch-devices.length == 0 ? "No device can be switched on and off." : "Which device?";
+        }
+        if view == 0 && when >= 3: ListView {
+            vertical-stretch: 1;
+            for device in switch-devices: VerticalLayout {
+                padding-bottom: Theme.space-xs;
+                Choice {
+                    text: device.name;
+                    selected: device.id == device-id;
+                    clicked => {
+                        device-id = device.id;
+                        device-name = device.name;
+                    }
+                }
+            }
+        }
+        if view == 0 && when <= 2: Rectangle {
+            vertical-stretch: 1;
+        }
+        if view == 0: ActionButton {
+            text: "Next";
+            primary: true;
+            enabled: when-ok;
+            clicked => {
+                view = 1;
+            }
+        }
+
+        // ---- 1: the scene ----
+        if view == 1 && scenes.length == 0: Text {
+            text: "There are no scenes yet. Make one first (Scenes \u{2192} Save current state); an automation runs a scene.";
+            color: Theme.text-muted;
+            font-size: Theme.font-body;
+            wrap: word-wrap;
+        }
+        if view == 1: ListView {
+            vertical-stretch: 1;
+            for scene in scenes: VerticalLayout {
+                padding-bottom: Theme.space-xs;
+                Choice {
+                    text: scene.name;
+                    selected: scene.id == scene-id;
+                    clicked => {
+                        scene-id = scene.id;
+                        scene-name = scene.name;
+                    }
+                }
+            }
+        }
+        if view == 1: ActionButton {
+            text: "Next";
+            primary: true;
+            enabled: scene-id != "";
+            clicked => {
+                root.name = root.suggest(when, hour, minute, offset, device-name, scene-name);
+                view = 2;
+            }
+        }
+
+        // ---- 2: the name ----
+        if view == 2: TypedField {
+            text: root.name;
+        }
+        if view == 2 && message != "": Text {
+            text: message;
+            color: Theme.error;
+            font-size: Theme.font-body;
+            wrap: word-wrap;
+        }
+        if view == 2 && busy: Text {
+            text: "Saving\u{2026}";
+            color: Theme.text-muted;
+            font-size: Theme.font-body;
+        }
+        if view == 2: Rectangle {
+            vertical-stretch: 1;
+        }
+        if view == 2: Keyboard {
+            text <=> root.name;
+            max-length: 64;
+            backspace => {
+                root.backspace();
+            }
+            done => {
+                if (root.name != "" && !busy) {
+                    root.save(when, hour, minute, offset, days, device-id, scene-id);
+                }
+            }
+        }
+    }
+
+    // main.rs gives new lists each time the editor opens: start over.
+    changed scenes => {
+        view = 0;
+        when = 0;
+        hour = 7;
+        minute = 0;
+        offset = 0;
+        days = 127;
+        device-id = "";
+        device-name = "";
+        scene-id = "";
+        scene-name = "";
+    }
+}
+
+// The hub's location: two numbers, typed on the keyboard.
+export component LocationPage inherits Rectangle {
+    in-out property <string> text;
+    // What's set now: "44.43, 26.10", or "" if nothing.
+    in property <string> current;
+    in property <string> message;
+    callback back();
+    callback backspace();
+    callback save(string);
+
+    background: Theme.background;
+
+    VerticalLayout {
+        padding: Theme.space-l;
+        spacing: Theme.space-m;
+
+        PageHeader {
+            title: "Location";
+            back => {
+                root.back();
+            }
+        }
+        Text {
+            text: "Where the hub is, for sunrise and sunset: latitude, then longitude, in degrees (south and west negative). Bucharest is 44.43, 26.10. Your phone's map app shows yours.";
+            color: Theme.text-muted;
+            font-size: Theme.font-body;
+            wrap: word-wrap;
+        }
+        if current != "": Caption {
+            text: "Now: " + current;
+        }
+        TypedField {
+            text: root.text;
+        }
+        if message != "": Text {
+            text: message;
+            color: Theme.error;
+            font-size: Theme.font-body;
+            wrap: word-wrap;
+        }
+        Rectangle {
+            vertical-stretch: 1;
+        }
+        Keyboard {
+            text <=> root.text;
+            max-length: 24;
+            backspace => {
+                root.backspace();
+            }
+            done => {
+                root.save(root.text);
+            }
+        }
+    }
+}

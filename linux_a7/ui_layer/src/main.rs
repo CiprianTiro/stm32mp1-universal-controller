@@ -15,6 +15,7 @@
 
 mod display;
 mod ir_finder;
+mod automation_text;
 mod ir_layout;
 mod pointer;
 mod setup;
@@ -198,6 +199,75 @@ fn main() {
             serde_json::json!({ "state": "unlocked", "confirmed": true })
         };
         let _ = tx.send(ws_client::Request::Command { id: id.to_string(), capability: "lock".into(), value });
+    });
+
+    // ---- Scenes (issue #47, scenes.slint) -------------------------------
+    // The scenes as backend_daemon last sent them (for names in messages),
+    // and the devices offered by "Save current state" (their ids, in the
+    // order of the pick list).
+    let scenes: std::rc::Rc<std::cell::RefCell<Vec<ws_client::Scene>>> = Default::default();
+    let tx = request_tx.clone();
+    let ui_weak = ui.as_weak();
+    ui.on_run_scene(move |id| {
+        let ui = ui_weak.unwrap();
+        // One at a time: the buttons wait for its answer.
+        if !ui.get_scene_running().is_empty() {
+            return;
+        }
+        ui.set_scene_running(id.clone());
+        let _ = tx.send(ws_client::Request::RunScene { id: id.to_string() });
+    });
+    let tx = request_tx.clone();
+    ui.on_delete_scene(move |id| {
+        let _ = tx.send(ws_client::Request::DeleteScene { id: id.to_string() });
+    });
+    let ui_weak = ui.as_weak();
+    ui.on_open_scenes(move || {
+        let ui = ui_weak.unwrap();
+        ui.set_scenes_message("".into());
+        ui.set_page(PAGE_SCENES);
+    });
+    // "Save current state": every device a scene can set, none picked yet.
+    let ui_weak = ui.as_weak();
+    let rows_for_pick = rows.clone();
+    ui.on_open_capture(move || {
+        let ui = ui_weak.unwrap();
+        let rows = rows_for_pick.borrow();
+        let mut devices: Vec<&ws_client::Device> = rows.devices.values().filter(|d| capturable(d)).collect();
+        devices.sort_by(|a, b| (&a.room, &a.name).cmp(&(&b.room, &b.name)));
+        let items: Vec<PickItem> = devices
+            .into_iter()
+            .map(|d| PickItem { id: d.id.clone().into(), name: d.name.clone().into(), detail: state_text(d).into(), selected: false })
+            .collect();
+        // A new model each time: the page sees `devices` change and starts
+        // over at its first view.
+        ui.set_pick_devices(std::rc::Rc::new(slint::VecModel::from(items)).into());
+        ui.set_pick_count(0);
+        ui.set_scene_name("".into());
+        ui.set_capture_message("".into());
+        ui.set_capture_busy(false);
+        ui.set_page(PAGE_CAPTURE);
+    });
+    let ui_weak = ui.as_weak();
+    ui.on_toggle_pick(move |index| {
+        use slint::Model;
+        let ui = ui_weak.unwrap();
+        let model = ui.get_pick_devices();
+        if let Some(mut item) = model.row_data(index as usize) {
+            item.selected = !item.selected;
+            model.set_row_data(index as usize, item);
+        }
+        ui.set_pick_count(model.iter().filter(|d| d.selected).count() as i32);
+    });
+    let tx = request_tx.clone();
+    let ui_weak = ui.as_weak();
+    ui.on_capture_scene(move |name| {
+        use slint::Model;
+        let ui = ui_weak.unwrap();
+        let devices: Vec<String> = ui.get_pick_devices().iter().filter(|d| d.selected).map(|d| d.id.to_string()).collect();
+        ui.set_capture_message("".into());
+        ui.set_capture_busy(true);
+        let _ = tx.send(ws_client::Request::CaptureScene { name: name.trim().to_string(), devices });
     });
 
     // ---- Adding and setting up devices (issue #40) ----------------------
@@ -517,9 +587,9 @@ fn main() {
             let _ = tx.send(field(value.to_string()));
         }
     };
-    ui.on_set_mode(set(|mode| ws_client::Request::SetSettings { mode: Some(mode), accent: None, density: None, time_zone: None }));
-    ui.on_set_accent(set(|accent| ws_client::Request::SetSettings { mode: None, accent: Some(accent), density: None, time_zone: None }));
-    ui.on_set_density(set(|density| ws_client::Request::SetSettings { mode: None, accent: None, density: Some(density), time_zone: None }));
+    ui.on_set_mode(set(|mode| ws_client::Request::SetSettings { mode: Some(mode), accent: None, density: None, time_zone: None, latitude: None, longitude: None }));
+    ui.on_set_accent(set(|accent| ws_client::Request::SetSettings { mode: None, accent: Some(accent), density: None, time_zone: None, latitude: None, longitude: None }));
+    ui.on_set_density(set(|density| ws_client::Request::SetSettings { mode: None, accent: None, density: Some(density), time_zone: None, latitude: None, longitude: None }));
 
     // The time zone page: the regions first...
     let ui_weak = ui.as_weak();
@@ -547,8 +617,109 @@ fn main() {
                 accent: None,
                 density: None,
                 time_zone: Some(item.value.to_string()),
+                latitude: None,
+                longitude: None,
             });
             ui.set_page(4);
+        }
+    });
+
+    // ---- Automations (issue #47, automations.slint) ---------------------
+    // The automations as backend_daemon last sent them (JSON: only the
+    // parts automation_text.rs reads), and the log, newest last.
+    let automations: std::rc::Rc<std::cell::RefCell<Vec<serde_json::Value>>> = Default::default();
+    let log: std::rc::Rc<std::cell::RefCell<Vec<ws_client::LogEntry>>> = Default::default();
+    let ui_weak = ui.as_weak();
+    ui.on_open_automations(move || {
+        let ui = ui_weak.unwrap();
+        ui.set_automations_message("".into());
+        ui.set_page(PAGE_AUTOMATIONS);
+    });
+    let tx = request_tx.clone();
+    ui.on_set_automation_enabled(move |id, enabled| {
+        let _ = tx.send(ws_client::Request::SetAutomationEnabled { id: id.to_string(), enabled });
+    });
+    let tx = request_tx.clone();
+    let ui_weak = ui.as_weak();
+    ui.on_run_automation(move |id| {
+        let ui = ui_weak.unwrap();
+        if !ui.get_automation_running().is_empty() {
+            return;
+        }
+        ui.set_automation_running(id.clone());
+        let _ = tx.send(ws_client::Request::RunAutomation { id: id.to_string() });
+    });
+    let tx = request_tx.clone();
+    ui.on_delete_automation(move |id| {
+        let _ = tx.send(ws_client::Request::DeleteAutomation { id: id.to_string() });
+    });
+    let ui_weak = ui.as_weak();
+    ui.on_open_log(move || ui_weak.unwrap().set_page(PAGE_LOG));
+    // The editor: fresh lists (which also makes it start over), the
+    // devices that switch on and off.
+    let ui_weak = ui.as_weak();
+    let (rows_for_editor, scenes_for_editor) = (rows.clone(), scenes.clone());
+    ui.on_new_automation(move || {
+        let ui = ui_weak.unwrap();
+        let rows = rows_for_editor.borrow();
+        let mut switchable: Vec<&ws_client::Device> = rows.devices.values().filter(|d| d.capabilities.switch.is_some()).collect();
+        switchable.sort_by(|a, b| (&a.room, &a.name).cmp(&(&b.room, &b.name)));
+        let devices: Vec<SceneItem> = switchable
+            .into_iter()
+            .map(|d| SceneItem { id: d.id.clone().into(), name: d.name.clone().into(), detail: d.room.clone().into() })
+            .collect();
+        ui.set_switch_devices(std::rc::Rc::new(slint::VecModel::from(devices)).into());
+        let scenes: Vec<SceneItem> = scenes_for_editor
+            .borrow()
+            .iter()
+            .map(|s| SceneItem { id: s.id.clone().into(), name: s.name.clone().into(), detail: "".into() })
+            .collect();
+        ui.set_editor_scenes(std::rc::Rc::new(slint::VecModel::from(scenes)).into());
+        ui.set_automation_name("".into());
+        ui.set_automation_message("".into());
+        ui.set_automation_busy(false);
+        ui.set_page(PAGE_NEW_AUTOMATION);
+    });
+    ui.on_suggest_automation_name(|when, hour, minute, offset, device, scene| {
+        automation_text::suggested_name(when, hour, minute, offset, &device, &scene).into()
+    });
+    let tx = request_tx.clone();
+    let ui_weak = ui.as_weak();
+    ui.on_save_automation(move |name, when, hour, minute, offset, days, device, scene| {
+        let ui = ui_weak.unwrap();
+        ui.set_automation_message("".into());
+        ui.set_automation_busy(true);
+        let automation = automation_text::simple_automation(&name, when, hour, minute, offset, days, &device, &scene);
+        let _ = tx.send(ws_client::Request::SaveAutomation { automation });
+    });
+    // The location page, from Settings (4) or the editor (18).
+    let ui_weak = ui.as_weak();
+    ui.on_open_location(move |back| {
+        let ui = ui_weak.unwrap();
+        ui.set_location_back(back);
+        ui.set_location_text(ui.get_location_current());
+        ui.set_location_message("".into());
+        ui.set_page(PAGE_LOCATION);
+    });
+    let tx = request_tx.clone();
+    let ui_weak = ui.as_weak();
+    ui.on_save_location(move |text| {
+        let ui = ui_weak.unwrap();
+        match automation_text::parse_location(&text) {
+            Ok((latitude, longitude)) => {
+                let _ = tx.send(ws_client::Request::SetSettings {
+                    mode: None,
+                    accent: None,
+                    density: None,
+                    time_zone: None,
+                    latitude: Some(latitude),
+                    longitude: Some(longitude),
+                });
+                // The new value shows once backend_daemon confirms
+                // (Update::Settings).
+                ui.set_page(ui.get_location_back());
+            }
+            Err(why) => ui.set_location_message(why.into()),
         }
     });
 
@@ -636,6 +807,91 @@ fn main() {
                     device_message_until = Some(std::time::Instant::now() + DEVICE_MESSAGE_TIME);
                 }
                 ws_client::Update::Removed(Err(message)) => ui.set_dev_message(message.into()),
+                // Scenes (issue #47).
+                ws_client::Update::Scenes(list, autos) => {
+                    show_scenes(&ui, &scenes, list);
+                    show_automations(&ui, &automations, autos, &rows.borrow().devices, &scenes.borrow());
+                }
+                ws_client::Update::SceneSaved(list, autos) => {
+                    show_scenes(&ui, &scenes, list);
+                    show_automations(&ui, &automations, autos, &rows.borrow().devices, &scenes.borrow());
+                    ui.set_capture_busy(false);
+                    ui.set_scenes_message_ok(true);
+                    ui.set_scenes_message(format!("Saved \u{201C}{}\u{201D}. Tap Run to try it.", ui.get_scene_name().trim()).into());
+                    ui.set_page(PAGE_SCENES);
+                }
+                ws_client::Update::AutomationSaved(list, autos) => {
+                    show_scenes(&ui, &scenes, list);
+                    show_automations(&ui, &automations, autos, &rows.borrow().devices, &scenes.borrow());
+                    ui.set_automation_busy(false);
+                    ui.set_automations_message_ok(true);
+                    ui.set_automations_message(format!("Saved \u{201C}{}\u{201D}.", ui.get_automation_name().trim()).into());
+                    ui.set_page(PAGE_AUTOMATIONS);
+                }
+                ws_client::Update::AutomationsFailed(message) => {
+                    ui.set_automation_busy(false);
+                    if ui.get_page() == PAGE_NEW_AUTOMATION {
+                        ui.set_automation_message(message.into());
+                    } else {
+                        ui.set_automations_message_ok(false);
+                        ui.set_automations_message(message.into());
+                    }
+                }
+                ws_client::Update::AutomationRanNow { id, result } => {
+                    ui.set_automation_running("".into());
+                    let name = automations
+                        .borrow()
+                        .iter()
+                        .find(|a| a["id"] == id.as_str())
+                        .and_then(|a| a["name"].as_str().map(str::to_string))
+                        .unwrap_or(id);
+                    ui.set_automations_message_ok(result.is_ok());
+                    ui.set_automations_message(match result {
+                        Ok(()) => format!("{name}: done"),
+                        Err(why) => format!("{name}: {why}"),
+                    }
+                    .into());
+                }
+                ws_client::Update::Log(entries) => {
+                    *log.borrow_mut() = entries;
+                    show_log(&ui, &log.borrow(), &settings.borrow().time_zone);
+                }
+                ws_client::Update::LogEntry(entry) => {
+                    let mut log = log.borrow_mut();
+                    // The hub keeps 200; so does this screen.
+                    if log.len() >= 200 {
+                        log.remove(0);
+                    }
+                    log.push(entry);
+                    show_log(&ui, &log, &settings.borrow().time_zone);
+                }
+                ws_client::Update::ScenesFailed(message) => {
+                    ui.set_capture_busy(false);
+                    if ui.get_page() == PAGE_CAPTURE {
+                        ui.set_capture_message(message.into());
+                    } else {
+                        ui.set_scenes_message_ok(false);
+                        ui.set_scenes_message(message.into());
+                    }
+                }
+                ws_client::Update::SceneRan { id, result } => {
+                    ui.set_scene_running("".into());
+                    let name = scenes.borrow().iter().find(|s| s.id == id).map_or(id.clone(), |s| s.name.clone());
+                    let (ok, message) = match result {
+                        Ok(()) => (true, format!("{name}: done")),
+                        Err(why) => (false, format!("{name}: {why}")),
+                    };
+                    // Said where it was asked from: the Scenes page, or
+                    // under the device list (the quick buttons).
+                    if ui.get_page() == PAGE_SCENES {
+                        ui.set_scenes_message_ok(ok);
+                        ui.set_scenes_message(message.into());
+                    } else {
+                        ui.set_device_message_ok(ok);
+                        ui.set_device_message(message.into());
+                        device_message_until = Some(std::time::Instant::now() + DEVICE_MESSAGE_TIME);
+                    }
+                }
                 // The code finder's actions (issue #82): its next step.
                 ws_client::Update::DeviceAction { name, args, result }
                     if ui.get_page() == PAGE_IR_REMOTE && matches!(name.as_str(), "library" | "finder" | "try" | "use_set") =>
@@ -731,6 +987,13 @@ fn main() {
                 // a phone -- applied at once, no restart.
                 ws_client::Update::Settings(new) => {
                     show_settings(&ui, &new, &mut shown_dark);
+                    // Issue #47: the location (sunrise/sunset).
+                    let location = match (new.latitude, new.longitude) {
+                        (Some(lat), Some(lon)) => format!("{lat:.2}, {lon:.2}"),
+                        _ => String::new(),
+                    };
+                    ui.set_has_location(!location.is_empty());
+                    ui.set_location_current(location.into());
                     *settings.borrow_mut() = new;
                 }
                 ws_client::Update::Networks(networks) => {
@@ -1051,6 +1314,117 @@ impl DeviceRows {
             self.columns = columns;
         }
     }
+}
+
+/// Automations (issue #47): the list, the log, the editor, the location.
+const PAGE_AUTOMATIONS: i32 = 16;
+const PAGE_LOG: i32 = 17;
+const PAGE_NEW_AUTOMATION: i32 = 18;
+const PAGE_LOCATION: i32 = 19;
+
+/// The automations page's list: each with its one-line summary (device
+/// and scene names, not ids).
+fn show_automations(
+    ui: &AppWindow,
+    store: &std::cell::RefCell<Vec<serde_json::Value>>,
+    list: Vec<serde_json::Value>,
+    devices: &std::collections::BTreeMap<String, ws_client::Device>,
+    scenes: &[ws_client::Scene],
+) {
+    let device_name = |id: &str| devices.get(id).map_or(id.to_string(), |d| d.name.clone());
+    let scene_name = |id: &str| scenes.iter().find(|s| s.id == id).map_or(id.to_string(), |s| s.name.clone());
+    let items: Vec<AutomationItem> = list
+        .iter()
+        .map(|a| AutomationItem {
+            id: a["id"].as_str().unwrap_or_default().into(),
+            name: a["name"].as_str().unwrap_or_default().into(),
+            summary: automation_text::summary(a, &device_name, &scene_name).into(),
+            enabled: a["enabled"].as_bool().unwrap_or(true),
+        })
+        .collect();
+    ui.set_automations(std::rc::Rc::new(slint::VecModel::from(items)).into());
+    *store.borrow_mut() = list;
+}
+
+/// The log page: newest first, times in the hub's time zone.
+fn show_log(ui: &AppWindow, log: &[ws_client::LogEntry], time_zone: &str) {
+    let items: Vec<LogItem> = log
+        .iter()
+        .rev()
+        .map(|e| LogItem {
+            time: zones::local_moment(time_zone, e.at).into(),
+            name: e.name.clone().into(),
+            cause: e.cause.clone().into(),
+            ok: e.ok,
+            detail: e.detail.clone().into(),
+        })
+        .collect();
+    ui.set_log_entries(std::rc::Rc::new(slint::VecModel::from(items)).into());
+}
+
+/// The scenes (issue #47): the list, and "Save current state".
+const PAGE_SCENES: i32 = 14;
+const PAGE_CAPTURE: i32 = 15;
+
+/// The scenes on both pages: all of them on the Scenes page, the first
+/// few as the Devices page's quick buttons -- as many as fit beside its
+/// "Scenes" button: 2 on the touchscreen, 5 on a wide monitor.
+fn show_scenes(ui: &AppWindow, store: &std::cell::RefCell<Vec<ws_client::Scene>>, list: Vec<ws_client::Scene>) {
+    let item = |s: &ws_client::Scene| {
+        let devices: std::collections::BTreeSet<&str> = s.steps.iter().filter_map(|step| step["device"].as_str()).collect();
+        let detail = match devices.len() {
+            0 => format!("{} steps", s.steps.len()),
+            1 => "1 device".to_string(),
+            n => format!("{n} devices"),
+        };
+        SceneItem { id: s.id.clone().into(), name: s.name.clone().into(), detail: detail.into() }
+    };
+    let all: Vec<SceneItem> = list.iter().map(item).collect();
+    let quick = if ui.get_columns() <= 1 { 2 } else { 5 };
+    ui.set_quick_scenes(std::rc::Rc::new(slint::VecModel::from(all.iter().take(quick).cloned().collect::<Vec<_>>())).into());
+    ui.set_scenes(std::rc::Rc::new(slint::VecModel::from(all)).into());
+    *store.borrow_mut() = list;
+}
+
+/// Can "Save current state" capture something of this device? (The same
+/// rule as backend_daemon's automations::capture_steps: never a lock.)
+fn capturable(device: &ws_client::Device) -> bool {
+    let c = &device.capabilities;
+    c.switch.is_some()
+        || c.dimmer.is_some()
+        || c.color.is_some()
+        || c.climate.is_some()
+        || c.cover.as_ref().is_some_and(|cover| cover.can_position)
+        || c.media.as_ref().is_some_and(|m| !m.input.is_empty())
+}
+
+/// What "Save current state" would save, in a few words: "On, 30 %,
+/// 2700 K", "Off", "Cool 22.5 °C", "40 % open".
+fn state_text(device: &ws_client::Device) -> String {
+    let c = &device.capabilities;
+    if c.switch.as_ref().is_some_and(|s| !s.on) {
+        return "Off".into();
+    }
+    let mut parts = Vec::new();
+    if c.switch.is_some() {
+        parts.push("On".to_string());
+    }
+    if let Some(d) = &c.dimmer {
+        parts.push(format!("{} %", d.level));
+    }
+    if let Some(color) = &c.color {
+        parts.push(color_of(color).1);
+    }
+    if let Some(position) = c.cover.as_ref().and_then(|cover| cover.position) {
+        parts.push(format!("{position} % open"));
+    }
+    if let Some(climate) = &c.climate {
+        parts.push(format!("{} {}", climate.mode, celsius(climate.target)));
+    }
+    if let Some(media) = c.media.as_ref().filter(|m| !m.input.is_empty()) {
+        parts.push(format!("volume {}", media.volume));
+    }
+    parts.join(", ")
 }
 
 /// The remote page (issue #44). Not a setup page: its number lives here.

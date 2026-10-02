@@ -102,6 +102,24 @@ impl Topics {
     }
 }
 
+/* Issue #47: the named shadow listing the hub's scenes -- and the way to
+ * run one from the cloud: desired {"run": "<scene id>"}. Reserved: no
+ * device may have this id (device.rs). */
+pub const SCENES_SHADOW: &str = "hub-scenes";
+
+/* The scenes shadow's report: {"scenes": [{"id", "name"}, ...]} -- a LIST,
+ * because AWS replaces a list as a whole (an object's keys would be merged,
+ * and a deleted scene would stay). `clear_desired`: a run request was
+ * handled (or is stale), remove it. */
+pub fn scenes_report(scenes: &std::collections::BTreeMap<String, String>, clear_desired: bool) -> Vec<u8> {
+    let list: Vec<Value> = scenes.iter().map(|(id, name)| json!({ "id": id, "name": name })).collect();
+    let mut doc = json!({ "state": { "reported": { "scenes": list } } });
+    if clear_desired {
+        doc["state"]["desired"] = Value::Null;
+    }
+    doc.to_string().into_bytes()
+}
+
 /* What an incoming message on a device's shadow means. */
 #[derive(Debug, PartialEq)]
 pub enum Event {
@@ -274,6 +292,20 @@ pub fn decode_names(schema: u32, payload: &[u8]) -> Result<BTreeSet<DeviceId>, S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /* Issue #47: the scenes as a list (replaced whole by AWS), the run
+     * request cleared on demand, and the name reserved for devices. */
+    #[test]
+    fn scenes_report_and_reserved_name() {
+        let scenes: std::collections::BTreeMap<String, String> = [("movie".to_string(), "Movie".to_string())].into();
+        let doc: Value = serde_json::from_slice(&scenes_report(&scenes, true)).unwrap();
+        assert_eq!(doc, json!({"state": {"reported": {"scenes": [{"id": "movie", "name": "Movie"}]}, "desired": null}}));
+        let doc: Value = serde_json::from_slice(&scenes_report(&Default::default(), false)).unwrap();
+        assert_eq!(doc, json!({"state": {"reported": {"scenes": []}}}));
+        let device: crate::device::Device =
+            serde_json::from_value(json!({"id": SCENES_SHADOW, "name": "x", "capabilities": {"switch": {"on": true}}})).unwrap();
+        assert!(device.check().unwrap_err().contains("reserved"));
+    }
 
     fn props(on: bool) -> Value {
         json!({"capabilities": {"switch": {"on": on}}})
