@@ -18,7 +18,8 @@
     }
   ],
   "discovery": [
-    { "method": "mdns", "service": "_wled._tcp", "fill": { "host": "{address}", "name": "{name}", "mac": "{txt.mac}" } }
+    { "method": "mdns", "service": "_wled._tcp", "fill": { "host": "{address}", "name": "{name}", "mac": "{txt.mac}" } },
+    { "method": "port_probe", "port": 80, "manufacturers": ["Espressif"], "get": "/json/info", "match": { "json.brand": "WLED" }, "fill": { "host": "{address}", "name": "{json.name}", "mac": "{json.mac}" } }
   ],
   "setup": [
     { "id": "guided", "label": "Find it automatically", "steps": [ { "type": "discover" }, { "type": "test" } ] },

@@ -23,6 +23,14 @@
       "service": "_shelly._tcp",
       "match": { "txt.app": "PlugSG3" },
       "fill": { "host": "{address}", "shelly_id": "{name}" }
+    },
+    {
+      "method": "port_probe",
+      "port": 80,
+      "manufacturers": ["Espressif", "Shelly"],
+      "get": "/shelly",
+      "match": { "json.app": "PlugSG3" },
+      "fill": { "host": "{address}", "shelly_id": "{json.id}" }
     }
   ],
   "setup": [
