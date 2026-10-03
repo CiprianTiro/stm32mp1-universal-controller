@@ -13,7 +13,11 @@
  *     bulbs) sent to the broadcast address of every network the hub is
  *     on, with the SSDP rounds -- every device of that kind answers;
  *   - UDP multicast (issue #75): listening on a group devices announce
- *     themselves to (Yeelight), all the time.
+ *     themselves to (Yeelight), all the time;
+ *   - network scan and port probe (issue #73, netscan.rs): devices that
+ *     announce nothing, found by their MAC address's maker and the ports
+ *     they answer on -- ONLY when someone asks (discover_now: the
+ *     wizard's search), never on the timer.
  * (WS-Discovery and the rest come with their first device.)
  *
  * A template's "match" picks ITS devices among what a method finds: every
@@ -25,11 +29,16 @@
  *     aren't added yet -- adding one is a tap, the address pre-filled;
  *   - IP AUTO-UPDATE: an added device seen at a NEW address (same
  *     identity: MAC, UUID) simply gets its address updated, and its
- *     adapter restarted -- no "device lost" after a router restart.
+ *     adapter restarted -- no "device lost" after a router restart;
+ *   - RE-FIND BY MAC (issue #73, refind below): an added device that went
+ *     offline and announces nothing is looked for by its MAC address in
+ *     the kernel's neighbour table, and, at most every REFIND_GAP, by a
+ *     network sweep.
  *
  * Gentle on the network: mDNS and multicast are listening; SSDP and UDP
- * broadcast send one small packet per template every PASS (5 min). Nothing
- * here scans addresses.
+ * broadcast send one small packet per template every PASS (5 min). Only
+ * netscan.rs sends to every address, bounded and paced as described
+ * there, and only when asked or re-finding.
  *
  * FIREWALL: SSDP and UDP broadcast answers arrive as unicast to our
  * sending port, which the default-deny firewall (#37) only lets in
@@ -49,6 +58,8 @@ use tokio::net::UdpSocket;
 use tokio::sync::{mpsc, watch, Notify};
 
 use crate::control::Control;
+use crate::device::Health;
+use crate::netscan::{self, Host, Scanner};
 use crate::network;
 use crate::templates::{self, Template, Templates};
 
@@ -65,6 +76,10 @@ const SSDP_WAIT: Duration = Duration::from_secs(3);
 const PASS: Duration = Duration::from_secs(300);
 /* Not seen for this long: dropped from the inbox (switched off, gone). */
 const EXPIRE: Duration = Duration::from_secs(15 * 60);
+/* Re-finding an offline device sweeps the network at most this often
+ * (issue #73): a device that is simply switched off would otherwise make
+ * the hub sweep every PASS, forever. */
+const REFIND_GAP: Duration = Duration::from_secs(30 * 60);
 
 /* One device found, as the inbox shows it. */
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -84,6 +99,11 @@ pub struct Found {
 struct Entry {
     found: Found,
     last_seen: Instant,
+    /* Issue #73: found by a network scan or port probe only. The device's
+     * own announcement (mDNS, SSDP, ...) says more -- its real name -- and
+     * replaces it; the other way round, a probe only confirms the device
+     * is still there. Without this the two took turns, each search. */
+    probed: bool,
 }
 
 pub struct Discovery {
@@ -98,6 +118,10 @@ pub struct Discovery {
     changed: watch::Sender<u64>,
     /* discover_now wakes the search loop. */
     wake: Notify,
+    /* Issue #73: network sweeps, rate-limited (netscan.rs). */
+    scanner: Scanner,
+    /* When re-finding last swept (REFIND_GAP). */
+    last_refind_sweep: Mutex<Option<Instant>>,
 }
 
 impl Discovery {
@@ -109,6 +133,8 @@ impl Discovery {
             entries: Mutex::new(BTreeMap::new()),
             changed: watch::Sender::new(0),
             wake: Notify::new(),
+            scanner: Scanner::new(),
+            last_refind_sweep: Mutex::new(None),
         }
     }
 
@@ -125,6 +151,16 @@ impl Discovery {
 
     pub fn subscribe(&self) -> watch::Receiver<u64> {
         self.changed.subscribe()
+    }
+
+    /* Issue #73: who is on the network, with makers, as the kernel knows
+     * it right now (no packet sent; a search refreshes it). For a person
+     * looking for a device by hand ("which one is the camera?"). */
+    pub fn hosts(&self) -> Vec<Host> {
+        let mut hosts = netscan::neighbours();
+        hosts.sort_by_key(|h| h.address);
+        hosts.dedup_by_key(|h| h.address);
+        hosts
     }
 
     /* The inbox: found devices not added yet. A found device counts as
@@ -150,15 +186,45 @@ impl Discovery {
 
     /* Remembers a found device; true if it's new or changed. (Crate-wide
      * for the wizard's tests, which play "found on the network".) */
+    #[cfg(test)]
     pub(crate) fn record(&self, found: Found) -> bool {
+        self.record_from(found, false)
+    }
+
+    /* record, saying whether the sighting came from a scan or probe. */
+    fn record_from(&self, found: Found, probed: bool) -> bool {
         let key = format!(
             "{}/{}",
             found.template,
             if found.identity.is_empty() { found.address.to_string() } else { found.identity.clone() }
         );
         let mut entries = self.entries.lock().unwrap();
+        /* One device found two ways (issue #73): the TV by SSDP, with its
+         * UUID, and by a port probe, without. Keep the one WITH an
+         * identity -- it survives an address change. */
+        let same_device = |e: &Entry| e.found.template == found.template && e.found.address == found.address;
+        if found.identity.is_empty() {
+            if entries.values().any(|e| same_device(e) && !e.found.identity.is_empty()) {
+                return false;
+            }
+        } else {
+            entries.retain(|_, e| !(same_device(e) && e.found.identity.is_empty()));
+        }
+        if let Some(entry) = entries.get_mut(&key) {
+            if probed && !entry.probed {
+                entry.last_seen = Instant::now();
+                return false;
+            }
+        }
         let changed = entries.get(&key).is_none_or(|e| e.found != found);
-        entries.insert(key, Entry { found, last_seen: Instant::now() });
+        entries.insert(
+            key,
+            Entry {
+                found,
+                last_seen: Instant::now(),
+                probed,
+            },
+        );
         changed
     }
 
@@ -298,11 +364,35 @@ pub async fn run(discovery: Arc<Discovery>, templates: Arc<Templates>, control: 
         spawn_multicast_listen(group, port, seen_tx.clone());
     }
 
+    /* Issue #73: is any template looking for hosts by maker, and which
+     * port probes are there? A probe's makers: all the templates' lists
+     * for it together (any, if one of them takes any). */
+    let network_scan = templates
+        .all()
+        .flat_map(|t| t.discovery.iter())
+        .any(|d| matches!(d, templates::Discovery::NetworkScan { .. }));
+    let mut port_probes: BTreeMap<(u16, Option<String>), Option<Vec<String>>> = BTreeMap::new();
+    for method in templates.all().flat_map(|t| t.discovery.iter()) {
+        if let templates::Discovery::PortProbe {
+            port, get, manufacturers, ..
+        } = method
+        {
+            let makers = port_probes.entry((*port, get.clone())).or_insert_with(|| Some(Vec::new()));
+            match makers {
+                Some(list) if !manufacturers.is_empty() => list.extend(manufacturers.iter().cloned()),
+                _ => *makers = None,
+            }
+        }
+    }
+
     {
         let discovery = discovery.clone();
         let seen_tx = seen_tx.clone();
+        let control = control.clone();
         tokio::spawn(async move {
             let mut browsing = false;
+            /* Woken by discover_now (someone is searching), not the timer. */
+            let mut asked = false;
             loop {
                 /* mDNS: browse again every round. A device announces itself
                  * once (when it starts, or answering the first browse); a
@@ -330,13 +420,17 @@ pub async fn run(discovery: Arc<Discovery>, templates: Arc<Templates>, control: 
                         println!("discovery: UDP broadcast failed: {e}");
                     }
                 }
+                if asked && (network_scan || !port_probes.is_empty()) {
+                    scan_round(&discovery.scanner, network_scan, &port_probes, &seen_tx).await;
+                }
+                refind(&discovery, &control).await;
                 if discovery.expire() {
                     discovery.announce();
                 }
-                tokio::select! {
-                    _ = tokio::time::sleep(PASS) => {}
-                    _ = discovery.wake.notified() => {}
-                }
+                asked = tokio::select! {
+                    _ = tokio::time::sleep(PASS) => false,
+                    _ = discovery.wake.notified() => true,
+                };
             }
         });
     }
@@ -364,6 +458,8 @@ pub async fn run(discovery: Arc<Discovery>, templates: Arc<Templates>, control: 
                     templates::Discovery::UdpBroadcast { port, .. } => what == format!("udp:{port}"),
                     templates::Discovery::UdpMulticast { group, port, .. } => what == format!("mcast:{group}:{port}"),
                     templates::Discovery::DeviceAnnounce { .. } => what == "announce",
+                    templates::Discovery::NetworkScan { .. } => what == "scan",
+                    templates::Discovery::PortProbe { port, get, .. } => what == probe_key(*port, get),
                     _ => false,
                 };
                 if !matches || !matches_template(method, &vars) {
@@ -373,7 +469,8 @@ pub async fn run(discovery: Arc<Discovery>, templates: Arc<Templates>, control: 
                     continue;
                 };
                 follow_moved_device(&found, &control).await;
-                any_new |= discovery.record(found);
+                let probed = what == "scan" || what.starts_with("probe:");
+                any_new |= discovery.record_from(found, probed);
             }
         }
         if any_new {
@@ -382,9 +479,145 @@ pub async fn run(discovery: Arc<Discovery>, templates: Arc<Templates>, control: 
     }
 }
 
-/* The template's "match": every condition holds for this sighting. */
+/* The template's "match": every condition holds for this sighting -- and,
+ * for a network scan or port probe, the maker is one it wants. */
 fn matches_template(method: &templates::Discovery, vars: &Vars) -> bool {
-    method.matches().iter().all(|(name, wanted)| fill(&format!("{{{name}}}"), vars) == *wanted)
+    maker_wanted(method.manufacturers(), vars.get("manufacturer").map_or("", String::as_str))
+        && method.matches().iter().all(|(name, wanted)| fill(&format!("{{{name}}}"), vars) == *wanted)
+}
+
+/* Is `maker` in `wanted` (no case)? An empty list wants any maker. */
+fn maker_wanted(wanted: &[String], maker: &str) -> bool {
+    wanted.is_empty() || wanted.iter().any(|w| w.eq_ignore_ascii_case(maker))
+}
+
+/* What a port probe's sightings are sent as. */
+fn probe_key(port: u16, get: &Option<String>) -> String {
+    format!("probe:{port}:{}", get.as_deref().unwrap_or(""))
+}
+
+/* Issue #73: a network scan (a sweep, at most every MIN_SWEEP_GAP), then
+ * the port probes on the hosts it found. Sightings: "scan" per host, and
+ * probe_key per host a probe found. */
+async fn scan_round(
+    scanner: &Scanner,
+    network_scan: bool,
+    port_probes: &BTreeMap<(u16, Option<String>), Option<Vec<String>>>,
+    seen_tx: &mpsc::Sender<(String, Vars)>,
+) {
+    let hosts = scanner.scan().await;
+    if network_scan {
+        for host in &hosts {
+            let _ = seen_tx.send(("scan".to_string(), host.vars())).await;
+        }
+    }
+    for ((port, get), makers) in port_probes {
+        let candidates: Vec<Host> = hosts
+            .iter()
+            .filter(|h| makers.as_ref().is_none_or(|m| maker_wanted(m, &h.manufacturer)))
+            .cloned()
+            .collect();
+        let found = netscan::probe_all(candidates, |host| port_probe(host, *port, get.clone())).await;
+        for vars in found {
+            let _ = seen_tx.send((probe_key(*port, get), vars)).await;
+        }
+    }
+}
+
+/* One host, one port: open? With `get`: that page's JSON reply as
+ * {json.<path>} values. None: not open, or no JSON there. */
+async fn port_probe(host: Host, port: u16, get: Option<String>) -> Option<Vars> {
+    if !netscan::port_open(host.address, port).await {
+        return None;
+    }
+    let mut vars = host.vars();
+    vars.insert("port".into(), port.to_string());
+    if let Some(path) = get {
+        let target = format!("{}:{port}", host.address);
+        let request = crate::adapters::net::http_json(hyper::Method::GET, &target, &path, None);
+        let reply = tokio::time::timeout(netscan::PROBE_TIMEOUT, request).await.ok()?.ok()?;
+        flatten_json("json", &reply, &mut vars);
+    }
+    Some(vars)
+}
+
+/* Issue #73, RE-FIND BY MAC: devices that announce nothing (or not often)
+ * keep working after their address changes. Every PASS:
+ *   1. LEARN: an online device's MAC is read from the neighbour table (the
+ *      hub just talked to it) and kept in its config as "mac", once;
+ *   2. FOLLOW: an OFFLINE device whose MAC (config "mac", or an identity
+ *      that is one) shows up at another address gets that address. If the
+ *      table doesn't show it, the network is swept -- at most every
+ *      REFIND_GAP -- and looked at again.
+ * Guard: a WiFi repeater may answer ARP for everyone behind it with its
+ * own MAC. A MAC seen at more than one address, or at an address another
+ * added device has, is never learned or followed. */
+async fn refind(discovery: &Discovery, control: &Control) {
+    refind_with(discovery, control, netscan::neighbours).await
+}
+
+/* refind, reading the neighbour table with `read_table` (the tests' fake
+ * network). */
+async fn refind_with(discovery: &Discovery, control: &Control, read_table: impl Fn() -> Vec<Host>) {
+    let Ok(devices) = control.list().await else { return };
+    let with_host: Vec<(&crate::device::Device, Ipv4Addr)> = devices
+        .iter()
+        .filter_map(|d| Some((d, d.config.get("host")?.parse().ok()?)))
+        .collect();
+    if with_host.is_empty() {
+        return;
+    }
+    let mut table = read_table();
+    let unique = |table: &[Host], mac: &str| table.iter().filter(|h| h.mac == mac).count() == 1;
+
+    for (device, address) in &with_host {
+        if device.online != Some(Health::Online) || device.config.contains_key("mac") {
+            continue;
+        }
+        if let Some(host) = table.iter().find(|h| h.address == *address) {
+            if unique(&table, &host.mac) {
+                println!("discovery: {} has MAC {}", device.id, host.mac);
+                let _ = control
+                    .store_config(&device.id, [("mac".to_string(), host.mac.clone())].into())
+                    .await;
+            }
+        }
+    }
+
+    let lost: Vec<(&crate::device::Device, Ipv4Addr, String)> = with_host
+        .iter()
+        .filter(|(d, _)| d.online == Some(Health::Offline))
+        .filter_map(|(d, a)| {
+            let mac = d.config.get("mac").and_then(|m| netscan::normalize_mac(m)).or_else(|| netscan::normalize_mac(&d.identity))?;
+            Some((*d, *a, mac))
+        })
+        .collect();
+    if lost.is_empty() {
+        return;
+    }
+    let moved = |table: &[Host], address: Ipv4Addr, mac: &str| -> Option<Ipv4Addr> {
+        let host = table.iter().find(|h| h.mac == mac && h.address != address)?;
+        let taken = with_host.iter().any(|(_, a)| *a == host.address);
+        (unique(table, mac) && !taken).then_some(host.address)
+    };
+    let sweep_due = discovery
+        .last_refind_sweep
+        .lock()
+        .unwrap()
+        .is_none_or(|t| t.elapsed() >= REFIND_GAP);
+    if sweep_due && lost.iter().any(|(_, a, mac)| moved(&table, *a, mac).is_none()) {
+        *discovery.last_refind_sweep.lock().unwrap() = Some(Instant::now());
+        discovery.scanner.scan().await;
+        table = read_table();
+    }
+    for (device, address, mac) in lost {
+        if let Some(new_address) = moved(&table, address, &mac) {
+            println!("discovery: {} (MAC {mac}) moved from {address} to {new_address}, following it", device.id);
+            let _ = control
+                .set_config(&device.id, [("host".to_string(), new_address.to_string())].into())
+                .await;
+        }
+    }
 }
 
 /* IP auto-update: an added device with this identity at another address. */
@@ -841,5 +1074,130 @@ mod tests {
         /* Same identity: still one entry. */
         assert_eq!(d.entries.lock().unwrap().len(), 1);
         assert!(!d.expire());
+    }
+
+    fn wled_template() -> Template {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("templates/wled.json");
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    /* Issue #73: a WLED that announces nothing is found by a port probe:
+     * an Espressif MAC, port 80 open, /json/info says "WLED". */
+    #[tokio::test]
+    async fn a_port_probe_finds_a_quiet_wled() {
+        let template = wled_template();
+        let method = template
+            .discovery
+            .iter()
+            .find(|d| matches!(d, templates::Discovery::PortProbe { .. }))
+            .unwrap();
+        let host = |manufacturer: &str| Host {
+            address: Ipv4Addr::LOCALHOST,
+            mac: "24:0a:c4:11:22:33".into(),
+            manufacturer: manufacturer.into(),
+            interface: "wlan0".into(),
+        };
+        let wled = crate::adapters::wled_sim::Sim::start(false).await;
+        let port: u16 = wled.host().rsplit(':').next().unwrap().parse().unwrap();
+        let vars = port_probe(host("Espressif"), port, Some("/json/info".into())).await.unwrap();
+        assert!(matches_template(method, &vars));
+        let found = to_found(&template, method.fill(), &vars).unwrap();
+        assert_eq!(found.address, IpAddr::V4(Ipv4Addr::LOCALHOST));
+        assert_eq!(found.values["host"], "127.0.0.1");
+        assert!(!found.identity.is_empty());
+        /* Another maker: not this template's. */
+        assert!(!matches_template(method, &host("TP-Link").vars()));
+        /* Port open, but not a WLED. */
+        let other = crate::adapters::wled_sim::Sim::start_not_wled().await;
+        let port: u16 = other.host().rsplit(':').next().unwrap().parse().unwrap();
+        let vars = port_probe(host("Espressif"), port, Some("/json/info".into())).await.unwrap();
+        assert!(!matches_template(method, &vars));
+        /* Nothing listening. */
+        drop(other);
+        assert!(port_probe(host("Espressif"), port, None).await.is_none());
+    }
+
+    /* Issue #73: one device found two ways is one inbox entry, the one
+     * with an identity. */
+    #[test]
+    fn a_device_found_twice_is_one_entry() {
+        let d = Discovery::new();
+        let found = |identity: &str| Found {
+            template: "lg-webos-tv".into(),
+            name: "TV".into(),
+            address: "192.168.1.20".parse().unwrap(),
+            values: BTreeMap::new(),
+            identity: identity.into(),
+        };
+        assert!(d.record(found("")));
+        assert!(d.record(found("uuid-1")));
+        assert_eq!(d.entries.lock().unwrap().len(), 1);
+        assert!(!d.record(found("")));
+        assert_eq!(d.entries.lock().unwrap().len(), 1);
+        assert_eq!(d.entries.lock().unwrap().values().next().unwrap().found.identity, "uuid-1");
+    }
+
+    /* Issue #73: a WLED's own mDNS name stays when a probe finds it too
+     * (seen on the DK2: the probe's "WLED" replaced "WLED-dk2wled"). */
+    #[test]
+    fn an_announcement_beats_a_probe() {
+        let d = Discovery::new();
+        let found = |name: &str| Found {
+            template: "wled".into(),
+            name: name.into(),
+            address: "192.168.1.145".parse().unwrap(),
+            values: BTreeMap::new(),
+            identity: "7ce8b1b0aecc".into(),
+        };
+        assert!(d.record_from(found("WLED"), true));
+        assert!(d.record_from(found("WLED-dk2wled"), false));
+        assert!(!d.record_from(found("WLED"), true));
+        assert_eq!(d.entries.lock().unwrap().values().next().unwrap().found.name, "WLED-dk2wled");
+    }
+
+    /* Issue #73, re-find by MAC, on a fake network: the strip's MAC is
+     * learned while it's online; offline, it's followed to the address its
+     * MAC turns up at -- unless that MAC is at two addresses (a repeater). */
+    #[tokio::test]
+    async fn an_offline_device_is_followed_by_its_mac() {
+        use crate::adapters::test_hub::TestHub;
+        let strip: crate::device::Device = serde_json::from_value(serde_json::json!({
+            "id": "strip", "name": "Strip", "template": "wled", "source": "wled",
+            "config": {"host": "192.0.2.10"},
+            "capabilities": {"switch": {"on": false}}
+        }))
+        .unwrap();
+        let hub = TestHub::start(strip, Box::new(crate::adapters::wled::Wled)).await;
+        let d = Discovery::new();
+        /* No sweeps here: the fake table is all there is. */
+        *d.last_refind_sweep.lock().unwrap() = Some(Instant::now());
+        let host = |address: [u8; 4], mac: &str| Host {
+            address: address.into(),
+            mac: mac.into(),
+            manufacturer: "Espressif".into(),
+            interface: "wlan0".into(),
+        };
+        let config = |hub: &TestHub| {
+            let control = hub.control.clone();
+            async move { control.get("strip").await.unwrap().unwrap().config }
+        };
+
+        /* 1. Online at .10: its MAC is learned. */
+        hub.control.set_online("strip", Health::Online).await.unwrap();
+        refind_with(&d, &hub.control, || vec![host([192, 0, 2, 10], "b8:d6:1a:6b:33:ac")]).await;
+        assert_eq!(config(&hub).await["mac"], "b8:d6:1a:6b:33:ac");
+
+        /* 2. Offline; its MAC is at two addresses: not followed. */
+        hub.control.set_online("strip", Health::Offline).await.unwrap();
+        refind_with(&d, &hub.control, || {
+            vec![host([192, 0, 2, 20], "b8:d6:1a:6b:33:ac"), host([192, 0, 2, 21], "b8:d6:1a:6b:33:ac")]
+        })
+        .await;
+        assert_eq!(config(&hub).await["host"], "192.0.2.10");
+
+        /* 3. Offline; its MAC is at .20 alone: followed there. */
+        hub.control.set_online("strip", Health::Offline).await.unwrap();
+        refind_with(&d, &hub.control, || vec![host([192, 0, 2, 20], "b8:d6:1a:6b:33:ac")]).await;
+        assert_eq!(config(&hub).await["host"], "192.0.2.20");
     }
 }

@@ -120,6 +120,7 @@ found=<address>, or start from a device type (and optionally its way in):
 
     python3 tools/hub_ws.py <board> found                    "Found on your network"
     python3 tools/hub_ws.py <board> discover                 search the network now
+    python3 tools/hub_ws.py <board> hosts                    who is on the network, with makers (#73)
     python3 tools/hub_ws.py <board> templates                device types that can be added
     python3 tools/hub_ws.py <board> add-device wled found=192.168.1.139
     python3 tools/hub_ws.py <board> add-device wled advanced
@@ -255,6 +256,8 @@ def build_request(args):
             return {"action": "list_found"}
         case ["discover"]:
             return {"action": "discover_now"}
+        case ["hosts"]:
+            return {"action": "network_hosts"}
         case ["templates"]:
             return {"action": "list_templates"}
         case ["pair-again", device_id]:

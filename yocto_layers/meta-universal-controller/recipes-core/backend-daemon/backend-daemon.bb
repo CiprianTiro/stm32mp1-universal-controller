@@ -78,7 +78,10 @@ SRC_URI = " \
     file://src/ir_light.rs \
     file://src/main.rs \
     file://src/mqtt.rs \
+    file://src/netscan.rs \
     file://src/network.rs \
+    file://src/oui.rs \
+    file://src/oui_table.rs \
     file://src/rpmsg.rs \
     file://src/secrets.rs \
     file://src/settings.rs \

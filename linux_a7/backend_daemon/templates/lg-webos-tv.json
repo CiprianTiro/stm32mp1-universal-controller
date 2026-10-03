@@ -13,7 +13,8 @@
     { "id": "mac", "type": "text", "label": "TV MAC address", "hint": "Needed to switch the TV on; read from the TV after pairing if left empty", "required": false, "validate": { "pattern": "mac" } }
   ],
   "discovery": [
-    { "method": "ssdp", "search": "urn:lge-com:service:webos-second-screen:1", "fill": { "host": "{address}", "name": "{header.DLNADeviceName.lge.com}", "uuid": "{uuid}" } }
+    { "method": "ssdp", "search": "urn:lge-com:service:webos-second-screen:1", "fill": { "host": "{address}", "name": "{header.DLNADeviceName.lge.com}", "uuid": "{uuid}" } },
+    { "method": "port_probe", "port": 3000, "manufacturers": ["LG Electronics"], "fill": { "host": "{address}", "mac": "{mac}" } }
   ],
   "setup": [
     {

@@ -242,17 +242,32 @@ pub enum Discovery {
         #[serde(default)]
         fill: BTreeMap<String, String>,
     },
-    /* (later, #73) */
+    /* Issue #73 (netscan.rs): the hosts on the hub's own network whose
+     * MAC address says one of these makers ("Espressif", see oui.rs).
+     * Values: {address}, {mac}, {mac_hex}, {manufacturer}, {interface}.
+     * Only searched when someone asks (the wizard's search). */
     NetworkScan {
         manufacturers: Vec<String>,
         #[serde(default)]
         fill: BTreeMap<String, String>,
+        #[serde(default, rename = "match")]
+        matches: BTreeMap<String, String>,
     },
-    /* (later, #73) */
+    /* Issue #73: of those hosts (any maker if `manufacturers` is empty),
+     * the ones answering on TCP `port`. With `get`, that page is fetched
+     * there too and its JSON reply flattened into {json.<path>} values for
+     * "match" and "fill" -- e.g. WLED: get "/json/info", match
+     * {"json.brand": "WLED"}. */
     PortProbe {
         port: u16,
         #[serde(default)]
+        manufacturers: Vec<String>,
+        #[serde(default)]
+        get: Option<String>,
+        #[serde(default)]
         fill: BTreeMap<String, String>,
+        #[serde(default, rename = "match")]
+        matches: BTreeMap<String, String>,
     },
     /* (later, #72): the device connects to the hub by itself. */
     DeviceAnnounce {
@@ -298,8 +313,19 @@ impl Discovery {
             | Discovery::Ssdp { matches, .. }
             | Discovery::UdpBroadcast { matches, .. }
             | Discovery::UdpMulticast { matches, .. }
+            | Discovery::NetworkScan { matches, .. }
+            | Discovery::PortProbe { matches, .. }
             | Discovery::DeviceAnnounce { matches, .. } => matches,
             _ => &NO_MATCH,
+        }
+    }
+
+    /* Issue #73: the makers a network scan or port probe is limited to
+     * (empty: any). Compared without case. */
+    pub fn manufacturers(&self) -> &[String] {
+        match self {
+            Discovery::NetworkScan { manufacturers, .. } | Discovery::PortProbe { manufacturers, .. } => manufacturers,
+            _ => &[],
         }
     }
 }

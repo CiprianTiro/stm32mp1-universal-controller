@@ -57,7 +57,11 @@
  *        automation_ran {entry}
  *   list_found                             -> found {devices: [...]} (the "Found on
  *                                             your network" inbox, discovery.rs, #40)
- *   discover_now                           -> ack (a search round now)
+ *   discover_now                           -> ack (a search round now; with #73
+ *                                             also a network scan + port probes)
+ *   network_hosts                          -> network_hosts {hosts: [{address, mac,
+ *                                             manufacturer, interface}]} (#73: who
+ *                                             is on the network, no packet sent)
  *        after subscribe also: found_changed (list_found again)
  * Adding a device, the wizard (issue #40, wizard.rs -- one per connection):
  *   list_templates                         -> templates {templates: [{id, name,
@@ -229,6 +233,8 @@ enum ClientRequest {
     /* The inbox of devices found on the LAN (issue #40, discovery.rs). */
     ListFound,
     DiscoverNow,
+    /* Issue #73: who is on the network, with makers (netscan.rs). */
+    NetworkHosts,
     /* Adding a device (issue #40, wizard.rs). */
     ListTemplates,
     WizardStart {
@@ -405,6 +411,9 @@ enum ServerMessage {
     },
     Found {
         devices: Vec<discovery::Found>,
+    },
+    NetworkHosts {
+        hosts: Vec<crate::netscan::Host>,
     },
     Templates {
         templates: Vec<wizard::TemplateInfo>,
@@ -1213,6 +1222,9 @@ async fn handle_request(req: ClientRequest, app_state: &AppState) -> ServerMessa
             app_state.discovery.discover_now();
             ServerMessage::Ack
         }
+        ClientRequest::NetworkHosts => ServerMessage::NetworkHosts {
+            hosts: app_state.discovery.hosts(),
+        },
         ClientRequest::GetSettings => ServerMessage::Settings {
             settings: app_state.settings.get(),
         },
