@@ -6,6 +6,7 @@ use tokio::time::interval;
  * part of this crate" -- this is what actually makes their code exist in
  * the final binary at all. It does NOT run anything in them; nothing in
  * either file executes until something below explicitly spawns it. */
+mod accounts;
 mod adapters;
 mod auth;
 mod automations;
@@ -121,6 +122,10 @@ async fn main() {
         Box::new(adapters::lg_webos::LgWebos),
         Box::new(adapters::ir_blaster::IrBlaster),
         Box::new(adapters::wiz::Wiz::new()),
+        Box::new(adapters::roborock::Roborock),
+        Box::new(adapters::ezviz::Ezviz),
+        Box::new(adapters::tapo::Tapo),
+        Box::new(adapters::ipcam::IpCam),
         Box::new(http_generic.clone()),
         Box::new(mqtt_generic.clone()),
     ]));

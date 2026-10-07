@@ -23,8 +23,9 @@
  * WHAT'S HERE: switch, dimmer, color and sensor -- the general ones almost
  * every device type uses -- media (a TV's volume, mute and input, issue
  * #40), remote (#44), and cover, climate, lock and energy (issue #77:
- * blinds, air conditioners, door locks, metering plugs). The other specialised ones (vacuum, camera_stream,
- * ir_remote) come with their devices (#42-#45). Adding one
+ * blinds, air conditioners, door locks, metering plugs), vacuum (#74:
+ * robot vacuums). The other specialised ones (camera_stream) come with
+ * their devices (#43). Adding one
  * means: a struct for its state, `impl Capability` (its rules), a field in
  * `Capabilities`, and one line in `set_capability`. Nothing else changes.
  *
@@ -191,11 +192,18 @@ pub struct Capabilities {
     pub lock: Option<Lock>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub energy: Option<Energy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vacuum: Option<Vacuum>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub options: Option<Options>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera: Option<Camera>,
 }
 
 /* The names, e.g. for error messages and the protocol's "hello". */
-pub const CAPABILITY_NAMES: [&str; 10] = [
-    "switch", "dimmer", "color", "sensor", "media", "remote", "cover", "climate", "lock", "energy",
+pub const CAPABILITY_NAMES: [&str; 13] = [
+    "switch", "dimmer", "color", "sensor", "media", "remote", "cover", "climate", "lock", "energy", "vacuum", "options",
+    "camera",
 ];
 
 /* On/off: lamps, plugs, relays, a TV's power. */
@@ -502,6 +510,10 @@ pub struct Energy {
     pub voltage_v: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_a: Option<f64>,
+    /* Issue #74: what it used today (kWh), for devices whose vendor counts
+     * per day (EZVIZ plugs). */
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub today_kwh: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -758,12 +770,222 @@ impl Capability for Lock {
     }
 }
 
+/* ---- Issue #74 ---- */
+
+/* A robot vacuum:
+ *   {"state": "cleaning", "battery": 84, "detail": "room cleaning", "error": "",
+ *    "fan": "balanced", "fans": ["off", "quiet", "balanced", "turbo", "max"],
+ *    "water": "medium", "waters": ["off", "low", "medium", "high"],
+ *    "mop": "standard", "mops": ["standard", "deep"],
+ *    "area_m2": 14.5, "minutes": 21,
+ *    "rooms": [{"id": 16, "name": "Kitchen"}],
+ *    "parts": [{"id": "filter", "name": "Filter", "left": 21}],
+ *    "totals": {"cleanings": 272, "area_m2": 6977.2, "hours": 117.7},
+ *    "quiet_hours": "22:00-08:00"}
+ * `state`: one of the few states every vacuum has, for screens to show
+ * and automations to test; `detail`: the vendor's own word for it, more
+ * precise ("emptying the bin"); `error`: what's wrong, empty if nothing;
+ * `battery`: percent, null if not known yet.
+ * Issue #74 (the full vacuum, #45): its suction (`fan`), mopping water
+ * and mop route, each with the choices THIS vacuum offers (like a
+ * climate's modes); the area and time of the current (or last) run; its
+ * rooms (as the vendor's app named them); its wearing parts and how much
+ * life they have left; lifetime totals; do-not-disturb hours (null = off).
+ * Everything only comes FROM the device: a client steers it with the
+ * ACTIONS (check_action). */
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct Vacuum {
+    #[serde(default)]
+    pub state: VacuumState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub battery: Option<u8>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub detail: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub error: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fan: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fans: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub water: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub waters: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mop: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mops: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub area_m2: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minutes: Option<u32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rooms: Vec<VacuumRoom>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parts: Vec<VacuumPart>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub totals: Option<VacuumTotals>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quiet_hours: Option<String>,
+    /* Its map can be fetched (the action "map"): the person turned it on
+     * at setup (Roborock: through the cloud, roborock_map.rs). */
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub map: bool,
+}
+
+/* A room as the vacuum knows it: its own number, the name from the
+ * vendor's app. */
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct VacuumRoom {
+    pub id: u32,
+    pub name: String,
+}
+
+/* A wearing part: brush, filter, sensors. `left`: percent of its life. */
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct VacuumPart {
+    pub id: String,
+    pub name: String,
+    pub left: u8,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct VacuumTotals {
+    pub cleanings: u32,
+    pub area_m2: f64,
+    pub hours: f64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum VacuumState {
+    /* On its dock: charging or full. */
+    Docked,
+    Cleaning,
+    /* On its way back to the dock. */
+    Returning,
+    Paused,
+    /* Off the dock, doing nothing. */
+    Idle,
+    /* Stuck, needs a person (see `error`). */
+    Error,
+    #[default]
+    Unknown,
+}
+
+impl Capability for Vacuum {
+    const NAME: &'static str = "vacuum";
+    const SETTABLE: bool = false;
+    fn check(&self) -> Result<(), String> {
+        if self.battery.is_some_and(|b| b > 100) || self.parts.iter().any(|p| p.left > 100) {
+            return Err("vacuum battery and parts' life are 0-100 %".into());
+        }
+        if self.detail.chars().count() > 64 || self.error.chars().count() > 128 {
+            return Err("vacuum: detail at most 64, error at most 128 characters".into());
+        }
+        if self.rooms.len() > 64 || self.parts.len() > 16 || self.fans.len() > 16 || self.waters.len() > 16 || self.mops.len() > 16 {
+            return Err("vacuum: too many rooms, parts or modes".into());
+        }
+        let ok_number = |v: Option<f64>| v.is_none_or(|v| v.is_finite() && v >= 0.0);
+        if !ok_number(self.area_m2) || !ok_number(self.totals.as_ref().map(|t| t.area_m2)) || !ok_number(self.totals.as_ref().map(|t| t.hours)) {
+            return Err("vacuum: area and hours must be positive numbers".into());
+        }
+        Ok(())
+    }
+}
+
+/* A device's own on/off settings (issue #74), as it reports them:
+ *   {"options": [{"id": "status_light", "name": "Status light", "on": true},
+ *                {"id": "power_recovery", "name": "Restore after a power cut", "on": false}]}
+ * Whatever the device offers -- a plug's LED, a camera's privacy mode or
+ * motion detection -- drawn as toggles by any screen, no code per device.
+ * Only the device reports them; a client changes one with the ACTION set
+ * {"id", "on"} (check_action). */
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct Options {
+    #[serde(default)]
+    pub options: Vec<DeviceOption>,
+}
+
+/* An on/off option ({"on": true}), or -- with `choices` -- one of a few
+ * values ({"value": "auto", "choices": ["auto", "on", "off"]}: a camera's
+ * night vision). */
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct DeviceOption {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub on: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub choices: Vec<String>,
+}
+
+/* A camera's pictures (issues #43, #74; adapters/camera.rs):
+ *   {"snapshot": true, "stream": true}
+ * `snapshot`: the hub can give a recent picture (the ACTION snapshot);
+ * `stream`: there's a video stream an app can play itself (the ACTION
+ * stream hands it the address -- a phone decodes it; the hub never
+ * relays video). Only the device's adapter reports it. */
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct Camera {
+    #[serde(default)]
+    pub snapshot: bool,
+    #[serde(default)]
+    pub stream: bool,
+    /* It pans and tilts (ONVIF PTZ): the ACTION move; and its saved
+     * positions (the ACTION preset). */
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ptz: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub presets: Vec<CameraPreset>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct CameraPreset {
+    pub token: String,
+    pub name: String,
+}
+
+impl Capability for Camera {
+    const NAME: &'static str = "camera";
+    const SETTABLE: bool = false;
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+impl Capability for Options {
+    const NAME: &'static str = "options";
+    const SETTABLE: bool = false;
+    fn check(&self) -> Result<(), String> {
+        if self.options.len() > 32 {
+            return Err("options: at most 32".into());
+        }
+        for o in &self.options {
+            if o.id.is_empty() || o.id.len() > 32 || o.name.chars().count() > 64 {
+                return Err("options: ids 1-32, names at most 64 characters".into());
+            }
+        }
+        Ok(())
+    }
+}
+
 impl Capability for Energy {
     const NAME: &'static str = "energy";
     const SETTABLE: bool = false;
     fn check(&self) -> Result<(), String> {
         let ok = |v: Option<f64>| v.is_none_or(|v| v.is_finite() && v >= 0.0);
-        if !self.power_w.is_finite() || !ok(self.energy_kwh) || !ok(self.voltage_v) || !ok(self.current_a) {
+        if !self.power_w.is_finite() || !ok(self.energy_kwh) || !ok(self.voltage_v) || !ok(self.current_a) || !ok(self.today_kwh) {
             return Err("energy: numbers only, and only power may be negative".into());
         }
         Ok(())
@@ -805,6 +1027,9 @@ pub fn set_capability(
         "climate" => replace(&mut caps.climate, id, value, origin)?,
         "lock" => replace(&mut caps.lock, id, value, origin)?,
         "energy" => replace(&mut caps.energy, id, value, origin)?,
+        "vacuum" => replace(&mut caps.vacuum, id, value, origin)?,
+        "options" => replace(&mut caps.options, id, value, origin)?,
+        "camera" => replace(&mut caps.camera, id, value, origin)?,
         other => {
             return Err(format!(
                 "unknown capability {other:?} (known: {})",
@@ -880,7 +1105,19 @@ fn replace<T: Capability>(
  *                -> {"channels": [{"id", "number", "name"}], "total": N}
  *                   one page of the matching channels (adapters/channels.rs)
  *           tune {"channel": "<id>"}
- *   cover   open {}  close {}  stop {}       (issue #77)                */
+ *   cover   open {}  close {}  stop {}       (issue #77)
+ *   vacuum  start {}  pause {}  stop {}  dock {}  locate {}   (issue #74:
+ *           locate = "where are you?", it says so out loud)
+ *           set_fan {"fan"}  set_water {"water"}  set_mop {"mop"}: one of
+ *           the choices it offers; clean_rooms {"rooms": [ids],
+ *           "repeat"?: 1-3}; reset_part {"part": id} (after replacing it);
+ *           map {} -> {"width", "height", "pixels", "dock", "robot",
+ *           "path", "no_go", "walls", "rooms"} (roborock_map.rs: Map)
+ *   options set {"id", "on"} or {"id", "value"} (one of its choices):
+ *           one of the device's own settings (#74)
+ *   camera  snapshot {"live"?: bool} -> {"jpeg": base64}; stream {"quality"?: "hd"|"sd"}
+ *           move {"pan", "tilt": -1..1} (one step), preset {"token"} (ONVIF)
+ *           -> {"url"} for an app to play (#43, #74)                    */
 pub fn check_action(device: &Device, capability: &str, name: &str, args: &serde_json::Value) -> Result<(), String> {
     let id = &device.id;
     let caps = &device.capabilities;
@@ -1032,6 +1269,109 @@ pub fn check_action(device: &Device, capability: &str, name: &str, args: &serde_
                 other => Err(format!("cover has no action {other:?} (open, close, stop)")),
             }
         }
+        "vacuum" => {
+            if caps.vacuum.is_none() {
+                return Err(format!("{id} has no capability \"vacuum\""));
+            }
+            let vacuum = caps.vacuum.as_ref().unwrap();
+            /* {"<key>": one of the choices the vacuum offers}. */
+            let one_of = |key: &str, offered: &[String]| -> Result<(), String> {
+                let wanted = args[key].as_str().ok_or_else(|| format!("vacuum {name} needs {{\"{key}\": \"...\"}}"))?;
+                if offered.iter().any(|o| o == wanted) {
+                    Ok(())
+                } else {
+                    Err(format!("vacuum {name}: {wanted:?} isn't one of {}", offered.join(", ")))
+                }
+            };
+            match name {
+                "start" | "pause" | "stop" | "dock" | "locate" => no_args(),
+                "map" if vacuum.map => no_args(),
+                "map" => Err("this vacuum's map is off: turn it on with \"Pair again\"".into()),
+                "set_fan" => one_of("fan", &vacuum.fans),
+                "set_water" => one_of("water", &vacuum.waters),
+                "set_mop" => one_of("mop", &vacuum.mops),
+                "reset_part" => {
+                    let ids: Vec<String> = vacuum.parts.iter().map(|p| p.id.clone()).collect();
+                    one_of("part", &ids)
+                }
+                "clean_rooms" => {
+                    let rooms = args["rooms"].as_array().filter(|r| !r.is_empty()).ok_or("vacuum clean_rooms needs {\"rooms\": [ids]}")?;
+                    for room in rooms {
+                        let id = room.as_u64().ok_or("vacuum clean_rooms: room ids are numbers")?;
+                        if !vacuum.rooms.iter().any(|r| u64::from(r.id) == id) {
+                            return Err(format!("vacuum clean_rooms: it has no room {id}"));
+                        }
+                    }
+                    match args.get("repeat").map(|r| r.as_u64()) {
+                        None | Some(Some(1..=3)) => Ok(()),
+                        _ => Err("vacuum clean_rooms: repeat is 1-3".into()),
+                    }
+                }
+                other => Err(format!(
+                    "vacuum has no action {other:?} (start, pause, stop, dock, locate, set_fan, set_water, set_mop, clean_rooms, reset_part)"
+                )),
+            }
+        }
+        "camera" => {
+            let Some(camera) = &caps.camera else {
+                return Err(format!("{id} has no capability \"camera\""));
+            };
+            match name {
+                "snapshot" if camera.snapshot => match args.get("live") {
+                    None => no_args(),
+                    Some(live) if live.is_boolean() => Ok(()),
+                    Some(_) => Err("camera snapshot: live is true or false".into()),
+                },
+                "stream" if camera.stream => match args.get("quality").map(|q| q.as_str()) {
+                    None | Some(Some("hd" | "sd")) => Ok(()),
+                    _ => Err("camera stream: quality is \"hd\" or \"sd\"".into()),
+                },
+                "snapshot" | "stream" => Err(format!("{id} has no {name}: set up its video (the camera's stream account)")),
+                "move" if camera.ptz => {
+                    let speed = |key: &str| args.get(key).map_or(Some(0.0), |v| v.as_f64()).filter(|v| (-1.0..=1.0).contains(v));
+                    match (speed("pan"), speed("tilt")) {
+                        (Some(_), Some(_)) => Ok(()),
+                        _ => Err("camera move: pan and tilt are -1..1".into()),
+                    }
+                }
+                "preset" if camera.ptz => {
+                    let token = args["token"].as_str().unwrap_or_default();
+                    if camera.presets.iter().any(|p| p.token == token) {
+                        Ok(())
+                    } else {
+                        Err(format!("camera preset: it has no position {token:?}"))
+                    }
+                }
+                "move" | "preset" => Err(format!("{id} can't pan or tilt")),
+                other => Err(format!("camera has no action {other:?} (snapshot, stream, move, preset)")),
+            }
+        }
+        "options" => {
+            let Some(options) = &caps.options else {
+                return Err(format!("{id} has no capability \"options\""));
+            };
+            match name {
+                "set" => {
+                    let wanted = args["id"].as_str().ok_or("options set needs {\"id\": \"...\", \"on\": true|false}")?;
+                    let option = options
+                        .options
+                        .iter()
+                        .find(|o| o.id == wanted)
+                        .ok_or_else(|| format!("{id} has no option {wanted:?}"))?;
+                    if option.choices.is_empty() {
+                        args["on"].as_bool().map(|_| ()).ok_or_else(|| "options set: \"on\" is true or false".to_string())
+                    } else {
+                        let value = args["value"].as_str().unwrap_or_default();
+                        if option.choices.iter().any(|c| c == value) {
+                            Ok(())
+                        } else {
+                            Err(format!("options set: {wanted} is one of {}", option.choices.join(", ")))
+                        }
+                    }
+                }
+                other => Err(format!("options has no action {other:?} (set)")),
+            }
+        }
         other if CAPABILITY_NAMES.contains(&other) => Err(format!("{other} has no actions")),
         other => Err(format!("unknown capability {other:?}")),
     }
@@ -1093,6 +1433,9 @@ impl Capabilities {
                 },
             ),
             "energy" => fill(&mut self.energy, Energy::default()),
+            "vacuum" => fill(&mut self.vacuum, Vacuum::default()),
+            "options" => fill(&mut self.options, Options::default()),
+            "camera" => fill(&mut self.camera, Camera::default()),
             other => return Err(format!("unknown capability {other:?}")),
         })
     }
@@ -1114,6 +1457,9 @@ impl Capabilities {
             "climate" => take(&mut self.climate),
             "lock" => take(&mut self.lock),
             "energy" => take(&mut self.energy),
+            "vacuum" => take(&mut self.vacuum),
+            "options" => take(&mut self.options),
+            "camera" => take(&mut self.camera),
             other => return Err(format!("unknown capability {other:?}")),
         })
     }
@@ -1159,6 +1505,18 @@ impl Capabilities {
             any = true;
         }
         if let Some(c) = &self.energy {
+            c.check()?;
+            any = true;
+        }
+        if let Some(c) = &self.vacuum {
+            c.check()?;
+            any = true;
+        }
+        if let Some(c) = &self.options {
+            c.check()?;
+            any = true;
+        }
+        if let Some(c) = &self.camera {
             c.check()?;
             any = true;
         }
@@ -1270,6 +1628,42 @@ mod tests {
 
     fn with(caps: serde_json::Value) -> Device {
         serde_json::from_value(json!({"id": "d", "name": "D", "capabilities": caps})).unwrap()
+    }
+
+    /* Issue #74: options are set by id, as the device offers them. */
+    #[test]
+    fn options_are_set_by_their_id() {
+        let plug = with(json!({"options": {"options": [{"id": "status_light", "name": "Status light", "on": true}]}}));
+        assert_eq!(check_action(&plug, "options", "set", &json!({"id": "status_light", "on": false})), Ok(()));
+        assert!(check_action(&plug, "options", "set", &json!({"id": "child_lock", "on": true})).is_err());
+        assert!(check_action(&plug, "options", "set", &json!({"id": "status_light"})).is_err());
+        assert!(set_capability(&plug, "options", json!({"options": []}), Origin::Client).is_err());
+        let camera = with(json!({"options": {"options": [{"id": "night_vision", "name": "Night vision", "value": "auto", "choices": ["auto", "on", "off"]}]}}));
+        assert_eq!(check_action(&camera, "options", "set", &json!({"id": "night_vision", "value": "off"})), Ok(()));
+        assert!(check_action(&camera, "options", "set", &json!({"id": "night_vision", "value": "dim"})).is_err());
+    }
+
+    /* Issue #74: a vacuum's actions are checked against what IT offers. */
+    #[test]
+    fn vacuum_actions_use_its_own_choices() {
+        let robot = with(json!({"vacuum": {"state": "docked", "fans": ["quiet", "max"], "waters": ["off", "low"],
+                                            "rooms": [{"id": 16, "name": "Kitchen"}],
+                                            "parts": [{"id": "filter", "name": "Filter", "left": 21}]}}));
+        let ok = |name: &str, args: serde_json::Value| check_action(&robot, "vacuum", name, &args);
+        assert_eq!(ok("start", json!({})), Ok(()));
+        assert_eq!(ok("set_fan", json!({"fan": "max"})), Ok(()));
+        assert!(ok("set_fan", json!({"fan": "turbo"})).unwrap_err().contains("quiet, max"));
+        assert_eq!(ok("set_water", json!({"water": "low"})), Ok(()));
+        assert!(ok("set_mop", json!({"mop": "deep"})).is_err());
+        assert_eq!(ok("clean_rooms", json!({"rooms": [16], "repeat": 2})), Ok(()));
+        assert!(ok("clean_rooms", json!({"rooms": [17]})).is_err());
+        assert!(ok("clean_rooms", json!({"rooms": []})).is_err());
+        assert!(ok("clean_rooms", json!({"rooms": [16], "repeat": 9})).is_err());
+        assert_eq!(ok("reset_part", json!({"part": "filter"})), Ok(()));
+        assert!(ok("reset_part", json!({"part": "wheel"})).is_err());
+        /* Only the vacuum reports its state. */
+        assert!(set_capability(&robot, "vacuum", json!({"state": "cleaning"}), Origin::Client).is_err());
+        assert!(set_capability(&robot, "vacuum", json!({"state": "cleaning", "parts": [{"id": "x", "name": "X", "left": 101}]}), Origin::Device).is_err());
     }
 
     #[test]

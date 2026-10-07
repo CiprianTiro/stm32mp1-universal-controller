@@ -6,7 +6,7 @@
 
 // Slint's own built-in widget library. `Palette` holds the colors its
 // widgets (buttons, lists) use; it's switched to dark below.
-import { Palette } from "std-widgets.slint";
+import { Palette, ScrollView } from "std-widgets.slint";
 
 // Embeds this specific font file into the compiled binary (combined with
 // build.rs's `EmbedForSoftwareRenderer` config) rather than relying on
@@ -28,7 +28,7 @@ import { IconButton, NavBar, SceneChip, BigLevel } from "home.slint";
 import { TemplateItem, FoundItem, FieldItem, ChoiceItem, VariantItem, AddDevicePage, WizardPage, DevicePage } from "wizard.slint";
 import { RemoteItem, RemotePage } from "remote.slint";
 import { IrRemotePage, IrKeyItem, IrRow } from "ir_remote.slint";
-import { ClientItem, SettingsPage, ClientsPage, PairingPage } from "settings.slint";
+import { ClientItem, AccountItem, SettingsPage, ClientsPage, AccountsPage, PairingPage } from "settings.slint";
 import { NetStatus, WifiNetwork, NetIndicator, NetworkPage, PasswordPage, CountryPage } from "network.slint";
 import { AccentItem, ZoneItem, AppearancePage, TimeZonePage } from "appearance.slint";
 import { SceneItem, PickItem, ScenesPage, CaptureScenePage } from "scenes.slint";
@@ -187,6 +187,10 @@ export component AppWindow inherits Window {
 
     // ---- Paired devices and pairing (issue #35) ----------------------
     in property <[ClientItem]> clients;
+    // Issue #74: Settings > Accounts (page 21).
+    in property <[AccountItem]> accounts;
+    callback open-accounts();
+    callback sign-out-account(string);
 
     // ---- Scenes (issue #47, scenes.slint) -------------------------------
     // All of them (the Scenes page), and the first few for the Devices
@@ -311,6 +315,24 @@ export component AppWindow inherits Window {
     callback set-cover-position(string, int);
     callback set-climate(string, string, float, string);
     callback set-lock(string, bool);
+    // Issue #74: a vacuum's actions (see DeviceRow): device, action, argument.
+    callback vacuum-action(string, string, string);
+    // A device's own setting turned on/off, or a choice picked (DeviceRow).
+    callback set-option(string, string, bool);
+    callback set-option-value(string, string, string);
+    // Issue #43: a camera's pan/tilt step and preset (DeviceRow).
+    callback camera-move(string, float, float);
+    callback camera-preset(string, string);
+    // The controls page's vacuum map (main.rs draws it, vacuum_map.rs), and
+    // what to say instead while it loads or when it can't ("" = shown).
+    in property <image> controls-map;
+    in property <string> controls-map-state;
+    // A camera's picture in Live (4 a second) instead of one every 2 s.
+    in-out property <bool> controls-live: false;
+    // The picture's size on screen (main.rs asks the camera's live video
+    // at exactly this size: no scaling left to do here).
+    out property <length> controls-picture-width;
+    out property <length> controls-picture-height;
     // Issue #95: a filter chip tapped, a tile's controls opened, "Turn
     // all off" (the lights on), a device starred or not.
     callback pick-filter(string);
@@ -372,6 +394,10 @@ export component AppWindow inherits Window {
     in property <bool> dev-has-remote;
     in property <bool> dev-remote-learns;
     in property <string> dev-message;
+    // The rooms in use (a device's "Name and room"), and what's typed there.
+    in property <[string]> dev-rooms;
+    in-out property <string> dev-edit-text;
+    callback device-save-info(string, string, string);
     // A TV's remote (issue #44, remote.slint).
     in property <string> remote-id;
     in property <string> remote-name;
@@ -602,6 +628,10 @@ export component AppWindow inherits Window {
         padding: Theme.space-l;
         spacing: Theme.space-m;
         property <bool> lit: controls-tile.on && controls-tile.status == "";
+        // The full card below the tile: only for what the tile can't do.
+        property <bool> has-card: controls-item.has-camera || controls-item.options.length > 0 || controls-item.has-color || controls-item.has-media || controls-item.has-remote
+            || controls-item.has-cover || controls-item.has-vacuum || controls-item.has-climate || controls-item.has-lock
+            || controls-item.sensor-text != "" || controls-item.energy-text != "" || controls-item.can-reauth;
         // Back, the star (Favourites), the details page.
         HorizontalLayout {
             spacing: Theme.space-s;
@@ -723,51 +753,130 @@ export component AppWindow inherits Window {
         }
         // Everything else the old card had (colours, remote, media,
         // cover, climate, lock...), without its name, switch and level.
-        if controls-item.has-color || controls-item.has-media || controls-item.has-remote || controls-item.has-cover
-            || controls-item.has-climate || controls-item.has-lock || controls-item.sensor-text != ""
-            || controls-item.energy-text != "" || controls-item.can-reauth: DeviceRow {
-            // As tall as its content; the space below stays empty.
-            vertical-stretch: 0;
-            in-sheet: true;
-            item: root.controls-item;
-            set-switch(id, on) => {
-                root.set-switch(id, on);
-            }
-            set-level(id, level) => {
-                root.set-level(id, level);
-            }
-            set-media(id, volume, muted, input) => {
-                root.set-media(id, volume, muted, input);
-            }
-            open(id) => {
-                root.open-device(id);
-            }
-            reauth(id) => {
-                root.device-reauth(id);
-            }
-            open-remote(id) => {
-                root.open-remote(id);
-            }
-            cover-action(id, action) => {
-                root.cover-action(id, action);
-            }
-            set-cover-position(id, position) => {
-                root.set-cover-position(id, position);
-            }
-            set-climate(id, mode, target, fan) => {
-                root.set-climate(id, mode, target, fan);
-            }
-            set-lock(id, locked) => {
-                root.set-lock(id, locked);
-            }
-            set-color(id, hex) => {
-                root.set-color(id, hex);
-            }
-            press(id, button) => {
-                root.device-press(id, button);
+        // Scrolls when the card is taller than the screen (a vacuum's
+        // modes, rooms and parts, #74).
+        if has-card: ScrollView {
+            vertical-stretch: 1;
+            VerticalLayout {
+                alignment: start;
+                spacing: Theme.space-m;
+                // A vacuum's map or a camera's picture, above the controls.
+                if controls-item.vacuum-has-map || controls-item.has-camera: Rectangle {
+                    border-radius: Theme.radius-medium * 2;
+                    background: Theme.surface;
+                    // At most ~40 % of the screen: the buttons below stay
+                    // in view without scrolling.
+                    height: root.controls-map-state != "" ? 64px
+                        : min(root.height * 0.4,
+                              (self.width - 2 * Theme.space-m) * root.controls-map.height / max(1, root.controls-map.width) + 2 * Theme.space-m);
+                    if root.controls-map-state != "": Text {
+                        text: root.controls-map-state;
+                        color: Theme.text-muted;
+                        font-size: Theme.font-body;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        wrap: word-wrap;
+                    }
+                    if root.controls-map-state == "": Image {
+                        x: Theme.space-m;
+                        y: Theme.space-m;
+                        width: parent.width - 2 * Theme.space-m;
+                        height: parent.height - 2 * Theme.space-m;
+                        source: root.controls-map;
+                        image-fit: contain;
+                        init => {
+                            root.controls-picture-width = self.width;
+                            root.controls-picture-height = self.height;
+                        }
+                        changed width => {
+                            root.controls-picture-width = self.width;
+                        }
+                        changed height => {
+                            root.controls-picture-height = self.height;
+                        }
+                    }
+                    // A camera: Live on / off (top right of the picture).
+                    if controls-item.has-camera && root.controls-map-state == "": Rectangle {
+                        x: parent.width - self.width - 2 * Theme.space-m;
+                        y: 2 * Theme.space-m;
+                        width: live-label.preferred-width + 2 * Theme.space-m;
+                        height: 32px;
+                        border-radius: self.height / 2;
+                        background: root.controls-live ? Theme.error : #00000099;
+                        live-label := Text {
+                            text: root.controls-live ? "\u{25CF} Live" : "Live";
+                            color: #FFFFFF;
+                            font-size: Theme.font-caption;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                        TouchArea {
+                            clicked => {
+                                root.controls-live = !root.controls-live;
+                            }
+                        }
+                    }
+                }
+                DeviceRow {
+                    // As tall as its content; the space below stays empty.
+                    vertical-stretch: 0;
+                    in-sheet: true;
+                    item: root.controls-item;
+                    set-switch(id, on) => {
+                        root.set-switch(id, on);
+                    }
+                    set-level(id, level) => {
+                        root.set-level(id, level);
+                    }
+                    set-media(id, volume, muted, input) => {
+                        root.set-media(id, volume, muted, input);
+                    }
+                    open(id) => {
+                        root.open-device(id);
+                    }
+                    reauth(id) => {
+                        root.device-reauth(id);
+                    }
+                    open-remote(id) => {
+                        root.open-remote(id);
+                    }
+                    cover-action(id, action) => {
+                        root.cover-action(id, action);
+                    }
+                    vacuum-action(id, action, arg) => {
+                        root.vacuum-action(id, action, arg);
+                    }
+                    set-option(id, option, on) => {
+                        root.set-option(id, option, on);
+                    }
+                    set-option-value(id, option, value) => {
+                        root.set-option-value(id, option, value);
+                    }
+                    camera-move(id, pan, tilt) => {
+                        root.camera-move(id, pan, tilt);
+                    }
+                    camera-preset(id, token) => {
+                        root.camera-preset(id, token);
+                    }
+                    set-cover-position(id, position) => {
+                        root.set-cover-position(id, position);
+                    }
+                    set-climate(id, mode, target, fan) => {
+                        root.set-climate(id, mode, target, fan);
+                    }
+                    set-lock(id, locked) => {
+                        root.set-lock(id, locked);
+                    }
+                    set-color(id, hex) => {
+                        root.set-color(id, hex);
+                    }
+                    press(id, button) => {
+                        root.device-press(id, button);
+                    }
+                }
             }
         }
-        Rectangle {
+        if !has-card: Rectangle {
             vertical-stretch: 1;
         }
     }
@@ -964,6 +1073,14 @@ export component AppWindow inherits Window {
         message: root.dev-message;
         has-remote: root.dev-has-remote;
         remote-learns: root.dev-remote-learns;
+        rooms: root.dev-rooms;
+        edit-text <=> root.dev-edit-text;
+        backspace => {
+            root.dev-edit-text = drop-last(root.dev-edit-text);
+        }
+        save-info(name, room) => {
+            root.device-save-info(root.dev-id, name, room);
+        }
         back => {
             page = device-back;
         }
@@ -1153,6 +1270,23 @@ export component AppWindow inherits Window {
             clients-message = "";
             page = 5;
             open-clients();
+        }
+        open-accounts => {
+            page = 21;
+            root.open-accounts();
+        }
+    }
+
+    if page == 21: AccountsPage {
+        width: min(parent.width, Theme.content-max-width);
+        x: (parent.width - self.width) / 2;
+        height: parent.height;
+        accounts: root.accounts;
+        back => {
+            page = 4;
+        }
+        sign-out(id) => {
+            root.sign-out-account(id);
         }
     }
 

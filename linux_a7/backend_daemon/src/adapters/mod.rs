@@ -28,14 +28,25 @@
  * (templates::ErrorKind), which the wizard turns into a sentence a person
  * understands.
  */
+pub mod camera;
 pub mod channels;
+pub mod cloud;
 pub mod esp_prov;
+pub mod ezviz;
 pub mod http_generic;
+pub mod ipcam;
 pub mod ir_blaster;
 pub mod lg_webos;
 pub mod m4_led;
+pub mod miio;
+pub mod roborock;
 pub mod mqtt_generic;
+pub mod roborock_cloud;
+pub mod roborock_map;
+pub mod roborock_proto;
+pub mod tapo;
 pub mod net;
+pub mod onvif;
 pub mod wiz;
 pub mod wled;
 #[cfg(test)]
@@ -83,6 +94,10 @@ pub enum DeviceCmd {
         reply: oneshot::Sender<Result<Value, String>>,
     },
 }
+
+/* Issue #74: a command's or an action's reply, once the task knows which
+ * one it got (a switch command and an option action handled alike). */
+pub type Reply = Box<dyn FnOnce(Result<(), String>) + Send>;
 
 impl DeviceCmd {
     /* Answers with an error, whatever the request was (a device that
@@ -173,6 +188,34 @@ impl Hub {
         self.control.ir_codes()
     }
 
+    /* Issue #74: a vendor account's session (config "account"), and
+     * saving a renewed one for all of its devices (accounts.rs). */
+    pub fn account_session(&self, account: &str) -> Option<String> {
+        crate::accounts::get(self.control.secrets(), account).map(|a| a.session)
+    }
+
+    /* Issue #74: the cloud session a device uses. Its account's; only a
+     * device set up before accounts were saved (no "account" in its
+     * config) uses its own copy. One whose account was signed out gets
+     * none -- signing out must sign it out -- and its old copy is
+     * deleted. */
+    pub fn cloud_session(&self, device: &Device) -> Option<String> {
+        match device.config.get("account") {
+            Some(account) => {
+                let session = self.account_session(account);
+                if session.is_none() && self.control.secrets().remove_one(&device.id, "cloud_session") {
+                    println!("adapters: {}: account {account} is signed out: its old session copy deleted", device.id);
+                }
+                session
+            }
+            None => self.secrets(&device.id).get("cloud_session").map(|s| s.expose().to_string()),
+        }
+    }
+
+    pub fn store_account_session(&self, account: &str, session: String) {
+        crate::accounts::update_session(self.control.secrets(), account, session);
+    }
+
     /* E.g. a TV that issued a new pairing key. */
     pub fn store_secrets(&self, id: &str, values: DeviceSecrets) {
         self.control.secrets().set(id, values);
@@ -197,6 +240,25 @@ pub struct SetupValues {
     /* The template being set up (the generic HTTP adapter's probe reads
      * its "http" block). */
     pub template: String,
+    /* Issue #74: a vendor_login step's `list_action` answers with the
+     * account's devices; the person picks one (wizard.rs). */
+    pub cloud_devices: Vec<CloudDevice>,
+}
+
+/* One device of a vendor account (issue #74). */
+#[derive(Default, Clone, Debug)]
+pub struct CloudDevice {
+    /* The vendor's id for it (Roborock's "duid"). */
+    pub id: String,
+    pub name: String,
+    /* One line under the name: "Roborock S7 - online". */
+    pub detail: String,
+    /* false: shown, but can't be picked -- `detail` says why ("this model
+     * isn't supported yet"). */
+    pub available: bool,
+    /* What the device needs, merged into setup's values when picked. */
+    pub plain: BTreeMap<String, String>,
+    pub secret: DeviceSecrets,
 }
 
 /* What a probe learned about the device. */

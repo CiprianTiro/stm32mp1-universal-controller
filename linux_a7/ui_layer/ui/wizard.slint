@@ -311,7 +311,9 @@ export component WizardPage inherits Rectangle {
     in property <string> title;
     // backend_daemon's step type: "info", "discover", "form", "choice",
     // "confirm_on_device", "code_from_device", "provision_ble", "test",
-    // "name", "save".
+    // "name", "save"; a vendor account login (#74) as "login" (email),
+    // "login_code" (the code it sent) and "login_pick" (its devices, in
+    // `found`: address = the vendor's id, type-name = the line below).
     in property <string> step;
     in property <int> number;
     // info: the text; confirm_on_device: the hint; name/save: what the
@@ -450,22 +452,69 @@ export component WizardPage inherits Rectangle {
             }
         }
 
-        if step == "form" || step == "choice" || step == "code_from_device" || step == "name": VerticalLayout {
+        // A vendor login: what it's for, or where the code went.
+        if (step == "login" || step == "login_code" || step == "login_pick") && root.text != "": Text {
+            text: root.text;
+            color: Theme.text-muted;
+            font-size: Theme.font-body;
+            wrap: word-wrap;
+        }
+
+        // A vendor login (#74): accounts the hub is signed in to already --
+        // one tap, no password.
+        if step == "login" && found.length > 0: VerticalLayout {
+            spacing: Theme.space-s;
+            vertical-stretch: 0;
+            for f in found: PickRow {
+                title: f.name;
+                detail: f.type-name;
+                clicked => {
+                    root.pick-found(f.address);
+                }
+            }
+            Text {
+                text: "Or sign in with another account:";
+                color: Theme.text-muted;
+                font-size: Theme.font-caption;
+            }
+        }
+
+        if step == "login_pick": ScrollView {
+            vertical-stretch: 1;
+            VerticalLayout {
+                spacing: Theme.space-s;
+                alignment: start;
+                for f in found: PickRow {
+                    title: f.name;
+                    detail: f.type-name;
+                    clicked => {
+                        root.pick-found(f.address);
+                    }
+                }
+            }
+        }
+
+        if step == "form" || step == "choice" || step == "code_from_device" || step == "name" || step == "login" || step == "login_code": VerticalLayout {
             spacing: Theme.space-l;
             vertical-stretch: 0;
-            for f[i] in fields: FieldRow {
-                field: f;
-                editing: i == root.editing;
-                live: root.edit-shown;
-                reveal: root.reveal;
-                toggle-reveal => {
-                    root.reveal = !root.reveal;
-                }
-                edit => {
-                    root.edit(i);
-                }
-                pick(value) => {
-                    root.pick(i, value);
+            // While typing, only the field being typed into: with the
+            // keyboard open, several fields don't fit on the touchscreen
+            // (#74: a camera's four). The others come back at "Done".
+            for f[i] in fields: VerticalLayout {
+                if root.editing < 0 || i == root.editing: FieldRow {
+                    field: f;
+                    editing: i == root.editing;
+                    live: root.edit-shown;
+                    reveal: root.reveal;
+                    toggle-reveal => {
+                        root.reveal = !root.reveal;
+                    }
+                    edit => {
+                        root.edit(i);
+                    }
+                    pick(value) => {
+                        root.pick(i, value);
+                    }
                 }
             }
         }
@@ -492,6 +541,12 @@ export component WizardPage inherits Rectangle {
             }
         }
 
+        if (step == "login" || step == "login_code" || step == "login_pick") && busy: Text {
+            text: "Talking to the vendor\u{2026}";
+            color: Theme.accent;
+            font-size: Theme.font-subtitle;
+        }
+
         if step == "test" && busy: Text {
             text: "Testing the connection\u{2026}";
             color: Theme.accent;
@@ -512,7 +567,7 @@ export component WizardPage inherits Rectangle {
 
         // Fill the rest, so the buttons or keyboard sit at the bottom --
         // except on the discover step, whose list takes that space.
-        if step != "discover": Rectangle {
+        if step != "discover" && step != "login_pick": Rectangle {
             vertical-stretch: 1;
         }
 
@@ -540,7 +595,14 @@ export component WizardPage inherits Rectangle {
                     root.retry();
                 }
             }
-            if step == "info" || step == "form" || step == "code_from_device" || step == "name" || step == "save": ActionButton {
+            // A vendor login: another email, or a new code.
+            if step == "login_code" || step == "login_pick": ActionButton {
+                text: "Start over";
+                clicked => {
+                    root.search();
+                }
+            }
+            if step == "info" || step == "form" || step == "code_from_device" || step == "name" || step == "save" || step == "login" || step == "login_code": ActionButton {
                 text: root.primary-text;
                 primary: true;
                 clicked => {
@@ -566,18 +628,164 @@ export component DevicePage inherits Rectangle {
     // buttons are taught (issue #42).
     in property <bool> has-remote;
     in property <bool> remote-learns;
+    // The rooms the hub's devices are in, offered as one-tap choices when
+    // the device moves.
+    in property <[string]> rooms;
+    // What the on-screen keyboard types (bound to app.slint, whose
+    // drop-last does the keyboard's backspace).
+    in-out property <string> edit-text;
     callback back();
     callback open-remote();
     callback reauth();
     callback reconfigure();
     callback remove();
+    // Name and room changed: (name, room); room "" = no room.
+    callback save-info(string, string);
+    callback backspace();
 
     // "Remove" asks once more before it happens.
     property <bool> confirm-remove: false;
+    // "Name and room": the editor instead of the list; what's being typed
+    // (0 nothing, 1 the name, 2 a new room); the values being edited.
+    property <bool> editing-info: false;
+    property <int> typing: 0;
+    property <string> new-name;
+    property <string> new-room;
+    // new-room was typed (not one of `rooms`): its box shows it.
+    property <bool> custom-room: false;
 
     background: Theme.background;
 
-    VerticalLayout {
+    // ---- the name and room editor ----
+    if editing-info: VerticalLayout {
+        padding: Theme.space-l;
+        spacing: Theme.space-m;
+
+        PageHeader {
+            title: "Name and room";
+            back => {
+                if (typing != 0) {
+                    typing = 0;
+                } else {
+                    editing-info = false;
+                }
+            }
+        }
+        Text {
+            text: "Name";
+            color: Theme.text-muted;
+            font-size: Theme.font-caption;
+        }
+        Rectangle {
+            height: Theme.touch-height;
+            border-radius: Theme.radius-medium;
+            border-width: typing == 1 ? 2px : 1px;
+            border-color: typing == 1 ? Theme.accent : Theme.outline;
+            background: Theme.surface;
+            Text {
+                x: Theme.space-m;
+                text: typing == 1 ? root.edit-text : root.new-name;
+                color: Theme.text;
+                font-size: Theme.font-subtitle;
+                vertical-alignment: center;
+            }
+            TouchArea {
+                clicked => {
+                    root.edit-text = root.new-name;
+                    typing = 1;
+                }
+            }
+        }
+        Text {
+            text: "Room";
+            color: Theme.text-muted;
+            font-size: Theme.font-caption;
+        }
+        // The rooms in use, "No room", and one that's new: tap to pick.
+        // Scrolls when there are many.
+        if typing == 0: ScrollView {
+            vertical-stretch: 1;
+            VerticalLayout {
+                spacing: Theme.space-xs;
+                alignment: start;
+                for r in rooms: Choice {
+                    text: r;
+                    selected: !root.custom-room && root.new-room == r;
+                    clicked => {
+                        root.new-room = r;
+                        root.custom-room = false;
+                    }
+                }
+                Choice {
+                    text: "No room";
+                    selected: !root.custom-room && root.new-room == "";
+                    clicked => {
+                        root.new-room = "";
+                        root.custom-room = false;
+                    }
+                }
+            }
+        }
+        Rectangle {
+            height: Theme.touch-height;
+            border-radius: Theme.radius-medium;
+            border-width: typing == 2 || custom-room ? 2px : 1px;
+            border-color: typing == 2 || custom-room ? Theme.accent : Theme.outline;
+            background: Theme.surface;
+            Text {
+                x: Theme.space-m;
+                text: typing == 2 ? root.edit-text : custom-room ? root.new-room : "A new room\u{2026}";
+                color: typing == 2 || custom-room ? Theme.text : Theme.text-muted;
+                font-size: Theme.font-subtitle;
+                vertical-alignment: center;
+            }
+            TouchArea {
+                clicked => {
+                    root.edit-text = custom-room ? root.new-room : "";
+                    typing = 2;
+                }
+            }
+        }
+        if typing != 0: Rectangle {
+            vertical-stretch: 1;
+        }
+        if typing != 0: Keyboard {
+            text <=> root.edit-text;
+            max-length: 40;
+            backspace => {
+                root.backspace();
+            }
+            done => {
+                if (typing == 1) {
+                    root.new-name = root.edit-text;
+                } else if (root.edit-text != "") {
+                    root.new-room = root.edit-text;
+                    root.custom-room = true;
+                }
+                typing = 0;
+            }
+        }
+        if typing == 0: HorizontalLayout {
+            spacing: Theme.space-s;
+            alignment: end;
+            ActionButton {
+                text: "Cancel";
+                clicked => {
+                    editing-info = false;
+                }
+            }
+            ActionButton {
+                text: "Save";
+                primary: true;
+                clicked => {
+                    editing-info = false;
+                    root.save-info(root.new-name, root.new-room);
+                }
+            }
+        }
+    }
+
+    if !editing-info: VerticalLayout {
         padding: Theme.space-l;
         spacing: Theme.space-m;
         alignment: start;
@@ -604,6 +812,18 @@ export component DevicePage inherits Rectangle {
             color: Theme.error;
             font-size: Theme.font-body;
             wrap: word-wrap;
+        }
+        PickRow {
+            title: "Name and room";
+            detail: "When it moves, or for a better name";
+            clicked => {
+                confirm-remove = false;
+                root.new-name = root.name;
+                root.new-room = root.room;
+                root.custom-room = false;
+                typing = 0;
+                editing-info = true;
+            }
         }
         if has-remote: PickRow {
             title: "Remote";

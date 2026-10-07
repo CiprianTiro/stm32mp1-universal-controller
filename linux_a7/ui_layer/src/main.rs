@@ -21,6 +21,7 @@ mod pointer;
 mod setup;
 mod theme;
 mod tiles;
+mod vacuum_map;
 mod ws_client;
 mod zones;
 
@@ -33,6 +34,9 @@ use std::time::Duration;
 /// display frame, 16 ms; Slint's libinput reads input itself now, woken by
 /// the kernel only when something happens.)
 const POLL: Duration = Duration::from_millis(50);
+/// Live video: no frame for this long, the watching is asked for again
+/// (the camera's stream broke off, or the backend restarted).
+const LIVE_STALL: Duration = Duration::from_secs(4);
 
 /// How often to check whether a monitor was plugged in or out (issue #38).
 const HOTPLUG_CHECK: Duration = Duration::from_secs(1);
@@ -171,6 +175,63 @@ fn main() {
             args: serde_json::json!({}),
         });
     });
+    // Issue #43: a camera's pan/tilt step and preset positions (ONVIF).
+    let tx = request_tx.clone();
+    ui.on_camera_move(move |id, pan, tilt| {
+        let _ = tx.send(ws_client::Request::DeviceAction {
+            id: id.to_string(),
+            capability: "camera".into(),
+            name: "move".into(),
+            args: serde_json::json!({ "pan": pan, "tilt": tilt }),
+        });
+    });
+    let tx = request_tx.clone();
+    ui.on_camera_preset(move |id, token| {
+        let _ = tx.send(ws_client::Request::DeviceAction {
+            id: id.to_string(),
+            capability: "camera".into(),
+            name: "preset".into(),
+            args: serde_json::json!({ "token": token.as_str() }),
+        });
+    });
+    // Issue #74: a device's own setting (an EZVIZ plug's status light).
+    let tx = request_tx.clone();
+    ui.on_set_option(move |id, option, on| {
+        let _ = tx.send(ws_client::Request::DeviceAction {
+            id: id.to_string(),
+            capability: "options".into(),
+            name: "set".into(),
+            args: serde_json::json!({ "id": option.as_str(), "on": on }),
+        });
+    });
+    let tx = request_tx.clone();
+    ui.on_set_option_value(move |id, option, value| {
+        let _ = tx.send(ws_client::Request::DeviceAction {
+            id: id.to_string(),
+            capability: "options".into(),
+            name: "set".into(),
+            args: serde_json::json!({ "id": option.as_str(), "value": value.as_str() }),
+        });
+    });
+    // Issue #74: a vacuum's start / pause / dock / locate are actions too.
+    let tx = request_tx.clone();
+    ui.on_vacuum_action(move |id, action, arg| {
+        let arg = arg.to_string();
+        let args = match action.as_str() {
+            "set_fan" => serde_json::json!({ "fan": arg }),
+            "set_water" => serde_json::json!({ "water": arg }),
+            "set_mop" => serde_json::json!({ "mop": arg }),
+            "reset_part" => serde_json::json!({ "part": arg }),
+            "clean_rooms" => serde_json::json!({ "rooms": [arg.parse::<u32>().unwrap_or(0)] }),
+            _ => serde_json::json!({}),
+        };
+        let _ = tx.send(ws_client::Request::DeviceAction {
+            id: id.to_string(),
+            capability: "vacuum".into(),
+            name: action.to_string(),
+            args,
+        });
+    });
     let tx = request_tx.clone();
     ui.on_set_cover_position(move |id, position| {
         let _ = tx.send(ws_client::Request::Command {
@@ -199,13 +260,85 @@ fn main() {
         ui_weak.unwrap().set_device_filter(id);
         r.borrow_mut().refresh();
     });
-    let (ui_weak, r) = (ui.as_weak(), rows.clone());
+    let (ui_weak, r, tx) = (ui.as_weak(), rows.clone(), request_tx.clone());
     ui.on_open_controls(move |id| {
         let ui = ui_weak.unwrap();
         if r.borrow().show_controls(&ui, id.as_str()) {
             ui.set_device_message("".into());
             ui.set_device_back(PAGE_CONTROLS);
             ui.set_page(PAGE_CONTROLS);
+            // Issue #74: a vacuum's map, fetched now (it takes a moment:
+            // it comes through the vendor's cloud).
+            if ui.get_controls_item().vacuum_has_map {
+                ui.set_controls_map_state("Loading the map\u{2026}".into());
+                request_map(&tx, id.as_str());
+            }
+            // Issue #43: a camera's picture (the first takes a few
+            // seconds: the stream's next key frame).
+            if ui.get_controls_item().has_camera {
+                ui.set_controls_live(false);
+                ui.set_controls_map_state("Loading the picture\u{2026}".into());
+                request_picture(&tx, id.as_str(), false);
+            }
+        }
+    });
+    // While a vacuum's page is open and it's on the move, its map follows.
+    let (map_ui, map_tx) = (ui.as_weak(), request_tx.clone());
+    let map_timer = slint::Timer::default();
+    map_timer.start(slint::TimerMode::Repeated, std::time::Duration::from_secs(10), move || {
+        let Some(ui) = map_ui.upgrade() else { return };
+        let item = ui.get_controls_item();
+        let moving = matches!(item.vacuum_state.as_str(), "cleaning" | "returning" | "paused");
+        if ui.get_page() == PAGE_CONTROLS && item.vacuum_has_map && moving {
+            request_map(&map_tx, item.id.as_str());
+        }
+    });
+    // A camera's picture follows while its page is open: a still every
+    // 2 s (a new one only asked for once the last one came, or 10 s
+    // passed: requests never pile up) -- or, in Live, real video: the
+    // backend sends frames of exactly the picture's size (camera.rs) into
+    // ws_client::VIDEO, shown by the poll timer below. Watching is asked
+    // again when no frame came for a while (the stream broke off), and
+    // ended when Live is turned off or the page closes.
+    let picture_waiting: std::rc::Rc<std::cell::Cell<Option<std::time::Instant>>> = Default::default();
+    // The camera watched live, and when its last frame came (or the
+    // watching was asked for).
+    let watching: std::rc::Rc<std::cell::RefCell<Option<(String, std::time::Instant)>>> = Default::default();
+    let (picture_ui, picture_tx, waiting, watched) = (ui.as_weak(), request_tx.clone(), picture_waiting.clone(), watching.clone());
+    let picture_timer = slint::Timer::default();
+    let picture_ticks = std::cell::Cell::new(0u32);
+    picture_timer.start(slint::TimerMode::Repeated, std::time::Duration::from_millis(250), move || {
+        let Some(ui) = picture_ui.upgrade() else { return };
+        let item = ui.get_controls_item();
+        let on_camera = ui.get_page() == PAGE_CONTROLS && item.has_camera;
+        let live = on_camera && ui.get_controls_live();
+        let mut watched = watched.borrow_mut();
+        if live {
+            let stale = watched.as_ref().is_none_or(|(id, at)| id != item.id.as_str() || at.elapsed() > LIVE_STALL);
+            if stale {
+                let scale = ui.window().scale_factor();
+                let size = |l: f32| ((l * scale) as u32).min(u16::MAX as u32) as u16;
+                let _ = picture_tx.send(ws_client::Request::WatchCamera {
+                    id: item.id.to_string(),
+                    width: size(ui.get_controls_picture_width()),
+                    height: size(ui.get_controls_picture_height()),
+                });
+                *watched = Some((item.id.to_string(), std::time::Instant::now()));
+            }
+            return;
+        }
+        if watched.take().is_some() {
+            let _ = picture_tx.send(ws_client::Request::UnwatchCamera);
+        }
+        if !on_camera {
+            return;
+        }
+        picture_ticks.set(picture_ticks.get().wrapping_add(1));
+        let due = picture_ticks.get() % 8 == 0;
+        let free = waiting.get().is_none_or(|t| t.elapsed() > std::time::Duration::from_secs(10));
+        if due && free {
+            waiting.set(Some(std::time::Instant::now()));
+            request_picture(&picture_tx, item.id.as_str(), false);
         }
     });
     let (tx, r) = (request_tx.clone(), rows.clone());
@@ -224,7 +357,7 @@ fn main() {
     });
     let tx = request_tx.clone();
     ui.on_set_favourite(move |id, favourite| {
-        let _ = tx.send(ws_client::Request::UpdateDeviceInfo { id: id.to_string(), favourite: Some(favourite) });
+        let _ = tx.send(ws_client::Request::UpdateDeviceInfo { id: id.to_string(), name: None, room: None, favourite: Some(favourite) });
     });
 
     // Issue #85: an IR light's colour chip, and its brightness -/+ (a
@@ -540,8 +673,24 @@ fn main() {
         let ui = ui_weak.unwrap();
         if let Some(device) = r.borrow().devices.get(id.as_str()) {
             show_device_page(&ui, device, &w.borrow());
+            // "Name and room" offers the rooms in use.
+            let mut rooms: Vec<String> = r.borrow().devices.values().map(|d| d.room.clone()).filter(|r| !r.is_empty()).collect();
+            rooms.sort();
+            rooms.dedup();
+            ui.set_dev_rooms(std::rc::Rc::new(slint::VecModel::from(rooms.into_iter().map(Into::into).collect::<Vec<slint::SharedString>>())).into());
             ui.set_page(setup::PAGE_DEVICE);
         }
+    });
+    // "Name and room" saved: an empty name keeps the old one.
+    let tx = request_tx.clone();
+    ui.on_device_save_info(move |id, name, room| {
+        let name = name.trim();
+        let _ = tx.send(ws_client::Request::UpdateDeviceInfo {
+            id: id.to_string(),
+            name: (!name.is_empty()).then(|| name.to_string()),
+            room: Some(room.trim().to_string()),
+            favourite: None,
+        });
     });
     let (tx, ui_weak, r, w) = (request_tx.clone(), ui.as_weak(), rows.clone(), wizard.clone());
     ui.on_device_reauth(move |id| {
@@ -605,6 +754,16 @@ fn main() {
     });
 
     // Paired devices and pairing (issue #35).
+    let tx = request_tx.clone();
+    // Issue #74: Settings > Accounts.
+    let tx = request_tx.clone();
+    ui.on_open_accounts(move || {
+        let _ = tx.send(ws_client::Request::ListAccounts);
+    });
+    let tx = request_tx.clone();
+    ui.on_sign_out_account(move |id| {
+        let _ = tx.send(ws_client::Request::RemoveAccount { id: id.to_string() });
+    });
     let tx = request_tx.clone();
     ui.on_open_clients(move || {
         let _ = tx.send(ws_client::Request::ListClients);
@@ -822,6 +981,28 @@ fn main() {
             }
         }
     });
+    // Live video: a frame is shown the moment it comes (ws_client wakes
+    // the event loop, which runs SHOW_FRAME), not at the next POLL.
+    let shown: std::rc::Rc<std::cell::Cell<(u32, std::time::Instant)>> = std::rc::Rc::new(std::cell::Cell::new((0, std::time::Instant::now())));
+    let (frame_ui, frame_watching, frame_shown) = (ui.as_weak(), watching.clone(), shown.clone());
+    SHOW_FRAME.with(|show| {
+        *show.borrow_mut() = Some(Box::new(move || {
+            if let Some(ui) = frame_ui.upgrade() {
+                show_video_frame(&ui, &frame_watching, &frame_shown);
+            }
+        }));
+    });
+    let _ = ws_client::FRAME_READY.set(Box::new(|| {
+        // From the connection thread: run SHOW_FRAME on the GUI thread.
+        let _ = slint::invoke_from_event_loop(|| {
+            SHOW_FRAME.with(|show| {
+                if let Some(show) = show.borrow().as_ref() {
+                    show();
+                }
+            })
+        });
+    }));
+    let (poll_watching, poll_shown) = (watching.clone(), shown.clone());
     poll_timer.start(slint::TimerMode::Repeated, POLL, move || {
         let ui = ui_weak.unwrap();
 
@@ -833,6 +1014,8 @@ fn main() {
         //    daemon says" design: tapping a toggle does NOT flip it by
         //    itself (see `on_set_switch` above) -- it changes once
         //    backend_daemon confirms, arriving here as DeviceChanged.
+        // A camera's live frame that the wake-up (FRAME_READY) missed.
+        show_video_frame(&ui, &poll_watching, &poll_shown);
         while let Ok(update) = update_rx.try_recv() {
             match update {
                 // ever-connected (issue #59): from the first successful
@@ -869,6 +1052,14 @@ fn main() {
                 ws_client::Update::CommandFailed(message) => {
                     ui.set_device_message_ok(false);
                     ui.set_device_message(message.into());
+                    device_message_until = Some(std::time::Instant::now() + DEVICE_MESSAGE_TIME);
+                }
+                // A camera's live video didn't start: back to stills, and
+                // why (like a refused command).
+                ws_client::Update::VideoFailed(message) => {
+                    ui.set_controls_live(false);
+                    ui.set_device_message_ok(false);
+                    ui.set_device_message(format!("No live video: {message}").into());
                     device_message_until = Some(std::time::Instant::now() + DEVICE_MESSAGE_TIME);
                 }
                 // Adding and setting up devices (issue #40, setup.rs).
@@ -983,6 +1174,42 @@ fn main() {
                         device_message_until = Some(std::time::Instant::now() + DEVICE_MESSAGE_TIME);
                     }
                 }
+                // Issue #43: a camera's picture came (or couldn't).
+                ws_client::Update::DeviceAction { name, result, .. } if name == "snapshot" => match {
+                    picture_waiting.set(None);
+                    result
+                } {
+                    Ok(answer) => match answer["jpeg"].as_str().and_then(vacuum_map::picture) {
+                        Some(image) => {
+                            ui.set_controls_map(image);
+                            ui.set_controls_map_state("".into());
+                        }
+                        None => ui.set_controls_map_state("The picture couldn't be read.".into()),
+                    },
+                    Err(message) => ui.set_controls_map_state(message.into()),
+                },
+                // Issue #74: a vacuum's map came (or couldn't).
+                ws_client::Update::DeviceAction { name, result, .. } if name == "map" => match result {
+                    Ok(map) => {
+                        let theme = ui.global::<Theme>();
+                        let colors = vacuum_map::Colors {
+                            floor: theme.get_surface_pressed(),
+                            wall: theme.get_text_muted(),
+                            path: theme.get_text(),
+                            robot: theme.get_accent(),
+                            dock: theme.get_ok(),
+                            no_go: theme.get_error(),
+                        };
+                        match vacuum_map::render(&map, &colors) {
+                            Some(image) => {
+                                ui.set_controls_map(image);
+                                ui.set_controls_map_state("".into());
+                            }
+                            None => ui.set_controls_map_state("The map couldn't be read.".into()),
+                        }
+                    }
+                    Err(message) => ui.set_controls_map_state(message.into()),
+                },
                 // The code finder's actions (issue #82): its next step.
                 ws_client::Update::DeviceAction { name, args, result }
                     if ui.get_page() == PAGE_IR_REMOTE && matches!(name.as_str(), "library" | "finder" | "try" | "use_set") =>
@@ -1014,7 +1241,8 @@ fn main() {
                 // light's brightness step from its card (#85), that
                 // failed: said under the device list, like a failed command.
                 ws_client::Update::DeviceAction { name, result: Err(message), .. }
-                    if matches!(name.as_str(), "open" | "close" | "stop")
+                    if matches!(name.as_str(), "open" | "close" | "stop" | "start" | "pause" | "dock" | "locate"
+                        | "set_fan" | "set_water" | "set_mop" | "clean_rooms" | "reset_part" | "set")
                         || (name == "press" && matches!(ui.get_page(), setup::PAGE_DEVICES | PAGE_CONTROLS)) =>
                 {
                     ui.set_device_message_ok(false);
@@ -1077,6 +1305,7 @@ fn main() {
                     show_pairing(&ui, &pairing, &last_net, &mut qr_code_for);
                 }
                 ws_client::Update::Clients(clients) => ui.set_clients(client_rows(&clients)),
+                ws_client::Update::Accounts(accounts) => ui.set_accounts(account_rows(&accounts)),
                 // Issue #39: a new look (or time zone), from this screen or
                 // a phone -- applied at once, no restart.
                 ws_client::Update::Settings(new) => {
@@ -1740,7 +1969,15 @@ fn show_device_page(ui: &AppWindow, device: &ws_client::Device, wizard: &setup::
     ui.set_dev_id(device.id.clone().into());
     ui.set_dev_name(device.name.clone().into());
     ui.set_dev_room(device.room.clone().into());
-    ui.set_dev_type(template.map_or_else(|| if device.source == "virtual" { "Test device".into() } else { device.template.clone() }, |t| t.name.clone()).into());
+    // Issue #74: a cloud-only device says so where its type is shown.
+    ui.set_dev_type(
+        template
+            .map_or_else(
+                || if device.source == "virtual" { "Test device".into() } else { device.template.clone() },
+                |t| if t.cloud { format!("{} \u{2022} needs internet", t.name) } else { t.name.clone() },
+            )
+            .into(),
+    );
     ui.set_dev_status(match device.online.as_deref() {
         Some("online") => "Online",
         _ => status_text(device),
@@ -1769,7 +2006,11 @@ fn device_item(device: &ws_client::Device, templates: &[ws_client::Template]) ->
     let sensor_text = caps.sensor.as_ref().map_or(String::new(), |s| {
         s.readings
             .iter()
-            .map(|(name, r)| format!("{name} {} {}", r.value, r.unit).trim_end().to_string())
+            .map(|(name, r)| match name.as_str() {
+                /* A camera's ONVIF motion (#43): yes / no, not a number. */
+                "motion" => if r.value >= 1.0 { "Motion now" } else { "No motion" }.to_string(),
+                _ => format!("{name} {} {}", r.value, r.unit).trim_end().to_string(),
+            })
             .collect::<Vec<_>>()
             .join("   ")
     });
@@ -1838,6 +2079,48 @@ fn device_item(device: &ws_client::Device, templates: &[ws_client::Template]) ->
         has_lock: caps.lock.is_some(),
         lock_state: caps.lock.as_ref().map_or(String::new(), |l| l.state.clone()).into(),
         energy_text: caps.energy.as_ref().map_or(String::new(), energy_text).into(),
+        has_vacuum: caps.vacuum.is_some(),
+        vacuum_state: caps.vacuum.as_ref().map_or(String::new(), |v| v.state.clone()).into(),
+        vacuum_text: caps.vacuum.as_ref().map_or(String::new(), tiles::vacuum_line).into(),
+        vacuum_fan: caps.vacuum.as_ref().and_then(|v| v.fan.clone()).unwrap_or_default().into(),
+        vacuum_fans: modes(caps.vacuum.as_ref().map_or(&[][..], |v| &v.fans)),
+        vacuum_water: caps.vacuum.as_ref().and_then(|v| v.water.clone()).unwrap_or_default().into(),
+        vacuum_waters: modes(caps.vacuum.as_ref().map_or(&[][..], |v| &v.waters)),
+        vacuum_mop: caps.vacuum.as_ref().and_then(|v| v.mop.clone()).unwrap_or_default().into(),
+        vacuum_mops: modes(caps.vacuum.as_ref().map_or(&[][..], |v| &v.mops)),
+        vacuum_run_text: caps.vacuum.as_ref().map_or(String::new(), tiles::vacuum_run).into(),
+        vacuum_rooms: std::rc::Rc::new(slint::VecModel::from(caps.vacuum.as_ref().map_or(vec![], |v| {
+            v.rooms.iter().map(|r| VacuumRoomItem { id: r.id as i32, name: r.name.clone().into() }).collect()
+        })))
+        .into(),
+        vacuum_parts: std::rc::Rc::new(slint::VecModel::from(caps.vacuum.as_ref().map_or(vec![], |v| {
+            v.parts.iter().map(|p| VacuumPartItem { id: p.id.clone().into(), name: p.name.clone().into(), left: i32::from(p.left) }).collect()
+        })))
+        .into(),
+        vacuum_totals_text: caps.vacuum.as_ref().and_then(|v| v.totals.as_ref()).map_or(String::new(), |t| {
+            format!("{} cleanings \u{2022} {:.0} m² \u{2022} {:.0} h in all", t.cleanings, t.area_m2, t.hours)
+        }).into(),
+        vacuum_quiet_text: caps.vacuum.as_ref().and_then(|v| v.quiet_hours.clone()).map_or(String::new(), |q| format!("Do not disturb {q}")).into(),
+        vacuum_has_map: caps.vacuum.as_ref().is_some_and(|v| v.map),
+        has_camera: caps.camera.as_ref().is_some_and(|c| c.snapshot),
+        camera_ptz: caps.camera.as_ref().is_some_and(|c| c.ptz),
+        camera_presets: std::rc::Rc::new(slint::VecModel::from(caps.camera.as_ref().map_or(vec![], |c| {
+            c.presets.iter().map(|p| ModeItem { value: p.token.clone().into(), label: p.name.clone().into() }).collect()
+        })))
+        .into(),
+        options: std::rc::Rc::new(slint::VecModel::from(caps.options.as_ref().map_or(vec![], |o| {
+            o.options
+                .iter()
+                .map(|o| OptionItem {
+                    id: o.id.clone().into(),
+                    name: o.name.clone().into(),
+                    on: o.on,
+                    value: o.value.clone().unwrap_or_default().into(),
+                    choices: modes(&o.choices),
+                })
+                .collect()
+        })))
+        .into(),
         inputs: std::rc::Rc::new(slint::VecModel::from(
             caps.media
                 .as_ref()
@@ -1845,6 +2128,81 @@ fn device_item(device: &ws_client::Device, templates: &[ws_client::Template]) ->
         ))
         .into(),
     }
+}
+
+/// Asks backend_daemon for a camera's picture (the answer: Update::DeviceAction
+/// "snapshot"; issue #43).
+thread_local! {
+    // Shows the newest live frame; set up in main(), run on the GUI
+    // thread when ws_client says a frame came (FRAME_READY). Thread-local:
+    // it holds the UI's Rc state, which can't leave the GUI thread.
+    static SHOW_FRAME: std::cell::RefCell<Option<Box<dyn Fn()>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// How often the frame rate shown goes to the journal while Live plays
+/// (compare with backend camera.rs's "frames/s from ffmpeg": lower here =
+/// the screen can't keep up; the same = ffmpeg can't).
+const FPS_LOG: Duration = Duration::from_secs(10);
+
+/// A camera's newest live frame (ws_client::VIDEO) onto the screen, if
+/// it's still the camera watched. `shown`: frames shown since when, for
+/// the frame-rate log line.
+fn show_video_frame(
+    ui: &AppWindow,
+    watching: &std::cell::RefCell<Option<(String, std::time::Instant)>>,
+    shown: &std::cell::Cell<(u32, std::time::Instant)>,
+) {
+    let Some(frame) = ws_client::VIDEO.lock().unwrap().take() else { return };
+    let mut watched = watching.borrow_mut();
+    let Some((_, at)) = watched.as_mut().filter(|(id, _)| *id == frame.id) else { return };
+    *at = std::time::Instant::now();
+    // No copy: the picture was made on the connection thread.
+    ui.set_controls_map(slint::Image::from_rgb8(frame.pixels));
+    ui.set_controls_map_state("".into());
+    let (count, since) = shown.get();
+    if count == 0 || since.elapsed() >= 2 * FPS_LOG {
+        // Counted from the first frame shown (not from the UI's start or
+        // the last time Live played, which gave a "0.0" line).
+        shown.set((1, std::time::Instant::now()));
+    } else if since.elapsed() >= FPS_LOG {
+        println!("ui_layer: live video {:.1} frames/s shown", (count + 1) as f32 / since.elapsed().as_secs_f32());
+        shown.set((0, std::time::Instant::now()));
+    } else {
+        shown.set((count + 1, since));
+    }
+}
+
+fn request_picture(tx: &std::sync::mpsc::Sender<ws_client::Request>, id: &str, live: bool) {
+    let _ = tx.send(ws_client::Request::DeviceAction {
+        id: id.to_string(),
+        capability: "camera".into(),
+        name: "snapshot".into(),
+        args: serde_json::json!({ "live": live }),
+    });
+}
+
+/// Asks backend_daemon for a vacuum's map (the answer: Update::DeviceAction
+/// "map").
+fn request_map(tx: &std::sync::mpsc::Sender<ws_client::Request>, id: &str) {
+    let _ = tx.send(ws_client::Request::DeviceAction {
+        id: id.to_string(),
+        capability: "vacuum".into(),
+        name: "map".into(),
+        args: serde_json::json!({}),
+    });
+}
+
+/// A vacuum's choices with their labels: "max" -> "Max", "max+" -> "Max+",
+/// "off" -> "Off" (issue #74).
+fn modes(values: &[String]) -> slint::ModelRc<ModeItem> {
+    let label = |v: &str| {
+        let mut chars = v.chars();
+        chars.next().map_or(String::new(), |c| c.to_uppercase().collect::<String>() + chars.as_str())
+    };
+    std::rc::Rc::new(slint::VecModel::from(
+        values.iter().map(|v| ModeItem { value: v.as_str().into(), label: label(v).into() }).collect::<Vec<_>>(),
+    ))
+    .into()
 }
 
 /// A list of texts for Slint (a climate's modes, its fan speeds).
@@ -1871,10 +2229,14 @@ fn energy_text(energy: &ws_client::Energy) -> String {
     } else {
         format!("{:.1} W", energy.power_w)
     };
-    match energy.energy_kwh {
-        Some(kwh) => format!("{power} \u{2022} {kwh:.2} kWh"),
-        None => power,
+    let mut parts = vec![power];
+    if let Some(today) = energy.today_kwh {
+        parts.push(format!("today {today:.2} kWh"));
     }
+    if let Some(kwh) = energy.energy_kwh {
+        parts.push(format!("{kwh:.2} kWh"));
+    }
+    parts.join(" \u{2022} ")
 }
 
 /// The swatch color and its label: "#FF8800" as is; a white temperature
@@ -1969,6 +2331,30 @@ fn qr_image(text: &str, max_px: i32) -> slint::Image {
 
 /// The paired devices as list rows, with "last seen ..." worked out from
 /// the hub's clock.
+/// Settings > Accounts' rows (issue #74).
+fn account_rows(accounts: &[ws_client::Account]) -> slint::ModelRc<AccountItem> {
+    let vendor = |v: &str| match v {
+        "ezviz" => "EZVIZ".to_string(),
+        "roborock" => "Roborock".to_string(),
+        other => other.to_string(),
+    };
+    let rows: Vec<AccountItem> = accounts
+        .iter()
+        .map(|a| AccountItem {
+            id: a.id.as_str().into(),
+            vendor: vendor(&a.vendor).into(),
+            account: a.account.as_str().into(),
+            devices_text: if a.devices.is_empty() {
+                "No devices use it".to_string()
+            } else {
+                format!("Used by: {}", a.devices.join(", "))
+            }
+            .into(),
+        })
+        .collect();
+    std::rc::Rc::new(slint::VecModel::from(rows)).into()
+}
+
 fn client_rows(clients: &[ws_client::Client]) -> slint::ModelRc<ClientItem> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

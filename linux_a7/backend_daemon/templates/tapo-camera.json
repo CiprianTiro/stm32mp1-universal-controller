@@ -1,0 +1,39 @@
+{
+  "$comment": "TP-Link Tapo cameras: their settings over the camera's own HTTPS API, with the Tapo ACCOUNT password used locally (pattern P4, no cloud). Video: #43. Format: wiki Device-Templates.",
+  "format": 1,
+  "id": "tapo-camera",
+  "version": 1,
+  "name": "Tapo camera",
+  "category": "cameras",
+  "description": "TP-Link Tapo cameras (C100, C200, C210, C310, ...): pictures, privacy mode, motion detection, alarm, status light, night vision.",
+  "adapter": "tapo",
+  "capabilities": ["switch", "options"],
+  "inputs": [
+    { "id": "host", "type": "text", "label": "Camera address", "hint": "The Tapo app shows it under the camera's Device Info, e.g. 192.168.1.133", "validate": { "pattern": "host" } },
+    { "id": "stream_user", "type": "text", "label": "Camera Account user name (for video)", "hint": "Optional: set in the Tapo app, Camera Settings > Advanced Settings > Camera Account. Without it: settings only, no pictures.", "required": false, "validate": { "max_length": 64 } },
+    { "id": "stream_password", "type": "secret", "label": "Camera Account password", "hint": "Optional, with the user name above", "required": false, "validate": { "max_length": 64 } },
+    { "id": "password", "type": "secret", "label": "Tapo account password", "hint": "The password of the Tapo app account the camera belongs to (not the 'Camera Account' for video). It stays on the hub: the camera checks it on your network." }
+  ],
+  "discovery": [
+    { "method": "port_probe", "port": 8800, "manufacturers": ["TP-Link"], "fill": { "host": "{address}", "mac": "{mac}" } }
+  ],
+  "setup": [
+    {
+      "id": "guided",
+      "label": "Find the camera",
+      "steps": [ { "type": "discover" }, { "type": "form", "fields": ["password", "stream_user", "stream_password"] }, { "type": "test" } ]
+    },
+    {
+      "id": "advanced",
+      "label": "Enter the address",
+      "steps": [ { "type": "form", "fields": ["host", "password", "stream_user", "stream_password"] }, { "type": "test" } ]
+    }
+  ],
+  "errors": {
+    "refused": "{message}. Use the Tapo app account's password (not the Camera Account's). After 10 wrong tries the camera locks logins for 30 minutes.",
+    "unreachable": "The hub can't reach the camera. Is it on, and on the same network?"
+  },
+  "identity": "{mac}",
+  "tls": "tofu",
+  "defaults": { "name": "Camera" }
+}

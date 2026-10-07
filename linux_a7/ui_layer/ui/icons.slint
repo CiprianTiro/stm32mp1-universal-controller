@@ -53,6 +53,18 @@ export component Icon {
         source: @image-url("icons/blind.svg");
         colorize: root.color;
     }
+    if kind == "camera": Image {
+        width: parent.width;
+        height: parent.height;
+        source: @image-url("icons/camera.svg");
+        colorize: root.color;
+    }
+    if kind == "vacuum": Image {
+        width: parent.width;
+        height: parent.height;
+        source: @image-url("icons/vacuum.svg");
+        colorize: root.color;
+    }
     if kind == "climate": Image {
         width: parent.width;
         height: parent.height;

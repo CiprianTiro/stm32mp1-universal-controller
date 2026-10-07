@@ -11,7 +11,7 @@ license = "GPL-3.0-only"
 # Rust 1.88) could not be taken. See backend-daemon.bb.
 
 [dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time", "sync", "net", "fs", "io-util"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time", "sync", "net", "fs", "io-util", "process"] }
 libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -72,6 +72,13 @@ http-body-util = "0.1"
 bytes = "1"
 tokio-tungstenite = "0.24"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+# Issue #74: vendor protocols. Roborock's local protocol and broadcasts use
+# AES-128 (ECB) with keys derived by MD5; miIO uses AES-128-CBC. Not for
+# our own security (ring does that) -- only to speak the devices' language.
+aes = "0.8"
+md-5 = "0.10"
+# Issue #74: a Roborock map arrives gzip-compressed (pure Rust inflate).
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 
 # Issue #37: rumqttc 0.25.1 (its latest release) still depends on
 # rustls-webpki 0.102, which has known vulnerabilities. This local copy

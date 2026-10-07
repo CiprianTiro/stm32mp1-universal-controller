@@ -14,6 +14,9 @@
  *     on, with the SSDP rounds -- every device of that kind answers;
  *   - UDP multicast (issue #75): listening on a group devices announce
  *     themselves to (Yeelight), all the time;
+ *   - UDP listen (issue #74): devices announcing themselves to the whole
+ *     network in their vendor's packing (Roborock vacuums, UDP 58866,
+ *     every few seconds) -- the hub just listens and decodes;
  *   - network scan and port probe (issue #73, netscan.rs): devices that
  *     announce nothing, found by their MAC address's maker and the ports
  *     they answer on -- ONLY when someone asks (discover_now: the
@@ -78,8 +81,10 @@ const PASS: Duration = Duration::from_secs(300);
 const EXPIRE: Duration = Duration::from_secs(15 * 60);
 /* Re-finding an offline device sweeps the network at most this often
  * (issue #73): a device that is simply switched off would otherwise make
- * the hub sweep every PASS, forever. */
-const REFIND_GAP: Duration = Duration::from_secs(30 * 60);
+ * the hub sweep every PASS, forever. 5 min: a sweep is only 253 small
+ * packets, and 30 min left a camera that got a new address (DHCP)
+ * unreachable for up to half an hour (2026-10-06). */
+const REFIND_GAP: Duration = Duration::from_secs(5 * 60);
 
 /* One device found, as the inbox shows it. */
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -151,6 +156,21 @@ impl Discovery {
 
     pub fn subscribe(&self) -> watch::Receiver<u64> {
         self.changed.subscribe()
+    }
+
+    /* Issue #74: a device seen on the network with this template and
+     * identity -- added or not (the wizard: the address of a device picked
+     * from a vendor account). */
+    pub fn lookup(&self, template: &str, identity: &str) -> Option<Found> {
+        if identity.is_empty() {
+            return None;
+        }
+        self.entries
+            .lock()
+            .unwrap()
+            .values()
+            .find(|e| e.found.template == template && e.found.identity == identity)
+            .map(|e| e.found.clone())
     }
 
     /* Issue #73: who is on the network, with makers, as the kernel knows
@@ -363,6 +383,18 @@ pub async fn run(discovery: Arc<Discovery>, templates: Arc<Templates>, control: 
     for (group, port) in groups {
         spawn_multicast_listen(group, port, seen_tx.clone());
     }
+    /* Issue #74: vendor broadcasts, one listener per port. */
+    let listens: std::collections::BTreeSet<(u16, templates::UdpDecoder)> = templates
+        .all()
+        .flat_map(|t| t.discovery.iter())
+        .filter_map(|d| match d {
+            templates::Discovery::UdpListen { port, decode, .. } => Some((*port, *decode)),
+            _ => None,
+        })
+        .collect();
+    for (port, decoder) in listens {
+        spawn_udp_listen(port, decoder, seen_tx.clone());
+    }
 
     /* Issue #73: is any template looking for hosts by maker, and which
      * port probes are there? A probe's makers: all the templates' lists
@@ -459,6 +491,7 @@ pub async fn run(discovery: Arc<Discovery>, templates: Arc<Templates>, control: 
                     templates::Discovery::UdpMulticast { group, port, .. } => what == format!("mcast:{group}:{port}"),
                     templates::Discovery::DeviceAnnounce { .. } => what == "announce",
                     templates::Discovery::NetworkScan { .. } => what == "scan",
+                    templates::Discovery::UdpListen { port, .. } => what == format!("listen:{port}"),
                     templates::Discovery::PortProbe { port, get, .. } => what == probe_key(*port, get),
                     _ => false,
                 };
@@ -807,6 +840,53 @@ fn spawn_multicast_listen(group: Ipv4Addr, port: u16, seen_tx: mpsc::Sender<(Str
             }
         }
     });
+}
+
+/* Issue #74: listens for a vendor's broadcasts on `port`. Each is
+ * decoded ("roborock": {duid}, and the address it says it has) and passed
+ * on as "listen:<port>". */
+fn spawn_udp_listen(port: u16, decoder: templates::UdpDecoder, seen_tx: mpsc::Sender<(String, Vars)>) {
+    tokio::spawn(async move {
+        let socket = match UdpSocket::bind(("0.0.0.0", port)).await {
+            Ok(socket) => socket,
+            Err(e) => {
+                println!("discovery: can't listen on UDP {port}: {e}");
+                return;
+            }
+        };
+        let what = format!("listen:{port}");
+        let mut buf = vec![0u8; 2048];
+        /* A vacuum says the same every few seconds: pass each one on at
+         * most once a minute (the inbox only needs to know it's there). */
+        let mut last: BTreeMap<String, Instant> = BTreeMap::new();
+        loop {
+            let Ok((len, from)) = socket.recv_from(&mut buf).await else { continue };
+            let Some(vars) = decode_listen(decoder, &buf[..len], from.ip()) else { continue };
+            let key = vars.values().cloned().collect::<Vec<_>>().join("/");
+            if last.get(&key).is_some_and(|t| t.elapsed() < Duration::from_secs(60)) {
+                continue;
+            }
+            last.retain(|_, t| t.elapsed() < Duration::from_secs(600));
+            last.insert(key, Instant::now());
+            if seen_tx.send((what.clone(), vars)).await.is_err() {
+                return;
+            }
+        }
+    });
+}
+
+fn decode_listen(decoder: templates::UdpDecoder, packet: &[u8], from: IpAddr) -> Option<Vars> {
+    match decoder {
+        templates::UdpDecoder::Roborock => {
+            let (duid, ip) = crate::adapters::roborock_proto::decode_broadcast(packet)?;
+            /* The address it says it has must be the one it sent from: a
+             * broadcast can't point the hub at another machine. */
+            if ip.parse::<IpAddr>().ok()? != from {
+                return None;
+            }
+            Some([("address".to_string(), ip), ("duid".to_string(), duid)].into())
+        }
+    }
 }
 
 /* A UDP answer or announcement: {address} and {port} it came from, then
