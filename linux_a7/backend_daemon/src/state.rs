@@ -82,6 +82,13 @@ pub enum Msg {
         config: BTreeMap<String, String>,
         reply: oneshot::Sender<Result<Device, String>>,
     },
+    /* Issue #99: forget some of them (a plug link that's undone). Keys
+     * the device doesn't have are fine. */
+    RemoveConfig {
+        id: DeviceId,
+        keys: Vec<String>,
+        reply: oneshot::Sender<Result<Device, String>>,
+    },
     /* Change one capability. `origin` says who's asking (device.rs):
      * clients may only change virtual devices this way -- hardware state
      * only changes when the hardware confirms (Origin::Device, sent by its
@@ -166,6 +173,13 @@ pub async fn run(mut rx: mpsc::Receiver<Msg>, mut devices: HashMap<DeviceId, Dev
             }
             Msg::SetConfig { id, config, reply } => {
                 let result = set_config(&mut devices, &id, config);
+                if let Ok((device, true)) = &result {
+                    changed(&out, &devices, Event::Changed(device.clone()), true);
+                }
+                let _ = reply.send(result.map(|(device, _)| device));
+            }
+            Msg::RemoveConfig { id, keys, reply } => {
+                let result = remove_config(&mut devices, &id, &keys);
                 if let Ok((device, true)) = &result {
                     changed(&out, &devices, Event::Changed(device.clone()), true);
                 }
@@ -295,6 +309,13 @@ fn set_config(
     new.check()?;
     devices.insert(id.to_string(), new.clone());
     Ok((new, true))
+}
+
+fn remove_config(devices: &mut HashMap<DeviceId, Device>, id: &str, keys: &[String]) -> Result<(Device, bool), String> {
+    let device = devices.get_mut(id).ok_or_else(|| format!("unknown device {id:?}"))?;
+    let before = device.config.len();
+    device.config.retain(|key, _| !keys.contains(key));
+    Ok((device.clone(), device.config.len() != before))
 }
 
 fn set(

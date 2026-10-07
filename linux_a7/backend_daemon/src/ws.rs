@@ -198,6 +198,23 @@ enum ClientRequest {
         #[serde(default)]
         args: serde_json::Value,
     },
+    /* Issue #99: an IR device "powered by" a plug (power_link.rs).
+     * plug None / "" undoes the link. */
+    SetPowerLink {
+        id: DeviceId,
+        #[serde(default)]
+        plug: Option<DeviceId>,
+        #[serde(default)]
+        cut_power: bool,
+        #[serde(default)]
+        start_delay_s: Option<u64>,
+    },
+    /* Issue #99: learning what off and on draw, step "off" / "on" /
+     * "forget"; answered with an action_result ({"watts", "threshold"}). */
+    LearnPower {
+        id: DeviceId,
+        step: String,
+    },
     Subscribe,
     /* Issue #35: pairing and logging in (LAN door). */
     Pair {
@@ -723,7 +740,8 @@ fn background(
     }
     let app = app_state.clone();
     match req {
-        ClientRequest::Command { .. } | ClientRequest::DeviceAction { .. } => {
+        /* Issue #99: both may switch a plug and wait for its readings. */
+        ClientRequest::Command { .. } | ClientRequest::DeviceAction { .. } | ClientRequest::SetPowerLink { .. } | ClientRequest::LearnPower { .. } => {
             Ok(Box::pin(async move { Next::Send(handle_request(req, &app).await) }))
         }
         /* A scene may wait for slow devices (a TV waking). */
@@ -1299,6 +1317,13 @@ async fn handle_request(req: ClientRequest, app_state: &AppState) -> ServerMessa
         }
         ClientRequest::RemoveDevice { id } => ack_or_error(control.remove(&id).await),
         ClientRequest::Command { id, capability, value } => device(control.command(&id, &capability, value).await),
+        ClientRequest::SetPowerLink { id, plug, cut_power, start_delay_s } => {
+            device(crate::power_link::set_link(control, &id, plug.as_deref(), cut_power, start_delay_s).await)
+        }
+        ClientRequest::LearnPower { id, step } => match crate::power_link::learn(control, &id, &step).await {
+            Ok(result) => ServerMessage::ActionResult { result },
+            Err(message) => ServerMessage::Error { message },
+        },
         ClientRequest::DeviceAction { id, capability, name, args } => {
             match control.action(&id, &capability, &name, args).await {
                 Ok(result) => ServerMessage::ActionResult { result },

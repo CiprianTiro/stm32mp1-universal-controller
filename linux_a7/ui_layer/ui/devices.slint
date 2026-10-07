@@ -127,6 +127,11 @@ export struct DeviceItem {
     lock-state: string,
     // What a metering device draws: "40.2 W \u{2022} 1.23 kWh"; "" = none.
     energy-text: string,
+    // Issue #99: an IR device powered by a plug: "Power: confirmed by the
+    // plug" / "Power: assumed"; power-problem: the last command didn't
+    // work ("didn't switch off (the plug measures 6 W)").
+    power-text: string,
+    power-problem: bool,
     // ---- Issue #74 ----
     // A robot vacuum: its state ("docked", "cleaning", "returning",
     // "paused", "idle", "error") and its line ("Charging \u{2022} 85 %",
@@ -593,6 +598,13 @@ export component DeviceRow inherits Rectangle {
             color: Theme.text;
             font-size: Theme.font-body;
             overflow: elide;
+        }
+        // Powered by a plug (issue #99): whether its state is measured.
+        if item.power-text != "": Text {
+            text: item.power-text;
+            color: item.power-problem ? Theme.error : Theme.text-muted;
+            font-size: Theme.font-caption;
+            wrap: word-wrap;
         }
 
         // A vacuum: what it does (or what's wrong), and its buttons: Start

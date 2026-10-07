@@ -86,3 +86,8 @@ flate2 = { version = "1", default-features = false, features = ["rust_backend"] 
 # patched/rumqttc/PATCHED.md, including when to remove it.
 [patch.crates-io]
 rumqttc = { path = "patched/rumqttc" }
+
+# Tests only: tokio's paused clock (power_link.rs's tests wait for plug
+# readings in simulated time). Not in the hub's build.
+[dev-dependencies]
+tokio = { version = "1", features = ["test-util"] }

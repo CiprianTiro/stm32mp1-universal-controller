@@ -410,6 +410,11 @@ impl Registry {
         }
     }
 
+    /* Issue #99: can this device be asked to "read now"? (Nothing asked.) */
+    pub fn can_refresh(&self, id: &str) -> bool {
+        self.refreshers.lock().unwrap().contains_key(id)
+    }
+
     /* A command for a hardware device (already checked by control.rs). */
     pub async fn command(&self, id: &str, capability: &str, value: Value) -> Result<(), String> {
         let (reply, reply_rx) = oneshot::channel();
