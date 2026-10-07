@@ -50,9 +50,9 @@ use md5::{Digest, Md5};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Notify};
 
 use super::cloud::{https_json, CloudRequest};
 use super::{Adapter, BoxFuture, CloudDevice, DeviceCmd, DeviceHandle, Hub, Probe, SetupError, SetupValues};
@@ -423,8 +423,9 @@ impl Adapter for Ezviz {
             session: session.map(newest),
             hub,
         };
-        tokio::spawn(task.run(commands_rx));
-        DeviceHandle::new(commands)
+        let refresh = Arc::new(Notify::new());
+        tokio::spawn(task.run(commands_rx, refresh.clone()));
+        DeviceHandle::new(commands).with_refresh(refresh)
     }
 
     fn probe<'a>(&'a self, values: &'a SetupValues) -> BoxFuture<'a, Result<Probe, SetupError>> {
@@ -543,7 +544,7 @@ struct Task {
 }
 
 impl Task {
-    async fn run(mut self, mut commands: mpsc::Receiver<DeviceCmd>) {
+    async fn run(mut self, mut commands: mpsc::Receiver<DeviceCmd>, refresh: Arc<Notify>) {
         if self.session.is_none() || self.serial.is_empty() {
             println!("ezviz: {}: no EZVIZ session: Pair again", self.id);
             self.hub.set_online(&self.id, Health::Unauthorized).await;
@@ -577,6 +578,9 @@ impl Task {
                         wait = Duration::from_secs(2);
                     }
                 },
+                /* "Read now" (issue #99: did the device it powers really
+                 * switch?): the next poll at once. */
+                _ = refresh.notified() => wait = Duration::ZERO,
             }
         }
     }

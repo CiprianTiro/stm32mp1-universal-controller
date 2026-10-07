@@ -27,6 +27,7 @@ mod netscan;
 mod network;
 mod oui;
 mod oui_table;
+mod power_link;
 mod rpmsg;
 mod secrets;
 mod settings;
@@ -218,6 +219,8 @@ async fn main() {
         settings.clone(),
     ));
     tokio::spawn(automations::run(automations.clone(), events_tx.subscribe()));
+    /* Issue #99: devices powered by a plug follow its measurement. */
+    tokio::spawn(power_link::run(control.clone(), events_tx.subscribe()));
 
     /* Cloud sync (mqtt.rs). local_clients: how many WebSocket clients are
      * connected right now -- ws.rs counts, health.rs (inside mqtt.rs)

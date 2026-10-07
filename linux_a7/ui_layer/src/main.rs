@@ -673,6 +673,10 @@ fn main() {
         let ui = ui_weak.unwrap();
         if let Some(device) = r.borrow().devices.get(id.as_str()) {
             show_device_page(&ui, device, &w.borrow());
+            show_power_link(&ui, device, &r.borrow().devices, &r.borrow().templates);
+            ui.set_dev_power_status("".into());
+            ui.set_dev_power_busy(false);
+            ui.set_dev_editing_power(false);
             // "Name and room" offers the rooms in use.
             let mut rooms: Vec<String> = r.borrow().devices.values().map(|d| d.room.clone()).filter(|r| !r.is_empty()).collect();
             rooms.sort();
@@ -680,6 +684,31 @@ fn main() {
             ui.set_dev_rooms(std::rc::Rc::new(slint::VecModel::from(rooms.into_iter().map(Into::into).collect::<Vec<slint::SharedString>>())).into());
             ui.set_page(setup::PAGE_DEVICE);
         }
+    });
+    // Issue #99: "Powered by" saved ("" = no plug), and a learning step.
+    let tx = request_tx.clone();
+    ui.on_device_save_power(move |id, plug, cut, delay| {
+        let _ = tx.send(ws_client::Request::SetPowerLink {
+            id: id.to_string(),
+            plug: (!plug.is_empty()).then(|| plug.to_string()),
+            cut_power: cut,
+            start_delay_s: Some(delay.max(0) as u64),
+        });
+    });
+    let (tx, ui_weak) = (request_tx.clone(), ui.as_weak());
+    ui.on_device_learn_power(move |id, step| {
+        let ui = ui_weak.unwrap();
+        ui.set_dev_power_busy(true);
+        ui.set_dev_power_status(
+            match step.as_str() {
+                "forget" => "",
+                // A cloud plug (EZVIZ) shows a change only ~30 s later.
+                "off" => "Measuring\u{2026} (with a cloud plug like EZVIZ: about half a minute)",
+                _ => "Switching it on and measuring\u{2026} (with a cloud plug: about half a minute)",
+            }
+            .into(),
+        );
+        let _ = tx.send(ws_client::Request::LearnPower { id: id.to_string(), step: step.to_string() });
     });
     // "Name and room" saved: an empty name keeps the old one.
     let tx = request_tx.clone();
@@ -1046,9 +1075,24 @@ fn main() {
                     if ui.get_page() == PAGE_IR_REMOTE && ui.get_remote_id() == device.id.as_str() {
                         show_ir_remote(&ui, &device);
                     }
+                    let on_page = ui.get_page() == setup::PAGE_DEVICE && ui.get_dev_id() == device.id.as_str();
                     rows.borrow_mut().changed(device);
+                    if on_page {
+                        let rows = rows.borrow();
+                        if let Some(device) = rows.devices.get(ui.get_dev_id().as_str()) {
+                            show_power_link(&ui, device, &rows.devices, &rows.templates);
+                        }
+                    }
                 }
                 ws_client::Update::DeviceRemoved(id) => rows.borrow_mut().removed(&id),
+                // Issue #99: the plug link wasn't saved.
+                ws_client::Update::PowerLink(Err(message)) => ui.set_dev_message(message.into()),
+                ws_client::Update::PowerLink(Ok(())) => ui.set_dev_message("".into()),
+                // A learning step finished.
+                ws_client::Update::PowerLearned { step, result } => {
+                    ui.set_dev_power_busy(false);
+                    ui.set_dev_power_status(learned_text(&step, result).into());
+                }
                 ws_client::Update::CommandFailed(message) => {
                     ui.set_device_message_ok(false);
                     ui.set_device_message(message.into());
@@ -1964,6 +2008,72 @@ fn status_text(device: &ws_client::Device) -> &'static str {
 }
 
 /// Fills the device details page (issue #40).
+/// Issue #99: the device page's "Powered by" (an IR device and a plug,
+/// backend power_link.rs): the plugs it can use, the link's settings,
+/// and what was learned.
+fn show_power_link(
+    ui: &AppWindow,
+    device: &ws_client::Device,
+    devices: &std::collections::BTreeMap<String, ws_client::Device>,
+    templates: &[ws_client::Template],
+) {
+    let config = &device.config;
+    ui.set_dev_can_power_link(device.source == "ir-blaster");
+    let plug_id = config.get("powered_by").cloned().unwrap_or_default();
+    let plug = devices.get(&plug_id);
+    ui.set_dev_power_plug(plug_id.clone().into());
+    ui.set_dev_power_cut(config.get("cut_power").map(String::as_str) == Some("on"));
+    ui.set_dev_power_delay(config.get("start_delay_s").and_then(|d| d.parse().ok()).unwrap_or(2));
+    ui.set_dev_power_measures(plug.is_some_and(|p| p.capabilities.energy.is_some()));
+    let learned = match (config.get("power_off_w"), config.get("power_on_w"), config.get("power_threshold_w")) {
+        (Some(off), Some(on), Some(_)) => format!("Off {off} W \u{2022} on {on} W: its state follows the plug's measurement."),
+        _ => String::new(),
+    };
+    ui.set_dev_power_learned(learned.into());
+    ui.set_dev_power_summary(match plug {
+        None => "Not plugged into a plug the hub knows".to_string(),
+        Some(p) => format!("{} \u{2022} {}", p.name, power_text(device).trim_start_matches("Power: ")),
+    }.into());
+    // The plugs: anything switchable that isn't an IR device or itself
+    // linked; the ones that measure say so.
+    let mut plugs: Vec<&ws_client::Device> = devices
+        .values()
+        .filter(|d| d.id != device.id && d.capabilities.switch.is_some() && d.source != "ir-blaster" && !d.config.contains_key("powered_by"))
+        .filter(|d| tiles::is_plug(d, templates))
+        .collect();
+    plugs.sort_by(|a, b| a.name.cmp(&b.name));
+    let items: Vec<ModeItem> = plugs
+        .iter()
+        .map(|p| ModeItem {
+            value: p.id.clone().into(),
+            label: if p.capabilities.energy.is_some() { format!("{} \u{2022} measures power", p.name) } else { p.name.clone() }.into(),
+        })
+        .collect();
+    ui.set_dev_plugs(std::rc::Rc::new(slint::VecModel::from(items)).into());
+}
+
+/// Issue #99: the card's line for a device powered by a plug ("" = not).
+fn power_text(device: &ws_client::Device) -> String {
+    let config = &device.config;
+    if !config.contains_key("powered_by") {
+        return String::new();
+    }
+    if let Some(problem) = config.get("power_problem") {
+        return format!("Power: {problem}");
+    }
+    if config.contains_key("power_threshold_w") { "Power: confirmed by the plug" } else { "Power: assumed" }.to_string()
+}
+
+/// Issue #99: what a learning step found, in words.
+fn learned_text(step: &str, result: Result<serde_json::Value, String>) -> String {
+    match (step, result) {
+        (_, Err(why)) => format!("Not learned: {why}"),
+        ("off", Ok(r)) => format!("Off: {} W. Now step 2.", r["watts"]),
+        ("on", Ok(r)) => format!("On: {} W. Learned: from {} W it counts as on.", r["watts"], r["threshold"]),
+        _ => String::new(),
+    }
+}
+
 fn show_device_page(ui: &AppWindow, device: &ws_client::Device, wizard: &setup::Setup) {
     let template = wizard.template(&device.template);
     ui.set_dev_id(device.id.clone().into());
@@ -2079,6 +2189,8 @@ fn device_item(device: &ws_client::Device, templates: &[ws_client::Template]) ->
         has_lock: caps.lock.is_some(),
         lock_state: caps.lock.as_ref().map_or(String::new(), |l| l.state.clone()).into(),
         energy_text: caps.energy.as_ref().map_or(String::new(), energy_text).into(),
+        power_text: power_text(device).into(),
+        power_problem: device.config.contains_key("power_problem"),
         has_vacuum: caps.vacuum.is_some(),
         vacuum_state: caps.vacuum.as_ref().map_or(String::new(), |v| v.state.clone()).into(),
         vacuum_text: caps.vacuum.as_ref().map_or(String::new(), tiles::vacuum_line).into(),

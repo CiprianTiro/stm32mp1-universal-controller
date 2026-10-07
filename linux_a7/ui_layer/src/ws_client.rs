@@ -121,6 +121,12 @@ pub enum Request {
         name: String,
         args: serde_json::Value,
     },
+    /// Issue #99: an IR device "powered by" a plug (backend power_link.rs);
+    /// plug None undoes it.
+    SetPowerLink { id: String, plug: Option<String>, cut_power: bool, start_delay_s: Option<u64> },
+    /// Issue #99: learning what it draws off and on: step "off" / "on" /
+    /// "forget".
+    LearnPower { id: String, step: String },
     // Scenes (issue #47, backend_daemon's automations.rs).
     ListAutomations,
     RunScene { id: String },
@@ -682,6 +688,11 @@ pub enum Update {
     Disconnected,
     /// The camera's live video couldn't start (the reason).
     VideoFailed(String),
+    /// Issue #99: the plug link was saved (or why not).
+    PowerLink(Result<(), String>),
+    /// Issue #99: a learning step's result ({"watts", "threshold"}) or
+    /// why it failed.
+    PowerLearned { step: String, result: Result<serde_json::Value, String> },
     /// The complete device list (after connecting, or after missed events).
     Devices(Vec<Device>),
     DeviceChanged(Device),
@@ -982,6 +993,14 @@ fn to_update(request: &Request, reply: ServerMessage) -> Option<Update> {
             Some(Update::WizardError { session, field, message, detail })
         }
         (Request::WizardFinish { .. }, ServerMessage::Device { device: Some(device) }) => Some(Update::WizardDone(device)),
+        (Request::SetPowerLink { .. }, ServerMessage::Error { message }) => Some(Update::PowerLink(Err(message))),
+        (Request::SetPowerLink { .. }, ServerMessage::Device { .. }) => Some(Update::PowerLink(Ok(()))),
+        (Request::LearnPower { step, .. }, ServerMessage::ActionResult { result }) => {
+            Some(Update::PowerLearned { step: step.clone(), result: Ok(result) })
+        }
+        (Request::LearnPower { step, .. }, ServerMessage::Error { message }) => {
+            Some(Update::PowerLearned { step: step.clone(), result: Err(message) })
+        }
         (Request::DeviceAction { name, args, .. }, ServerMessage::ActionResult { result }) => {
             Some(Update::DeviceAction { name: name.clone(), args: args.clone(), result: Ok(result) })
         }

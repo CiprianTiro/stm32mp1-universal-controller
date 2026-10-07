@@ -20,6 +20,7 @@ import { ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { PageHeader, ActionButton, Choice } from "common.slint";
 import { Keyboard } from "keyboard.slint";
+import { Toggle, ModeItem } from "devices.slint";
 
 // A device type the wizard can add.
 export struct TemplateItem {
@@ -634,6 +635,26 @@ export component DevicePage inherits Rectangle {
     // What the on-screen keyboard types (bound to app.slint, whose
     // drop-last does the keyboard's backspace).
     in-out property <string> edit-text;
+    // ---- Issue #99: "Powered by" a plug (an IR device) ----
+    in property <bool> can-power-link;
+    // The plug's id ("" = none), whether switching off cuts it, how long
+    // the device needs after power-on (s); the row's line ("EZVIZ plug
+    // \u{2022} confirmed by power").
+    in property <string> power-plug;
+    in property <bool> power-cut;
+    in property <int> power-delay;
+    in property <string> power-summary;
+    // The plugs it can be linked to (value = id, label = name), and
+    // whether the linked one measures power (then it can be learned).
+    in property <[ModeItem]> plugs;
+    in property <bool> power-measures;
+    // "Off 0.4 W \u{2022} on 6 W: confirmed by power", or "" = not learned.
+    in property <string> power-learned;
+    // A learning step's result or problem; a step is running.
+    in property <string> power-status;
+    in property <bool> power-busy;
+    callback save-power(string, bool, int);
+    callback learn-power(string);
     callback back();
     callback open-remote();
     callback reauth();
@@ -653,6 +674,29 @@ export component DevicePage inherits Rectangle {
     property <string> new-room;
     // new-room was typed (not one of `rooms`): its box shows it.
     property <bool> custom-room: false;
+    // "Powered by": its editor instead of the list (in-out: main.rs
+    // closes it when a device page opens), and the values being edited.
+    in-out property <bool> editing-power: false;
+    property <string> new-plug;
+    property <bool> new-cut;
+    property <int> new-delay;
+    // Opened (by the row, or from outside -- also already open when the
+    // page is made): starts from what's saved.
+    function start-power-edit() {
+        new-plug = power-plug;
+        new-cut = power-cut;
+        new-delay = power-delay;
+    }
+    changed editing-power => {
+        if (editing-power) {
+            start-power-edit();
+        }
+    }
+    init => {
+        if (editing-power) {
+            start-power-edit();
+        }
+    }
 
     background: Theme.background;
 
@@ -785,7 +829,170 @@ export component DevicePage inherits Rectangle {
         }
     }
 
-    if !editing-info: VerticalLayout {
+    // ---- "Powered by" (issue #99) ----
+    if editing-power: VerticalLayout {
+        padding: Theme.space-l;
+        spacing: Theme.space-m;
+
+        PageHeader {
+            title: "Powered by";
+            back => {
+                editing-power = false;
+            }
+        }
+        ScrollView {
+            vertical-stretch: 1;
+            VerticalLayout {
+                spacing: Theme.space-s;
+                alignment: start;
+                Text {
+                    text: "The plug " + root.name + " is plugged into. Switching it on switches the plug on first; a plug that's off means it's off.";
+                    color: Theme.text-muted;
+                    font-size: Theme.font-body;
+                    wrap: word-wrap;
+                }
+                for p in plugs: Choice {
+                    text: p.label;
+                    selected: root.new-plug == p.value;
+                    clicked => {
+                        root.new-plug = p.value;
+                    }
+                }
+                Choice {
+                    text: "No plug";
+                    selected: root.new-plug == "";
+                    clicked => {
+                        root.new-plug = "";
+                    }
+                }
+                if root.new-plug != "": HorizontalLayout {
+                    spacing: Theme.space-m;
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        alignment: center;
+                        Text {
+                            text: "Cut the power when off";
+                            color: Theme.text;
+                            font-size: Theme.font-subtitle;
+                        }
+                        Text {
+                            text: "No standby power. Needed if it has no Off or Power button.";
+                            color: Theme.text-muted;
+                            font-size: Theme.font-caption;
+                            wrap: word-wrap;
+                        }
+                    }
+                    Toggle {
+                        y: (parent.height - self.height) / 2;
+                        on: root.new-cut;
+                        toggled(on) => {
+                            root.new-cut = on;
+                        }
+                    }
+                }
+                if root.new-plug != "": Text {
+                    text: "Time it needs after the power comes on";
+                    color: Theme.text-muted;
+                    font-size: Theme.font-caption;
+                }
+                if root.new-plug != "": HorizontalLayout {
+                    spacing: Theme.space-xs;
+                    for d in [1, 2, 5, 10, 30]: Choice {
+                        text: d + " s";
+                        selected: root.new-delay == d;
+                        clicked => {
+                            root.new-delay = d;
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: Theme.space-s;
+                    alignment: end;
+                    ActionButton {
+                        text: "Close";
+                        clicked => {
+                            editing-power = false;
+                        }
+                    }
+                    // Linked: stays open, so learning (below) can follow.
+                    ActionButton {
+                        text: "Save";
+                        primary: true;
+                        clicked => {
+                            root.save-power(root.new-plug, root.new-cut, root.new-delay);
+                            if (root.new-plug == "") {
+                                editing-power = false;
+                            }
+                        }
+                    }
+                }
+
+                // Learning (a saved link to a plug that measures): the
+                // person makes sure it's off, the hub measures; then the
+                // hub switches it on and measures.
+                if root.power-plug != "" && root.power-measures: VerticalLayout {
+                    spacing: Theme.space-s;
+                    padding-top: Theme.space-l;
+                    Text {
+                        text: "Know when it's really on";
+                        color: Theme.text;
+                        font-size: Theme.font-subtitle;
+                    }
+                    Text {
+                        text: root.power-learned != "" ? root.power-learned
+                            : "Not learned: the hub assumes what it last sent. Learn what " + root.name + " draws, and its state follows the plug's measurement -- also when someone uses its own remote.";
+                        color: root.power-learned != "" ? Theme.ok : Theme.text-muted;
+                        font-size: Theme.font-body;
+                        wrap: word-wrap;
+                    }
+                    Text {
+                        text: "1. Make sure " + root.name + " is OFF (use its remote if needed), then:";
+                        color: Theme.text;
+                        font-size: Theme.font-body;
+                        wrap: word-wrap;
+                    }
+                    ActionButton {
+                        text: "Measure off";
+                        clicked => {
+                            if (!root.power-busy) {
+                                root.learn-power("off");
+                            }
+                        }
+                    }
+                    Text {
+                        text: "2. The hub switches it on and measures:";
+                        color: Theme.text;
+                        font-size: Theme.font-body;
+                        wrap: word-wrap;
+                    }
+                    ActionButton {
+                        text: "Switch on and measure";
+                        clicked => {
+                            if (!root.power-busy) {
+                                root.learn-power("on");
+                            }
+                        }
+                    }
+                    if root.power-status != "": Text {
+                        text: root.power-status;
+                        color: Theme.text;
+                        font-size: Theme.font-body;
+                        wrap: word-wrap;
+                    }
+                    if root.power-learned != "": ActionButton {
+                        text: "Forget what was learned";
+                        clicked => {
+                            if (!root.power-busy) {
+                                root.learn-power("forget");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if !editing-info && !editing-power: VerticalLayout {
         padding: Theme.space-l;
         spacing: Theme.space-m;
         alignment: start;
@@ -823,6 +1030,14 @@ export component DevicePage inherits Rectangle {
                 root.custom-room = false;
                 typing = 0;
                 editing-info = true;
+            }
+        }
+        if can-power-link: PickRow {
+            title: "Powered by";
+            detail: root.power-summary;
+            clicked => {
+                confirm-remove = false;
+                editing-power = true;
             }
         }
         if has-remote: PickRow {

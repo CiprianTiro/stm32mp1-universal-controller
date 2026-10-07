@@ -119,7 +119,16 @@ const PAGES: [(&str, Option<i32>); 18] = [
 
 /// The wizard page (10) in each kind of step (issue #40): the step's
 /// sample data is set just before its render.
-const WIZARD_STEPS: [(&str, fn(&AppWindow)); 35] = [
+const WIZARD_STEPS: [(&str, fn(&AppWindow)); 37] = [
+    // Issue #99: an IR LED strip's details page, "Powered by" opened: a
+    // plug linked, then learned.
+    ("device-power", |ui| {
+        power_sample(ui, "");
+    }),
+    ("device-power-learned", |ui| {
+        power_sample(ui, "Off 0.4 W \u{2022} on 6 W: its state follows the plug's measurement.");
+        ui.set_dev_power_status("On: 6 W. Learned: from 3.2 W it counts as on.".into());
+    }),
     // The remote (issue #44), page 12, in its views.
     ("remote", |ui| {
         ui.set_page(12);
@@ -848,6 +857,26 @@ fn fill_sample_data(ui: &AppWindow, appearance: &theme::Appearance) {
     ui.set_dev_can_remove(true);
     ui.set_dev_has_remote(true);
     ui.set_dev_remote_learns(true);
+}
+
+/// Issue #99: the LED strip's "Powered by" editor; `learned` = what
+/// the page says was learned ("" = not yet).
+fn power_sample(ui: &AppWindow, learned: &str) {
+    ui.set_page(11);
+    ui.set_dev_name("LED strip".into());
+    ui.set_dev_type("IR blaster".into());
+    ui.set_dev_can_power_link(true);
+    ui.set_dev_power_plug("plug-1".into());
+    ui.set_dev_power_cut(true);
+    ui.set_dev_power_delay(2);
+    ui.set_dev_power_measures(true);
+    ui.set_dev_power_learned(learned.into());
+    let plugs = vec![
+        ModeItem { value: "plug-1".into(), label: "Desk plug \u{2022} measures power".into() },
+        ModeItem { value: "plug-2".into(), label: "Kitchen plug".into() },
+    ];
+    ui.set_dev_plugs(Rc::new(VecModel::from(plugs)).into());
+    ui.set_dev_editing_power(true);
 }
 
 /// A QR-code-sized checkerboard stand-in (the real code isn't the point of

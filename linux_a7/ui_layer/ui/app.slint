@@ -21,7 +21,7 @@ import "../fonts/DejaVuSans.ttf";
 // screens (issue #61).
 import { Theme, Splash, Glyphs } from "theme.slint";
 import { HeaderButton } from "common.slint";
-import { DeviceItem, MediaInputItem, ColorChip, DeviceRow } from "devices.slint";
+import { DeviceItem, MediaInputItem, ColorChip, DeviceRow, ModeItem } from "devices.slint";
 import { TileItem, TileRow, FilterChip, TileGrid, FilterBar } from "tiles.slint";
 import { Icon } from "icons.slint";
 import { IconButton, NavBar, SceneChip, BigLevel } from "home.slint";
@@ -397,6 +397,20 @@ export component AppWindow inherits Window {
     // The rooms in use (a device's "Name and room"), and what's typed there.
     in property <[string]> dev-rooms;
     in-out property <string> dev-edit-text;
+    // Issue #99: "Powered by" a plug (wizard.slint DevicePage).
+    in property <bool> dev-can-power-link;
+    in property <string> dev-power-plug;
+    in property <bool> dev-power-cut;
+    in property <int> dev-power-delay;
+    in property <string> dev-power-summary;
+    in property <[ModeItem]> dev-plugs;
+    in property <bool> dev-power-measures;
+    in property <string> dev-power-learned;
+    in property <string> dev-power-status;
+    in property <bool> dev-power-busy;
+    in-out property <bool> dev-editing-power;
+    callback device-save-power(string, string, bool, int);
+    callback device-learn-power(string, string);
     callback device-save-info(string, string, string);
     // A TV's remote (issue #44, remote.slint).
     in property <string> remote-id;
@@ -631,7 +645,7 @@ export component AppWindow inherits Window {
         // The full card below the tile: only for what the tile can't do.
         property <bool> has-card: controls-item.has-camera || controls-item.options.length > 0 || controls-item.has-color || controls-item.has-media || controls-item.has-remote
             || controls-item.has-cover || controls-item.has-vacuum || controls-item.has-climate || controls-item.has-lock
-            || controls-item.sensor-text != "" || controls-item.energy-text != "" || controls-item.can-reauth;
+            || controls-item.sensor-text != "" || controls-item.energy-text != "" || controls-item.can-reauth || controls-item.power-text != "";
         // Back, the star (Favourites), the details page.
         HorizontalLayout {
             spacing: Theme.space-s;
@@ -1075,6 +1089,23 @@ export component AppWindow inherits Window {
         remote-learns: root.dev-remote-learns;
         rooms: root.dev-rooms;
         edit-text <=> root.dev-edit-text;
+        can-power-link: root.dev-can-power-link;
+        power-plug: root.dev-power-plug;
+        power-cut: root.dev-power-cut;
+        power-delay: root.dev-power-delay;
+        power-summary: root.dev-power-summary;
+        plugs: root.dev-plugs;
+        power-measures: root.dev-power-measures;
+        power-learned: root.dev-power-learned;
+        power-status: root.dev-power-status;
+        power-busy: root.dev-power-busy;
+        editing-power <=> root.dev-editing-power;
+        save-power(plug, cut, delay) => {
+            root.device-save-power(root.dev-id, plug, cut, delay);
+        }
+        learn-power(step) => {
+            root.device-learn-power(root.dev-id, step);
+        }
         backspace => {
             root.dev-edit-text = drop-last(root.dev-edit-text);
         }

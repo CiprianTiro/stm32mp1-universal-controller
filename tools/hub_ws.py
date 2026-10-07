@@ -128,6 +128,9 @@ found=<address>, or start from a device type (and optionally its way in):
     python3 tools/hub_ws.py <board> add-device wled advanced
     python3 tools/hub_ws.py <board> add-device roborock-vacuum      (#74: Roborock account login)
     python3 tools/hub_ws.py <board> action <id> vacuum start        (also pause, stop, dock, locate)
+    python3 tools/hub_ws.py <board> power-link <id> <plug id> [cut] [delay_s]   (#99: IR device powered by a plug)
+    python3 tools/hub_ws.py <board> power-link <id> none           undo it
+    python3 tools/hub_ws.py <board> learn-power <id> off|on|forget  (#99: make sure it's OFF, "off"; then "on")
     python3 tools/hub_ws.py <board> pair-again <id>          e.g. a TV shown "unauthorized"
     python3 tools/hub_ws.py <board> reconfigure <id>         change its address/settings
 
@@ -262,6 +265,14 @@ def build_request(args):
             return {"action": "discover_now"}
         case ["hosts"]:
             return {"action": "network_hosts"}
+        case ["power-link", device_id, plug, *rest] if len(rest) <= 2:
+            # Issue #99: [cut] [delay in seconds], in either order.
+            delay = next((int(r) for r in rest if r.isdigit()), None)
+            return {"action": "set_power_link", "id": device_id,
+                    "plug": None if plug == "none" else plug,
+                    "cut_power": "cut" in rest, "start_delay_s": delay}
+        case ["learn-power", device_id, step]:
+            return {"action": "learn_power", "id": device_id, "step": step}
         case ["accounts"]:
             return {"action": "list_accounts"}
         case ["sign-out", account_id]:
