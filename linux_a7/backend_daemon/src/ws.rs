@@ -59,6 +59,11 @@
  *                                             your network" inbox, discovery.rs, #40)
  *   discover_now                           -> ack (a search round now; with #73
  *                                             also a network scan + port probes)
+ *   list_accounts                          -> accounts {accounts: [{id, vendor, account,
+ *                                             devices: [names]}]} (#74, accounts.rs;
+ *                                             never a session)
+ *   remove_account {id}                    -> accounts {...} ("Sign out": its devices
+ *                                             need "Pair again")
  *   network_hosts                          -> network_hosts {hosts: [{address, mac,
  *                                             manufacturer, interface}]} (#73: who
  *                                             is on the network, no packet sent)
@@ -225,6 +230,17 @@ enum ClientRequest {
         password: Option<String>,
     },
     WifiForget,
+    /* Live video of a camera for the hub's own screen (camera.rs):
+     * raw frames of exactly width x height, sent as binary messages (see
+     * video_message) until unwatch_camera, another watch_camera, or the
+     * connection ends. Screen only: a LAN app gets the stream's URL
+     * instead (the "stream" action) and decodes it itself. */
+    WatchCamera {
+        id: DeviceId,
+        width: u16,
+        height: u16,
+    },
+    UnwatchCamera,
     SetWifiCountry {
         country: String,
     },
@@ -235,6 +251,11 @@ enum ClientRequest {
     DiscoverNow,
     /* Issue #73: who is on the network, with makers (netscan.rs). */
     NetworkHosts,
+    /* Issue #74: the vendor accounts the hub is signed in to. */
+    ListAccounts,
+    RemoveAccount {
+        id: String,
+    },
     /* Adding a device (issue #40, wizard.rs). */
     ListTemplates,
     WizardStart {
@@ -339,6 +360,8 @@ impl ClientRequest {
                 | ClientRequest::RevokeClient { .. }
                 | ClientRequest::StartHotspot
                 | ClientRequest::StopHotspot
+                | ClientRequest::WatchCamera { .. }
+                | ClientRequest::UnwatchCamera
         )
     }
 
@@ -414,6 +437,9 @@ enum ServerMessage {
     },
     NetworkHosts {
         hosts: Vec<crate::netscan::Host>,
+    },
+    Accounts {
+        accounts: Vec<AccountInfo>,
     },
     Templates {
         templates: Vec<wizard::TemplateInfo>,
@@ -665,6 +691,8 @@ enum Next {
     /* A wizard step done in the background: its session goes back to the
      * connection, then the reply is sent. */
     Wizard(Option<wizard::Session>, ServerMessage),
+    /* A video frame for the screen (binary, video_message). */
+    Frame(Vec<u8>),
 }
 
 /* Requests whose answer can take seconds -- a device's command or action
@@ -745,6 +773,8 @@ async fn handle_socket(mut socket: WebSocket, app_state: AppState, door: Door, p
     /* Issue #47: the scenes/automations list, and what ran. */
     let mut automations_rx: Option<watch::Receiver<u64>> = None;
     let mut ran_rx: Option<broadcast::Receiver<automations::LogEntry>> = None;
+    /* A camera watched live (watch_camera). */
+    let mut video_rx: Option<(DeviceId, crate::adapters::camera::FrameRx)> = None;
     /* The device this client is adding, if any (wizard.rs). While one of
      * its steps runs in the background, the session is with that work. */
     let mut wizard: Option<wizard::Session> = None;
@@ -783,6 +813,7 @@ async fn handle_socket(mut socket: WebSocket, app_state: AppState, door: Door, p
                                 found: &mut found_rx,
                                 automations: &mut automations_rx,
                                 ran: &mut ran_rx,
+                                video: &mut video_rx,
                             };
                             handle_message(req, &mut session, subscriptions, &mut wizard, &app_state).await
                         }
@@ -812,6 +843,9 @@ async fn handle_socket(mut socket: WebSocket, app_state: AppState, door: Door, p
             /* Scenes / automations changed, or one ran (issue #47). */
             Some(()) = next_found(&mut automations_rx), if automations_rx.is_some() => Next::Send(ServerMessage::AutomationsChanged),
             Some(entry) = next_ran(&mut ran_rx), if ran_rx.is_some() => Next::Send(ServerMessage::AutomationRan { entry }),
+            /* A camera's newest frame, while watched (only the newest:
+             * one that came while the last was being sent is skipped). */
+            Some(frame) = next_frame(&mut video_rx), if video_rx.is_some() => Next::Frame(frame),
             Ok(id) = revocations.recv() => {
                 if session.client.as_ref().is_some_and(|c| c.id == id) {
                     println!("ws.rs: {id} was removed on the hub, closing its connection");
@@ -829,6 +863,12 @@ async fn handle_socket(mut socket: WebSocket, app_state: AppState, door: Door, p
             Next::Send(m) => (m, false),
             Next::SendAndClose(m) => (m, true),
             Next::Queued => continue,
+            Next::Frame(bytes) => {
+                if socket.send(Message::Binary(bytes)).await.is_err() {
+                    break;
+                }
+                continue;
+            }
             Next::Wizard(session, m) => {
                 let dropped = match (&session, &cancelled) {
                     (Some(s), Some(id)) => s.id() == id,
@@ -864,6 +904,8 @@ struct Subscriptions<'a> {
     found: &'a mut Option<watch::Receiver<u64>>,
     automations: &'a mut Option<watch::Receiver<u64>>,
     ran: &'a mut Option<broadcast::Receiver<automations::LogEntry>>,
+    /* The camera this screen watches live: its id and newest frame. */
+    video: &'a mut Option<(DeviceId, crate::adapters::camera::FrameRx)>,
 }
 
 /* Checks what this session may do, then carries the request out. */
@@ -909,6 +951,22 @@ async fn handle_message(
             rx.mark_unchanged();
             *subscriptions.automations = Some(rx);
             *subscriptions.ran = Some(app_state.automations.subscribe_log());
+            Next::Send(ServerMessage::Ack)
+        }
+        ClientRequest::WatchCamera { id, width, height } => {
+            let Some(camera) = crate::adapters::camera::find(&id) else {
+                return Next::Send(ServerMessage::Error { message: format!("{id} has no video") });
+            };
+            match camera.watch_video(width, height).await {
+                Ok(frames) => {
+                    *subscriptions.video = Some((id, frames));
+                    Next::Send(ServerMessage::Ack)
+                }
+                Err(message) => Next::Send(ServerMessage::Error { message }),
+            }
+        }
+        ClientRequest::UnwatchCamera => {
+            *subscriptions.video = None;
             Next::Send(ServerMessage::Ack)
         }
         ClientRequest::Pair { code, client_name } => match auth.pair(&code, &client_name) {
@@ -1139,6 +1197,38 @@ async fn next_event(events: &mut Option<broadcast::Receiver<Event>>) -> ServerMe
     }
 }
 
+/* The next video frame of the watched camera, as its binary message. A
+ * stream that ended (the camera's task restarted) stops the watching;
+ * the screen asks again. */
+async fn next_frame(rx: &mut Option<(DeviceId, crate::adapters::camera::FrameRx)>) -> Option<Vec<u8>> {
+    let (id, receiver) = rx.as_mut()?;
+    loop {
+        if receiver.changed().await.is_err() {
+            *rx = None;
+            return None;
+        }
+        let frame = receiver.borrow_and_update().clone();
+        if let Some(frame) = frame {
+            return Some(video_message(id, &frame));
+        }
+    }
+}
+
+/* A video frame on the wire: "VF1" and a zero byte, width and height
+ * (u16, little-endian), the device id's length (u8) and the id, then the
+ * pixels (RGB, width x height x 3 bytes). */
+pub fn video_message(id: &str, frame: &crate::adapters::camera::Frame) -> Vec<u8> {
+    let id = &id.as_bytes()[..id.len().min(255)];
+    let mut out = Vec::with_capacity(9 + id.len() + frame.pixels.len());
+    out.extend_from_slice(b"VF1\0");
+    out.extend_from_slice(&frame.width.to_le_bytes());
+    out.extend_from_slice(&frame.height.to_le_bytes());
+    out.push(id.len() as u8);
+    out.extend_from_slice(id);
+    out.extend_from_slice(&frame.pixels);
+    out
+}
+
 /* The next inbox change for a subscribed client (issue #40). */
 async fn next_found(rx: &mut Option<watch::Receiver<u64>>) -> Option<()> {
     let receiver = rx.as_mut()?;
@@ -1225,6 +1315,28 @@ async fn handle_request(req: ClientRequest, app_state: &AppState) -> ServerMessa
         ClientRequest::NetworkHosts => ServerMessage::NetworkHosts {
             hosts: app_state.discovery.hosts(),
         },
+        ClientRequest::ListAccounts => ServerMessage::Accounts {
+            accounts: account_infos(control).await,
+        },
+        ClientRequest::RemoveAccount { id } => {
+            if !crate::accounts::remove(control.secrets(), &id) {
+                return ServerMessage::Error {
+                    message: format!("no saved account {id:?}"),
+                };
+            }
+            /* Its devices restart without it: they show "unauthorized"
+             * (a cloud plug) or lose the map (a vacuum), and delete any
+             * old session copy of their own (Hub::cloud_session). */
+            for device in control.list().await.unwrap_or_default() {
+                if device.config.get("account") == Some(&id) {
+                    control.adapters().start(&device, control);
+                }
+            }
+            println!("ws.rs: account {id} signed out");
+            ServerMessage::Accounts {
+                accounts: account_infos(control).await,
+            }
+        }
         ClientRequest::GetSettings => ServerMessage::Settings {
             settings: app_state.settings.get(),
         },
@@ -1276,6 +1388,8 @@ async fn handle_request(req: ClientRequest, app_state: &AppState) -> ServerMessa
         /* Handled in handle_message (they concern the session or auth.rs). */
         ClientRequest::Hello
         | ClientRequest::Subscribe
+        | ClientRequest::WatchCamera { .. }
+        | ClientRequest::UnwatchCamera
         | ClientRequest::Pair { .. }
         | ClientRequest::Auth { .. }
         | ClientRequest::StartPairing
@@ -1345,6 +1459,33 @@ fn ack_or_error(answer: Result<(), String>) -> ServerMessage {
     }
 }
 
+/* Issue #74: a saved account as Settings > Accounts shows it: never its
+ * session. */
+#[derive(Serialize, Debug)]
+pub struct AccountInfo {
+    id: String,
+    vendor: String,
+    account: String,
+    /* The names of the devices that use it. */
+    devices: Vec<String>,
+}
+
+async fn account_infos(control: &Control) -> Vec<AccountInfo> {
+    let devices = control.list().await.unwrap_or_default();
+    crate::accounts::list(control.secrets(), None)
+        .into_iter()
+        .map(|a| {
+            let id = a.id();
+            AccountInfo {
+                devices: devices.iter().filter(|d| d.config.get("account") == Some(&id)).map(|d| d.name.clone()).collect(),
+                id,
+                vendor: a.vendor,
+                account: a.account,
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1355,6 +1496,19 @@ mod tests {
     use futures_util::SinkExt;
     use serde_json::{json, Value};
     use tokio_tungstenite::tungstenite::Message as WsMessage;
+
+    /* The screen's video frames: header, id, then exactly the pixels. */
+    #[test]
+    fn video_frames_on_the_wire() {
+        let frame = crate::adapters::camera::Frame { width: 2, height: 1, pixels: vec![1, 2, 3, 4, 5, 6] };
+        let bytes = video_message("cam", &frame);
+        assert_eq!(&bytes[..4], b"VF1\0");
+        assert_eq!(u16::from_le_bytes([bytes[4], bytes[5]]), 2);
+        assert_eq!(u16::from_le_bytes([bytes[6], bytes[7]]), 1);
+        assert_eq!(bytes[8], 3);
+        assert_eq!(&bytes[9..12], b"cam");
+        assert_eq!(&bytes[12..], &[1, 2, 3, 4, 5, 6]);
+    }
 
     /* An adapter whose device takes 2 s to answer anything: an unplugged
      * WLED waiting for its timeout. */

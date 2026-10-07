@@ -121,9 +121,13 @@ found=<address>, or start from a device type (and optionally its way in):
     python3 tools/hub_ws.py <board> found                    "Found on your network"
     python3 tools/hub_ws.py <board> discover                 search the network now
     python3 tools/hub_ws.py <board> hosts                    who is on the network, with makers (#73)
+    python3 tools/hub_ws.py <board> accounts                 vendor accounts the hub is signed in to (#74)
+    python3 tools/hub_ws.py <board> sign-out <account id>    e.g. ezviz:me@example.com
     python3 tools/hub_ws.py <board> templates                device types that can be added
     python3 tools/hub_ws.py <board> add-device wled found=192.168.1.139
     python3 tools/hub_ws.py <board> add-device wled advanced
+    python3 tools/hub_ws.py <board> add-device roborock-vacuum      (#74: Roborock account login)
+    python3 tools/hub_ws.py <board> action <id> vacuum start        (also pause, stop, dock, locate)
     python3 tools/hub_ws.py <board> pair-again <id>          e.g. a TV shown "unauthorized"
     python3 tools/hub_ws.py <board> reconfigure <id>         change its address/settings
 
@@ -258,6 +262,10 @@ def build_request(args):
             return {"action": "discover_now"}
         case ["hosts"]:
             return {"action": "network_hosts"}
+        case ["accounts"]:
+            return {"action": "list_accounts"}
+        case ["sign-out", account_id]:
+            return {"action": "remove_account", "id": account_id}
         case ["templates"]:
             return {"action": "list_templates"}
         case ["pair-again", device_id]:
@@ -391,6 +399,43 @@ def answer_step(view):
                 typed = getpass.getpass(prompt)
             else:
                 typed = input(prompt).strip() or current
+            values[field["id"]] = typed
+        return ("answer", values)
+    if step == "vendor_login":
+        # Issue #74: account, code and pick screens of one step.
+        print(f"{view['vendor']} account ({view['phase']})")
+        if view.get("hint"):
+            print(f"  {view['hint']}")
+        if view["phase"] == "pick":
+            devices = view["devices"]
+            for i, device in enumerate(devices, 1):
+                mark = "" if device["available"] else "  [can't be added]"
+                print(f"  {i}. {device['name']}  ({device['detail']}){mark}")
+            pick = input("Number to pick, r = start over: ").strip().lower()
+            if pick == "r":
+                return ("answer", {"restart": True})
+            if pick.isdigit() and 1 <= int(pick) <= len(devices):
+                return ("answer", {"device": devices[int(pick) - 1]["id"]})
+            return ("answer", {})
+        accounts = view.get("accounts", [])
+        if view["phase"] == "account" and accounts:
+            for i, account in enumerate(accounts, 1):
+                print(f"  {i}. use {account['label']} (signed in)")
+            pick = input("Number to use a saved account, Enter to sign in: ").strip()
+            if pick.isdigit() and 1 <= int(pick) <= len(accounts):
+                values = {"account": accounts[int(pick) - 1]["id"]}
+                for field in view["fields"]:
+                    if field["type"] == "toggle":
+                        values[field["id"]] = input(f"{field['label']} (true/false) [false]: ").strip() or "false"
+                return ("answer", values)
+        values = {}
+        for field in view["fields"]:
+            if field.get("hint"):
+                print(f"  ({field['hint']})")
+            prompt = f"{field['label']}: "
+            typed = getpass.getpass(prompt) if field["type"] == "secret" else input(prompt).strip()
+            if view["phase"] == "code" and typed.lower() == "r":
+                return ("answer", {"restart": True})
             values[field["id"]] = typed
         return ("answer", values)
     if step == "confirm_on_device":

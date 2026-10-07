@@ -25,6 +25,12 @@ pub struct TestHub {
 impl TestHub {
     /* The hub with `device` in its registry, its task started. */
     pub async fn start(device: Device, adapter: Box<dyn Adapter>) -> TestHub {
+        Self::start_with_secrets(device, adapter, Default::default()).await
+    }
+
+    /* The same, the device having these secrets (a Roborock's local key,
+     * issue #74). */
+    pub async fn start_with_secrets(device: Device, adapter: Box<dyn Adapter>, secrets: crate::secrets::DeviceSecrets) -> TestHub {
         let id = device.id.clone();
         let (state_tx, state_rx) = mpsc::channel(8);
         let (events_tx, events) = broadcast::channel(64);
@@ -35,7 +41,7 @@ impl TestHub {
         };
         tokio::spawn(state::run(state_rx, [(id.clone(), device)].into(), outputs));
         let registry = Arc::new(Registry::new(vec![adapter]));
-        let secrets = Arc::new(Secrets::new(Default::default(), watch::channel(Vec::new()).0));
+        let secrets = Arc::new(Secrets::new([(id.clone(), secrets)].into(), watch::channel(Vec::new()).0));
         let control = Control::new(state_tx, registry.clone(), secrets);
         registry.start_all(&control).await;
         TestHub {

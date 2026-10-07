@@ -45,6 +45,9 @@ mod automation_text;
 #[path = "../../../linux_a7/ui_layer/src/ws_client.rs"]
 #[allow(dead_code)]
 mod ws_client;
+// Issue #74: the vacuum map renderer.
+#[path = "../../../linux_a7/ui_layer/src/vacuum_map.rs"]
+mod vacuum_map;
 #[path = "../../../linux_a7/ui_layer/src/tiles.rs"]
 mod tiles;
 
@@ -116,7 +119,7 @@ const PAGES: [(&str, Option<i32>); 18] = [
 
 /// The wizard page (10) in each kind of step (issue #40): the step's
 /// sample data is set just before its render.
-const WIZARD_STEPS: [(&str, fn(&AppWindow)); 26] = [
+const WIZARD_STEPS: [(&str, fn(&AppWindow)); 35] = [
     // The remote (issue #44), page 12, in its views.
     ("remote", |ui| {
         ui.set_page(12);
@@ -263,6 +266,18 @@ const WIZARD_STEPS: [(&str, fn(&AppWindow)); 26] = [
         ui.set_wizard_edit_text("192.168.1.13".into());
         ui.set_wizard_error("Address: an IP address like 192.168.1.50, or a name like wled.local.".into());
     }),
+    // Issue #74: four fields and the keyboard: only the one typed into.
+    ("wizard-typing-many", |ui| {
+        wizard(ui, "Settings: Tapo camera", "form", 1, "", false);
+        ui.set_wizard_fields(fields(&[
+            ("host", "Camera address", "The Tapo app shows it under the camera's Device Info", "192.168.1.133", true),
+            ("password", "Tapo account password", "The password of the Tapo app account", "", true),
+            ("stream_user", "Camera Account user name (for video)", "Optional: set in the Tapo app", "", false),
+            ("stream_password", "Camera Account password", "Optional, with the user name above", "", false),
+        ]));
+        ui.set_wizard_editing(2);
+        ui.set_wizard_edit_text("hubcam".into());
+    }),
     ("wizard-confirm", |ui| {
         wizard(ui, "Add: LG TV (webOS)", "confirm_on_device", 2, "A prompt appears on the TV: accept it with the remote.", true);
         ui.set_wizard_hints(Rc::new(VecModel::from(vec![slint::SharedString::from(
@@ -274,6 +289,145 @@ const WIZARD_STEPS: [(&str, fn(&AppWindow)); 26] = [
         wizard(ui, "Add: WLED light", "test", 2, "", false);
         ui.set_wizard_error("The hub can't reach the device. Is it on and on the same network?".into());
         ui.set_wizard_detail("can't reach 192.168.1.250: No route to host (os error 113)".into());
+    }),
+    // Issue #74: a vendor account login, its three screens.
+    ("wizard-login", |ui| {
+        wizard(ui, "Add: Roborock vacuum", "login", 1,
+               "Roborock emails you a code. The hub uses the account once, to fetch the vacuum's key; after that it controls the vacuum on your network only, also without internet. Your password is never asked.", false);
+        ui.set_wizard_fields(fields(&[("email", "Roborock account email", "The email you log in to the Roborock app with", "ciprian@example.com", true)]));
+    }),
+    ("wizard-login-saved", |ui| {
+        wizard(ui, "Add: EZVIZ smart plug", "login", 1,
+               "EZVIZ plugs only work through EZVIZ's cloud: this plug will need internet. The hub keeps a login session, never your password.", false);
+        ui.set_wizard_found(Rc::new(VecModel::from(vec![
+            FoundItem { name: "ciprian@example.com".into(), address: "ezviz:ciprian@example.com".into(), type_name: "Signed in: use it".into(), ..Default::default() },
+        ])).into());
+        ui.set_wizard_fields(fields(&[
+            ("email", "EZVIZ account email (or phone)", "What you log in to the EZVIZ app with", "", true),
+            ("password", "EZVIZ password", "Used once to log in; the hub doesn't keep it", "", true),
+        ]));
+    }),
+    ("accounts", |ui| {
+        ui.set_page(21);
+        ui.set_accounts(Rc::new(VecModel::from(vec![
+            AccountItem { id: "roborock:c".into(), vendor: "Roborock".into(), account: "ciprian@example.com".into(), devices_text: "Used by: S7".into() },
+            AccountItem { id: "ezviz:c".into(), vendor: "EZVIZ".into(), account: "ciprian@example.com".into(), devices_text: "No devices use it".into() },
+        ])).into());
+    }),
+    ("wizard-login-code", |ui| {
+        wizard(ui, "Add: Roborock vacuum", "login_code", 1, "Roborock sent you a code. Type it here.", false);
+        ui.set_wizard_fields(fields(&[("code", "Code from the email", "6 digits, from Roborock's email", "", true)]));
+        ui.set_wizard_error("That code isn't right (or it expired). Check the email, or ask for a new code.".into());
+    }),
+    ("wizard-login-pick", |ui| {
+        wizard(ui, "Add: Roborock vacuum", "login_pick", 1, "Which device of your Roborock account is it?", false);
+        ui.set_wizard_found(Rc::new(VecModel::from(vec![
+            FoundItem { name: "S7".into(), address: "1tV5069KevcrlKa4Snsyyq".into(), type_name: "Roborock S7 - online".into(), ..Default::default() },
+            FoundItem { name: "Q7 Max".into(), address: "x".into(), type_name: "Roborock Q7 Max: its protocol (B01) isn't supported yet".into(), ..Default::default() },
+        ])).into());
+    }),
+    // Issue #74: a vacuum's controls page.
+    ("controls-ezviz", |ui| {
+        ui.set_page(20);
+        let plug: ws_client::Device = serde_json::from_value(serde_json::json!(
+            {"id": "priza", "name": "Priza EzViz", "room": "Office", "template": "ezviz-plug", "online": "online",
+             "capabilities": {"switch": {"on": true}, "energy": {"power_w": 8.4, "today_kwh": 0.12, "energy_kwh": 12.3}}})).unwrap();
+        ui.set_controls_tile(tiles::tile(&plug, &[], ui.global::<Theme>().get_accent(), 1_790_000_000));
+        ui.set_controls_item(DeviceItem {
+            id: "priza".into(), name: "Priza EzViz".into(), room: "Office".into(), has_switch: true, on: true,
+            energy_text: "8.4 W \u{2022} today 0.12 kWh \u{2022} 12.30 kWh".into(),
+            options: Rc::new(VecModel::from(vec![
+                OptionItem { id: "status_light".into(), name: "Status light".into(), on: true, ..Default::default() },
+                OptionItem { id: "power_recovery".into(), name: "Restore after a power cut".into(), on: false, ..Default::default() },
+            ])).into(),
+            ..Default::default()
+        });
+    }),
+    ("controls-camera", |ui| {
+        ui.set_page(20);
+        let camera: ws_client::Device = serde_json::from_value(serde_json::json!(
+            {"id": "cam", "name": "Living room camera", "room": "Living room", "template": "tapo-camera", "online": "online",
+             "capabilities": {"switch": {"on": true}}})).unwrap();
+        let templates: Vec<ws_client::Template> = vec![serde_json::from_value(serde_json::json!(
+            {"id": "tapo-camera", "name": "Tapo camera", "category": "cameras", "variants": []})).unwrap()];
+        ui.set_controls_tile(tiles::tile(&camera, &templates, ui.global::<Theme>().get_accent(), 1_790_000_000));
+        let modes = |values: &[&str]| -> slint::ModelRc<ModeItem> {
+            Rc::new(VecModel::from(values.iter().map(|v| ModeItem { value: (*v).into(), label: (v[..1].to_uppercase() + &v[1..]).into() }).collect::<Vec<_>>())).into()
+        };
+        let toggle = |id: &str, name: &str, on: bool| OptionItem { id: id.into(), name: name.into(), on, ..Default::default() };
+        // A picture, if one is given (CAMERA_JPEG: a JPEG file).
+        match std::env::var("CAMERA_JPEG").ok().and_then(|f| std::fs::read(f).ok()) {
+            Some(jpeg) => {
+                use base64::Engine;
+                ui.set_controls_map(vacuum_map::picture(&base64::engine::general_purpose::STANDARD.encode(jpeg)).expect("a JPEG"));
+                ui.set_controls_map_state("".into());
+                ui.set_controls_live(true);
+            }
+            None => ui.set_controls_map_state("Loading the picture\u{2026}".into()),
+        }
+        ui.set_controls_item(DeviceItem {
+            id: "cam".into(), name: "Living room camera".into(), room: "Living room".into(), has_switch: true, on: true, has_camera: true,
+            camera_ptz: true,
+            camera_presets: Rc::new(VecModel::from(vec![ModeItem { value: "1".into(), label: "Door".into() }, ModeItem { value: "2".into(), label: "Window".into() }])).into(),
+            options: Rc::new(VecModel::from(vec![
+                toggle("motion_detection", "Motion detection", true),
+                toggle("alarm", "Alarm on motion (siren and light)", false),
+                toggle("status_led", "Status light", true),
+                OptionItem { id: "night_vision".into(), name: "Night vision".into(), value: "auto".into(), choices: modes(&["auto", "on", "off"]), ..Default::default() },
+            ])).into(),
+            ..Default::default()
+        });
+    }),
+    ("controls-vacuum", |ui| {
+        ui.set_page(20);
+        let vacuum: ws_client::Device = serde_json::from_value(serde_json::json!(
+            {"id": "s7", "name": "S7", "room": "Living room", "template": "roborock-vacuum", "online": "online",
+             "capabilities": {"vacuum": {"state": "cleaning", "battery": 84, "detail": "room cleaning",
+                "fan": "balanced", "fans": ["off", "quiet", "balanced", "turbo", "max"],
+                "water": "medium", "waters": ["off", "low", "medium", "high"], "mop": "standard", "mops": ["standard", "deep"],
+                "area_m2": 14.5, "minutes": 21,
+                "rooms": [{"id": 16, "name": "Cameră de zi"}, {"id": 17, "name": "Kitchen"}],
+                "parts": [{"id": "main_brush", "name": "Main brush", "left": 60}, {"id": "side_brush", "name": "Side brush", "left": 41},
+                          {"id": "filter", "name": "Filter", "left": 21}, {"id": "sensors", "name": "Sensors (clean them)", "left": 0}],
+                "totals": {"cleanings": 272, "area_m2": 6977.2, "hours": 117.7}, "quiet_hours": "22:00-08:00"}}})).unwrap();
+        ui.set_controls_tile(tiles::tile(&vacuum, &[], ui.global::<Theme>().get_accent(), 1_790_000_000));
+        let v = vacuum.capabilities.vacuum.as_ref().unwrap();
+        let modes = |values: &[&str], labels: &[&str]| -> slint::ModelRc<ModeItem> {
+            Rc::new(VecModel::from(values.iter().zip(labels).map(|(v, l)| ModeItem { value: (*v).into(), label: (*l).into() }).collect::<Vec<_>>())).into()
+        };
+        ui.set_controls_item(DeviceItem {
+            id: "s7".into(), name: "S7".into(), room: "Living room".into(),
+            has_vacuum: true, vacuum_state: "cleaning".into(), vacuum_text: tiles::vacuum_line(v).into(),
+            vacuum_fan: "balanced".into(), vacuum_fans: modes(&["off", "quiet", "balanced", "turbo", "max"], &["Off", "Quiet", "Balanced", "Turbo", "Max"]),
+            vacuum_water: "medium".into(), vacuum_waters: modes(&["off", "low", "medium", "high"], &["Off", "Low", "Medium", "High"]),
+            vacuum_mop: "standard".into(), vacuum_mops: modes(&["standard", "deep"], &["Standard", "Deep"]),
+            vacuum_run_text: tiles::vacuum_run(v).into(),
+            vacuum_rooms: Rc::new(VecModel::from(vec![VacuumRoomItem { id: 16, name: "Cameră de zi".into() }, VacuumRoomItem { id: 17, name: "Kitchen".into() }])).into(),
+            vacuum_parts: Rc::new(VecModel::from(v.parts.iter().map(|p| VacuumPartItem { id: p.id.clone().into(), name: p.name.clone().into(), left: p.left as i32 }).collect::<Vec<_>>())).into(),
+            vacuum_totals_text: "272 cleanings \u{2022} 6977 m² \u{2022} 118 h in all".into(),
+            vacuum_quiet_text: "Do not disturb 22:00-08:00".into(),
+            vacuum_has_map: true,
+            ..Default::default()
+        });
+        // A real map, if one is given (VACUUM_MAP_JSON: a "map" action's
+        // answer saved to a file -- never committed, it's someone's home).
+        match std::env::var("VACUUM_MAP_JSON").ok().and_then(|f| std::fs::read_to_string(f).ok()) {
+            Some(text) => {
+                let map: serde_json::Value = serde_json::from_str(&text).unwrap();
+                let theme = ui.global::<Theme>();
+                let colors = vacuum_map::Colors {
+                    floor: theme.get_surface_pressed(),
+                    wall: theme.get_text_muted(),
+                    path: theme.get_text(),
+                    robot: theme.get_accent(),
+                    dock: theme.get_ok(),
+                    no_go: theme.get_error(),
+                };
+                ui.set_controls_map(vacuum_map::render(&map, &colors).expect("a map"));
+                ui.set_controls_map_state("".into());
+            }
+            None => ui.set_controls_map_state("Loading the map\u{2026}".into()),
+        }
     }),
     ("wizard-name", |ui| {
         wizard(ui, "Add: WLED light", "name", 3, "WLED 16.0.1", false);
@@ -508,6 +662,13 @@ fn fill_sample_data(ui: &AppWindow, appearance: &theme::Appearance) {
         DeviceItem { sensor_text: "temperature 21.5 °C   humidity 48 %".into(), ..device("climate", "Climate sensor", "Bedroom") },
         DeviceItem { has_switch: true, on: true, energy_text: "1.86 kW \u{2022} 12.40 kWh".into(),
                      ..device("kettle", "Kettle", "Kitchen") },
+        // Issue #74: an EZVIZ plug: consumption and its own settings.
+        DeviceItem { has_switch: true, on: true, energy_text: "8.4 W \u{2022} today 0.12 kWh \u{2022} 12.30 kWh".into(),
+                     options: Rc::new(VecModel::from(vec![
+                         OptionItem { id: "status_light".into(), name: "Status light".into(), on: true, ..Default::default() },
+                         OptionItem { id: "power_recovery".into(), name: "Restore after a power cut".into(), on: false, ..Default::default() },
+                     ])).into(),
+                     ..device("priza", "Priza EzViz", "Office") },
         // Issue #77: a blind, a garage door, an air conditioner, a lock.
         DeviceItem { has_cover: true, cover_position: 40, cover_can_position: true,
                      ..device("blind", "Living room blind", "Living room") },
@@ -587,6 +748,8 @@ fn fill_sample_data(ui: &AppWindow, appearance: &theme::Appearance) {
          "capabilities": {"climate": {"mode": "cool", "target": 22.5, "current": 26.1, "modes": ["off", "cool"], "fans": [], "min": 16.0, "max": 30.0, "step": 0.5}}},
         {"id": "door", "name": "Front door", "room": "Hall", "template": "virtual",
          "capabilities": {"lock": {"state": "locked", "confirmed": false}}},
+        {"id": "s7", "name": "S7", "room": "Living room", "template": "roborock-vacuum", "online": "online", "favourite": true,
+         "capabilities": {"vacuum": {"state": "docked", "battery": 85, "detail": "charging"}}},
         {"id": "projector", "name": "Projector", "room": "Office", "template": "ir-blaster", "online": "unauthorized",
          "capabilities": {"remote": {"buttons": ["Power", "Menu"], "learn": true}}}
     ]);
@@ -676,6 +839,7 @@ fn fill_sample_data(ui: &AppWindow, appearance: &theme::Appearance) {
     ui.set_remote_keyboard(true);
     ui.set_dev_id("tv".into());
     ui.set_dev_name("Living room TV".into());
+    ui.set_dev_rooms(strings(&["Bedroom", "Hall", "Kitchen", "Living room", "Office"]));
     ui.set_dev_room("Living room".into());
     ui.set_dev_type("LG TV (webOS)".into());
     ui.set_dev_status("Online".into());

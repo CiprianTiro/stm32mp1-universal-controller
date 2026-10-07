@@ -23,6 +23,11 @@ png = "0.17"
 # Reads ui/tokens.json in the shared theme.rs (see src/main.rs).
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Issue #74: a vacuum's map arrives base64-packed (src/vacuum_map.rs).
+base64 = "0.23"
+# Issue #43/#74: camera pictures arrive as JPEG (pure Rust decoder; already
+# in the build through Slint's image support).
+zune-jpeg = "0.5"
 # The UI's ws_client.rs (issue #95: tiles.rs works on its device types).
 tungstenite = "0.24"
 # The UI's zones.rs (time zone lists), as in ui_layer's Cargo.toml.

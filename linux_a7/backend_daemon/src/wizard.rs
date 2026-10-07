@@ -60,9 +60,28 @@
  *                     name and password it sends) are forgotten right after
  *                     it: the device keeps them, the hub has no use for them.
  *
- * Not yet supported: vendor_login (#74) and the other WiFi onboarding
- * steps provision_softap / smartconfig (#71). Templates using them aren't
- * offered (list) and can't be started.
+ *   vendor_login      (#74) a vendor account, in up to three screens of
+ *                     the same step ("phase"):
+ *                       account  the step's fields (email, password);
+ *                       code     the one-time code the vendor sent
+ *                                (skipped when the action answers
+ *                                login_needs_code = "no");
+ *                       pick     the account's devices: answer
+ *                                {"device": "<id>"}
+ *                     {"restart": true} goes back to "account" (another
+ *                     email, a new code). A successful login SAVES the
+ *                     account (accounts.rs: its session, never the
+ *                     password); the account screen then also offers it --
+ *                     {"account": "<id>"} -- straight to its devices.
+ *                     A device already chosen on the network (same
+ *                     identity), or the device being paired again, is
+ *                     picked by itself. Then the password, the code and
+ *                     every "login_*" value (the vendor session) are
+ *                     forgotten: the hub keeps no account password.
+ *
+ * Not yet supported: the WiFi onboarding steps provision_softap /
+ * smartconfig (#71). Templates using them aren't offered (list) and can't
+ * be started.
  */
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -117,6 +136,8 @@ pub struct TemplateInfo {
      * what works. */
     pub can_reauth: bool,
     pub can_reconfigure: bool,
+    /* Issue #74: works only through the vendor's cloud (needs internet). */
+    pub cloud: bool,
 }
 
 #[derive(Serialize, Debug, Clone, PartialEq)]
@@ -169,6 +190,19 @@ pub enum StepKind {
     CodeFromDevice {
         field: Field,
     },
+    /* Issue #74 (see the header). `devices` only in phase "pick";
+     * `accounts`: the saved accounts of this vendor, phase "account"
+     * (answer {"account": "<id>"} to use one). */
+    VendorLogin {
+        vendor: String,
+        phase: LoginPhase,
+        hint: String,
+        fields: Vec<Field>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        accounts: Vec<AccountView>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        devices: Vec<CloudDeviceView>,
+    },
     Test,
     /* After the last step: name and room, pre-filled. `summary`: what the
      * test step found ("WLED 16.0.1"), empty without one. */
@@ -183,6 +217,32 @@ pub enum StepKind {
         device: String,
         summary: String,
     },
+}
+
+/* Where a vendor_login step is (see the header). */
+#[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum LoginPhase {
+    #[default]
+    Account,
+    Code,
+    Pick,
+}
+
+/* A saved vendor account, offered on the login screen. */
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct AccountView {
+    pub id: String,
+    pub label: String,
+}
+
+/* One device of the account, as a pick list shows it. */
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct CloudDeviceView {
+    pub id: String,
+    pub name: String,
+    pub detail: String,
+    pub available: bool,
 }
 
 #[derive(Serialize, Debug, Clone, PartialEq)]
@@ -266,6 +326,7 @@ pub fn list(templates: &Templates) -> Vec<TemplateInfo> {
                 .collect(),
             can_reauth: !action_steps(t, &t.reauth).is_empty(),
             can_reconfigure: !form_fields(t).is_empty(),
+            cloud: t.cloud,
         })
         .collect();
     list.sort_by(|a, b| (&a.category, &a.name).cmp(&(&b.category, &b.name)));
@@ -279,7 +340,6 @@ fn supported(template: &Template) -> Result<(), String> {
     fn check(steps: &[Step]) -> Result<(), &'static str> {
         for step in steps {
             match step {
-                Step::VendorLogin { .. } => return Err("a vendor account login"),
                 Step::ProvisionSoftap { .. } | Step::Smartconfig { .. } => return Err("setting up the device's WiFi"),
                 Step::Choice { then, .. } => {
                     for branch in then.values() {
@@ -327,6 +387,10 @@ pub struct Session {
     /* The device picked from the network, if any. */
     found: Option<Found>,
     probe: Option<Probe>,
+    /* Issue #74: the current vendor_login step's screen, and the name the
+     * picked device has in the vendor's account (offered as its name). */
+    login: LoginPhase,
+    account_name: Option<String>,
     last_active: Instant,
 }
 
@@ -390,6 +454,8 @@ impl Session {
             },
             found: None,
             probe: None,
+            login: LoginPhase::Account,
+            account_name: None,
             last_active: Instant::now(),
         };
         if let Some(found) = found {
@@ -453,6 +519,7 @@ impl Session {
                 plain: device.config.clone(),
                 secret: ctx.control.secrets().get(&device.id),
                 template: template.id.clone(),
+                ..Default::default()
             },
             existing: Some((device, mode)),
             steps,
@@ -460,6 +527,8 @@ impl Session {
             history: Vec::new(),
             found: None,
             probe: None,
+            login: LoginPhase::Account,
+            account_name: None,
             last_active: Instant::now(),
         };
         let view = session.view(ctx).await;
@@ -521,10 +590,28 @@ impl Session {
                 self.values.plain.retain(|k, _| !k.starts_with("wifi_"));
                 self.values.secret.retain(|k, _| !k.starts_with("wifi_"));
             }
-            Step::VendorLogin { .. } | Step::ProvisionSoftap { .. } | Step::Smartconfig { .. } => {
+            Step::VendorLogin {
+                fields,
+                action,
+                otp_action,
+                otp_field,
+                list_action,
+                ..
+            } => {
+                let done = self
+                    .vendor_login(ctx, &values, &fields, &action, otp_action.as_deref(), &otp_field, list_action.as_deref())
+                    .await?;
+                if !done {
+                    /* The next screen of the same step. */
+                    return Ok(self.view(ctx).await);
+                }
+                self.forget_login(&fields, &otp_field);
+            }
+            Step::ProvisionSoftap { .. } | Step::Smartconfig { .. } => {
                 return Err(WizardError::plain("this step isn't supported yet"));
             }
         }
+        self.login = LoginPhase::Account;
         self.history.push(before);
         self.pos += 1;
         self.skip_answered();
@@ -539,6 +626,7 @@ impl Session {
             .ok_or_else(|| WizardError::plain("this is the first step"))?;
         self.pos = pos;
         self.steps = steps;
+        self.login = LoginPhase::Account;
         Ok(self.view(ctx).await)
     }
 
@@ -657,6 +745,47 @@ impl Session {
                 Some(field) => StepKind::CodeFromDevice { field },
                 None => StepKind::Test,
             },
+            Some(Step::VendorLogin {
+                vendor,
+                fields,
+                otp_field,
+                hint,
+                ..
+            }) => StepKind::VendorLogin {
+                vendor: vendor.clone(),
+                phase: self.login,
+                hint: match self.login {
+                    LoginPhase::Account => hint.clone(),
+                    LoginPhase::Code => format!("{vendor} sent you a code. Type it here."),
+                    LoginPhase::Pick => format!("Which device of your {vendor} account is it?"),
+                },
+                fields: match self.login {
+                    LoginPhase::Account => fields.iter().filter_map(|id| self.field(id)).collect(),
+                    LoginPhase::Code => self.field(otp_field).into_iter().collect(),
+                    LoginPhase::Pick => Vec::new(),
+                },
+                accounts: match self.login {
+                    LoginPhase::Account => crate::accounts::list(ctx.control.secrets(), Some(&self.template.adapter))
+                        .into_iter()
+                        .map(|a| AccountView { id: a.id(), label: a.account })
+                        .collect(),
+                    _ => Vec::new(),
+                },
+                devices: match self.login {
+                    LoginPhase::Pick => self
+                        .values
+                        .cloud_devices
+                        .iter()
+                        .map(|d| CloudDeviceView {
+                            id: d.id.clone(),
+                            name: d.name.clone(),
+                            detail: d.detail.clone(),
+                            available: d.available,
+                        })
+                        .collect(),
+                    _ => Vec::new(),
+                },
+            },
             Some(Step::Test) => StepKind::Test,
             Some(Step::ProvisionBle { hint, .. }) => StepKind::ProvisionBle {
                 hint: if hint.is_empty() {
@@ -711,6 +840,197 @@ impl Session {
     }
 
     /* One answered input: checked, then kept (plain or secret). */
+    /* One answer to a vendor_login step (see the header); true when the
+     * step is done. */
+    #[allow(clippy::too_many_arguments)]
+    async fn vendor_login(
+        &mut self,
+        ctx: &Context<'_>,
+        values: &Map<String, Value>,
+        fields: &[String],
+        action: &str,
+        otp_action: Option<&str>,
+        otp_field: &str,
+        list_action: Option<&str>,
+    ) -> Result<bool, WizardError> {
+        /* Talking to a vendor's cloud: several requests, each up to
+         * CLOUD_TIMEOUT. */
+        let limit = crate::adapters::cloud::CLOUD_TIMEOUT * 4;
+        /* "Start over" (another email, a new code): back to the account
+         * screen of the same step. */
+        if values.get("restart").and_then(Value::as_bool) == Some(true) {
+            self.login = LoginPhase::Account;
+            self.values.cloud_devices.clear();
+            return Ok(false);
+        }
+        match self.login {
+            /* A saved account: its session, no password, no code. The
+             * step's other choices (Roborock's map toggle) still count. */
+            LoginPhase::Account if values.get("account").and_then(Value::as_str).is_some() => {
+                let id = values["account"].as_str().unwrap_or_default();
+                let account = crate::accounts::get(ctx.control.secrets(), id)
+                    .filter(|a| a.vendor == self.template.adapter)
+                    .ok_or_else(|| WizardError::plain("That account isn't saved any more: sign in."))?;
+                for id in fields {
+                    let optional = self.input(id).is_some_and(|i| matches!(i.kind, InputKind::Toggle | InputKind::Choice));
+                    if optional {
+                        self.take_input(id, values.get(id))?;
+                    }
+                }
+                self.values.plain.insert("email".into(), account.account.clone());
+                self.values.plain.insert("account".into(), account.id());
+                self.values.secret.insert("login_session".into(), Secret::new(account.session));
+            }
+            LoginPhase::Account => {
+                for id in fields {
+                    self.take_input(id, values.get(id))?;
+                }
+                self.run_action(ctx, action, limit, ErrorKind::Timeout).await?;
+                /* The code screen -- unless the vendor let us in without one
+                 * (EZVIZ asks only when two-step verification is on): the
+                 * action then says login_needs_code = "no". */
+                let needs_code = self.values.plain.get("login_needs_code").map(String::as_str) != Some("no");
+                if otp_action.is_some() && needs_code {
+                    self.login = LoginPhase::Code;
+                    return Ok(false);
+                }
+            }
+            LoginPhase::Code => {
+                self.take_input(otp_field, values.get(otp_field))?;
+                if let Some(otp_action) = otp_action {
+                    self.run_action(ctx, otp_action, limit, ErrorKind::Timeout).await?;
+                }
+            }
+            LoginPhase::Pick => {
+                let id = values
+                    .get("device")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| WizardError::plain("Pick one of the devices."))?;
+                let id = id.to_string();
+                return self.pick_and_locate(ctx, &id).map(|_| true);
+            }
+        }
+        /* Logged in (with a password or a saved account): the account is
+         * saved -- its session, never the password -- and the device will
+         * refer to it (config "account"). */
+        self.save_account(ctx);
+        /* The account's devices, if the template lists them. */
+        let Some(list_action) = list_action else { return Ok(true) };
+        self.values.cloud_devices.clear();
+        self.run_action(ctx, list_action, limit, ErrorKind::Timeout).await?;
+        if self.values.cloud_devices.is_empty() {
+            self.login = LoginPhase::Account;
+            return Err(WizardError::plain(
+                "This account has no devices of this kind. Add the device in the vendor's app first.",
+            ));
+        }
+        /* Already known which one: the device picked on the network, or
+         * the one being paired again (same identity). */
+        let known = match (&self.existing, &self.found) {
+            (Some((device, _)), _) => device.identity.clone(),
+            (None, Some(found)) => found.identity.clone(),
+            _ => String::new(),
+        };
+        if !known.is_empty() {
+            let template_identity = self.template.identity.clone();
+            let same = self.values.cloud_devices.iter().find(|d| {
+                let mut values = self.values.plain.clone();
+                values.extend(d.plain.clone());
+                discovery::fill(&template_identity, &values) == known
+            });
+            if let Some(id) = same.map(|d| d.id.clone()) {
+                if let Err(e) = self.pick_and_locate(ctx, &id) {
+                    self.login = LoginPhase::Pick;
+                    return Err(e);
+                }
+                return Ok(true);
+            }
+            if self.existing.is_some() {
+                self.login = LoginPhase::Account;
+                return Err(WizardError::plain("This device isn't in that account (any more). Log in with the account it belongs to."));
+            }
+        }
+        self.login = LoginPhase::Pick;
+        Ok(false)
+    }
+
+    /* Saves the account the person just signed in to (accounts.rs). */
+    fn save_account(&mut self, ctx: &Context<'_>) {
+        let (Some(session), Some(email)) = (self.values.secret.get("login_session"), self.values.plain.get("email")) else {
+            return;
+        };
+        let account = crate::accounts::Account {
+            vendor: self.template.adapter.clone(),
+            account: email.clone(),
+            session: session.expose().to_string(),
+        };
+        crate::accounts::save(ctx.control.secrets(), &account);
+        self.values.plain.insert("account".into(), account.id());
+    }
+
+    /* pick_cloud_device, then its address: a vendor's list says which
+     * device, not where it is on the LAN -- discovery saw it there (same
+     * identity; a Roborock's broadcast). A device being paired again keeps
+     * its address. */
+    fn pick_and_locate(&mut self, ctx: &Context<'_>, id: &str) -> Result<(), WizardError> {
+        let before = self.values.clone();
+        self.pick_cloud_device(id)?;
+        if self.values.plain.get("host").is_some_and(|h| !h.is_empty()) || self.template.discovery.is_empty() {
+            return Ok(());
+        }
+        let found = ctx.discovery.lookup(&self.template.id, &self.identity());
+        match found.and_then(|f| f.values.get("host").cloned().or(Some(f.address.to_string()))) {
+            Some(host) => {
+                self.values.plain.insert("host".into(), host);
+                Ok(())
+            }
+            None => {
+                let name = self.account_name.take().unwrap_or_default();
+                self.values = before;
+                Err(WizardError::plain(format!(
+                    "{name} isn't on this network right now. Is it switched on, and on the same WiFi as the hub? \
+                     It announces itself every few seconds: try again in a moment."
+                )))
+            }
+        }
+    }
+
+    /* The person picked device `id` of the account: its values become the
+     * device's. */
+    fn pick_cloud_device(&mut self, id: &str) -> Result<(), WizardError> {
+        let device = self
+            .values
+            .cloud_devices
+            .iter()
+            .find(|d| d.id == id)
+            .cloned()
+            .ok_or_else(|| WizardError::plain("That device isn't in the list."))?;
+        if !device.available {
+            return Err(WizardError::plain(format!("{} can't be added: {}", device.name, device.detail)));
+        }
+        self.values.plain.extend(device.plain);
+        self.values.secret.extend(device.secret);
+        self.account_name = Some(device.name);
+        self.values.cloud_devices.clear();
+        Ok(())
+    }
+
+    /* After a vendor_login step: the account's secret fields (the
+     * password), the code and the session ("login_*") go -- the hub keeps
+     * no way into the account. Plain fields (the email) stay, to show
+     * which account a device came from. */
+    fn forget_login(&mut self, fields: &[String], otp_field: &str) {
+        for id in fields.iter().map(String::as_str).chain([otp_field]) {
+            if self.input(id).is_some_and(|i| i.kind == InputKind::Secret) || id == otp_field {
+                self.values.secret.remove(id);
+                self.values.plain.remove(id);
+            }
+        }
+        self.values.plain.retain(|k, _| !k.starts_with("login_"));
+        self.values.secret.retain(|k, _| !k.starts_with("login_"));
+        self.values.cloud_devices.clear();
+    }
+
     fn take_input(&mut self, id: &str, answer: Option<&Value>) -> Result<(), WizardError> {
         let input = self
             .input(id)
@@ -770,6 +1090,9 @@ impl Session {
         let new = result.map_err(|e| self.explain(e))?;
         self.values.plain.extend(new.plain);
         self.values.secret.extend(new.secret);
+        if !new.cloud_devices.is_empty() {
+            self.values.cloud_devices = new.cloud_devices;
+        }
         Ok(())
     }
 
@@ -779,7 +1102,14 @@ impl Session {
         let adapter = adapters
             .get(&self.template.adapter)
             .ok_or_else(|| WizardError::plain("this device type's adapter is missing"))?;
-        let probe = adapter.probe(&self.values).await.map_err(|e| self.explain(e))?;
+        /* Issue #74: a device of a saved account is tested with the
+         * account's session, handed over as "account_session" for this
+         * call only (it stays with the account, not the device). */
+        let mut values = self.values.clone();
+        if let Some(account) = values.plain.get("account").and_then(|a| crate::accounts::get(ctx.control.secrets(), a)) {
+            values.secret.insert("account_session".into(), Secret::new(account.session));
+        }
+        let probe = adapter.probe(&values).await.map_err(|e| self.explain(e))?;
         if let Some((device, _)) = &self.existing {
             /* An existing device: what it says about itself now counts
              * (the stored values may be the old device's) -- and it must
@@ -841,6 +1171,7 @@ impl Session {
         self.probe
             .as_ref()
             .and_then(|p| p.name.clone())
+            .or_else(|| self.account_name.clone())
             .or_else(|| self.found.as_ref().map(|f| f.name.clone()).filter(|n| !looks_generated(n)))
             .filter(|n| !n.trim().is_empty())
             .unwrap_or_else(|| {
@@ -874,12 +1205,15 @@ fn action_steps(template: &Template, actions: &[String]) -> Vec<Step> {
     fn walk(steps: &[Step], actions: &[String], found: &mut Vec<Step>) {
         for step in steps {
             let action = match step {
-                Step::ConfirmOnDevice { action, .. } | Step::CodeFromDevice { action, .. } => Some(action),
+                Step::ConfirmOnDevice { action, .. } | Step::CodeFromDevice { action, .. } | Step::VendorLogin { action, .. } => {
+                    Some(action)
+                }
                 _ => None,
             };
             if let Some(action) = action {
                 let seen = found.iter().any(|s| {
-                    matches!(s, Step::ConfirmOnDevice { action: a, .. } | Step::CodeFromDevice { action: a, .. } if a == action)
+                    matches!(s, Step::ConfirmOnDevice { action: a, .. } | Step::CodeFromDevice { action: a, .. }
+                        | Step::VendorLogin { action: a, .. } if a == action)
                 });
                 if actions.contains(action) && !seen {
                     found.push(step.clone());
@@ -1248,7 +1582,7 @@ mod tests {
         let (templates, problems) = Templates::load(
             &dir,
             &Known {
-                adapters: &["m4-led", "wled", "lg-webos", "ir-blaster", "wiz", "http", "mqtt"],
+                adapters: &["m4-led", "wled", "lg-webos", "ir-blaster", "wiz", "http", "mqtt", "roborock", "ezviz", "tapo", "camera"],
                 capabilities: &device::CAPABILITY_NAMES,
             },
         );
@@ -1487,5 +1821,205 @@ mod tests {
         assert!(session.finish(&ctx, "x", "").await.is_err());
         assert!(Session::start(&ctx, "m4-led", None, None).await.is_err());
         assert!(Session::start(&ctx, "nope", None, None).await.is_err());
+    }
+
+    /* Issue #74: a vendor's cloud, played by a fake "roborock" adapter --
+     * the real roborock-vacuum template's vendor_login step. */
+    struct FakeCloud;
+
+    impl crate::adapters::Adapter for FakeCloud {
+        fn id(&self) -> &'static str {
+            "roborock"
+        }
+        fn start(&self, _: &Device, _: crate::adapters::Hub) -> crate::adapters::DeviceHandle {
+            crate::adapters::DeviceHandle::new(mpsc::channel(1).0)
+        }
+        fn probe<'a>(&'a self, values: &'a SetupValues) -> crate::adapters::BoxFuture<'a, Result<Probe, SetupError>> {
+            let ok = values.secret.get("local_key").is_some_and(|k| k.expose() == "key-of-d1");
+            Box::pin(async move {
+                if ok {
+                    Ok(Probe { summary: "S7: charging".into(), ..Default::default() })
+                } else {
+                    Err(SetupError::new(ErrorKind::Refused, "wrong key"))
+                }
+            })
+        }
+        fn action<'a>(&'a self, name: &'a str, values: &'a SetupValues) -> crate::adapters::BoxFuture<'a, Result<SetupValues, SetupError>> {
+            Box::pin(async move {
+                let mut out = SetupValues::default();
+                match name {
+                    "send_code" => {
+                        out.plain.insert("login_client".into(), "abc".into());
+                        /* An account without two-step verification. */
+                        if values.plain.get("email").is_some_and(|e| e.starts_with("nocode")) {
+                            out.plain.insert("login_needs_code".into(), "no".into());
+                            out.secret.insert("login_session".into(), Secret::new("session"));
+                        }
+                    }
+                    "login" => {
+                        if values.plain.get("code").map(String::as_str) != Some("123456") {
+                            return Err(SetupError::new(ErrorKind::Vendor, "That code isn't right."));
+                        }
+                        out.secret.insert("login_session".into(), Secret::new("session"));
+                    }
+                    "list_devices" => {
+                        assert!(values.secret.contains_key("login_session"));
+                        out.cloud_devices = vec![
+                            crate::adapters::CloudDevice {
+                                id: "D1".into(),
+                                name: "S7".into(),
+                                detail: "Roborock S7 - online".into(),
+                                available: true,
+                                plain: [("duid".to_string(), "D1".to_string()), ("protocol".to_string(), "tcp".to_string())].into(),
+                                secret: [("local_key".to_string(), Secret::new("key-of-d1"))].into(),
+                            },
+                            crate::adapters::CloudDevice {
+                                id: "D2".into(),
+                                name: "Q7".into(),
+                                detail: "isn't supported yet".into(),
+                                available: false,
+                                ..Default::default()
+                            },
+                        ];
+                    }
+                    _ => unreachable!(),
+                }
+                Ok(out)
+            })
+        }
+    }
+
+    async fn cloud_hub() -> Hub {
+        let (state_tx, state_rx) = mpsc::channel(8);
+        let outputs = Outputs {
+            changed_tx: watch::channel(()).0,
+            events_tx: tokio::sync::broadcast::channel(64).0,
+            save_tx: watch::channel(Vec::new()).0,
+        };
+        tokio::spawn(state::run(state_rx, Default::default(), outputs));
+        let registry = Arc::new(Registry::new(vec![Box::new(FakeCloud)]));
+        let secrets = Arc::new(Secrets::new(Default::default(), watch::channel(Vec::new()).0));
+        let control = Control::new(state_tx, registry.clone(), secrets);
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("templates");
+        let (templates, _) = Templates::load(&dir, &Known { adapters: &registry.ids(), capabilities: &device::CAPABILITY_NAMES });
+        Hub { templates, control, discovery: Discovery::new() }
+    }
+
+    fn answer(value: Value) -> Map<String, Value> {
+        value.as_object().unwrap().clone()
+    }
+
+    fn seen_vacuum(hub: &Hub) {
+        hub.discovery.record(Found {
+            template: "roborock-vacuum".into(),
+            name: "Roborock vacuum".into(),
+            address: "192.0.2.5".parse().unwrap(),
+            values: [("host".to_string(), "192.0.2.5".to_string()), ("duid".to_string(), "D1".to_string())].into(),
+            identity: "D1".into(),
+        });
+    }
+
+    #[tokio::test]
+    async fn a_vendor_login_picks_a_device_and_forgets_the_session() {
+        let hub = cloud_hub().await;
+        let ctx = hub.ctx();
+        let (mut session, view) = Session::start(&ctx, "roborock-vacuum", None, None).await.unwrap();
+        let StepKind::VendorLogin { phase, fields, .. } = &view.step else { panic!("{view:?}") };
+        assert_eq!((*phase, fields[0].id.as_str()), (LoginPhase::Account, "email"));
+        assert_eq!(session.answer(&ctx, answer(json!({"email": "not an email"}))).await.unwrap_err().field.as_deref(), Some("email"));
+
+        /* Email -> the code screen of the same step. */
+        let view = session.answer(&ctx, answer(json!({"email": "me@example.com"}))).await.unwrap();
+        let StepKind::VendorLogin { phase, fields, .. } = &view.step else { panic!("{view:?}") };
+        assert_eq!((*phase, fields[0].id.as_str()), (LoginPhase::Code, "code"));
+        assert_eq!(view.number, 1);
+
+        /* A wrong code: the vendor's sentence, still the code screen. */
+        let err = session.answer(&ctx, answer(json!({"code": "000000"}))).await.unwrap_err();
+        assert_eq!(err.message, "That code isn't right.");
+
+        /* The right one -> the account's devices. */
+        let view = session.answer(&ctx, answer(json!({"code": "123456"}))).await.unwrap();
+        let StepKind::VendorLogin { phase, devices, .. } = &view.step else { panic!("{view:?}") };
+        assert_eq!(*phase, LoginPhase::Pick);
+        assert_eq!(devices.len(), 2);
+        assert!(!devices[1].available);
+        assert!(session.answer(&ctx, answer(json!({"device": "D2"}))).await.unwrap_err().message.contains("isn't supported"));
+
+        /* D1 isn't on the network (yet): said so, the list stays. */
+        let err = session.answer(&ctx, answer(json!({"device": "D1"}))).await.unwrap_err();
+        assert!(err.message.contains("isn't on this network"), "{}", err.message);
+        seen_vacuum(&hub);
+        let view = session.answer(&ctx, answer(json!({"device": "D1"}))).await.unwrap();
+        assert_eq!(view.step, StepKind::Test);
+
+        /* What stays: the device's values. What doesn't: code, session. */
+        assert_eq!(session.values.plain.get("host").map(String::as_str), Some("192.0.2.5"));
+        assert_eq!(session.values.plain.get("duid").map(String::as_str), Some("D1"));
+        assert_eq!(session.values.plain.get("email").map(String::as_str), Some("me@example.com"));
+        assert!(session.values.secret.contains_key("local_key"));
+        assert!(!session.values.plain.contains_key("code"));
+        assert!(!session.values.plain.keys().chain(session.values.secret.keys()).any(|k| k.starts_with("login_")));
+
+        let view = session.answer(&ctx, Map::new()).await.unwrap();
+        let StepKind::Name { name, summary, .. } = &view.step else { panic!("{view:?}") };
+        assert_eq!((name.as_str(), summary.as_str()), ("S7", "S7: charging"));
+    }
+
+    /* Issue #74: a login saves the account; the next device of it is
+     * picked with a tap -- no email, no code -- and the device refers to
+     * the account (never its own copy of the session). */
+    #[tokio::test]
+    async fn a_saved_account_skips_the_login() {
+        let hub = cloud_hub().await;
+        seen_vacuum(&hub);
+        let ctx = hub.ctx();
+        let (mut first, _) = Session::start(&ctx, "roborock-vacuum", None, None).await.unwrap();
+        first.answer(&ctx, answer(json!({"email": "me@example.com"}))).await.unwrap();
+        first.answer(&ctx, answer(json!({"code": "123456"}))).await.unwrap();
+        let saved = crate::accounts::list(hub.control.secrets(), Some("roborock"));
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].session, "session");
+
+        let (mut second, view) = Session::start(&ctx, "roborock-vacuum", None, None).await.unwrap();
+        let StepKind::VendorLogin { accounts, .. } = &view.step else { panic!("{view:?}") };
+        assert_eq!(accounts, &vec![AccountView { id: "roborock:me@example.com".into(), label: "me@example.com".into() }]);
+        let view = second.answer(&ctx, answer(json!({"account": "roborock:me@example.com", "map": "true"}))).await.unwrap();
+        assert!(matches!(view.step, StepKind::VendorLogin { phase: LoginPhase::Pick, .. }), "{view:?}");
+        second.answer(&ctx, answer(json!({"device": "D1"}))).await.unwrap();
+        assert_eq!(second.values.plain.get("account").map(String::as_str), Some("roborock:me@example.com"));
+        assert_eq!(second.values.plain.get("map").map(String::as_str), Some("true"));
+        assert!(!second.values.secret.keys().any(|k| k.starts_with("login_") || k == "cloud_session"));
+        /* Another vendor's account isn't offered, and can't be used. */
+        let (mut third, _) = Session::start(&ctx, "roborock-vacuum", None, None).await.unwrap();
+        crate::accounts::save(hub.control.secrets(), &crate::accounts::Account { vendor: "ezviz".into(), account: "x".into(), session: "{}".into() });
+        assert!(third.answer(&ctx, answer(json!({"account": "ezviz:x"}))).await.is_err());
+    }
+
+    /* Issue #74 (EZVIZ): no two-step verification -> no code screen. */
+    #[tokio::test]
+    async fn the_code_screen_is_skipped_when_not_needed() {
+        let hub = cloud_hub().await;
+        let ctx = hub.ctx();
+        let (mut session, _) = Session::start(&ctx, "roborock-vacuum", None, None).await.unwrap();
+        let view = session.answer(&ctx, answer(json!({"email": "nocode@example.com"}))).await.unwrap();
+        assert!(matches!(view.step, StepKind::VendorLogin { phase: LoginPhase::Pick, .. }), "{view:?}");
+    }
+
+    /* Found on the network first: after the login, the same vacuum is
+     * picked by itself. "Restart" goes back to the email. */
+    #[tokio::test]
+    async fn a_found_device_is_picked_by_itself() {
+        let hub = cloud_hub().await;
+        seen_vacuum(&hub);
+        let ctx = hub.ctx();
+        let (mut session, _) = Session::start(&ctx, "roborock-vacuum", None, Some("192.0.2.5")).await.unwrap();
+        session.answer(&ctx, answer(json!({"email": "me@example.com"}))).await.unwrap();
+        let view = session.answer(&ctx, answer(json!({"restart": true}))).await.unwrap();
+        assert!(matches!(view.step, StepKind::VendorLogin { phase: LoginPhase::Account, .. }));
+        session.answer(&ctx, answer(json!({"email": "me@example.com"}))).await.unwrap();
+        let view = session.answer(&ctx, answer(json!({"code": "123456"}))).await.unwrap();
+        assert_eq!(view.step, StepKind::Test);
+        assert!(session.values.secret.contains_key("local_key"));
     }
 }

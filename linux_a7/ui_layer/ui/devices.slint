@@ -29,6 +29,36 @@ export struct ColorChip {
 // One device, flattened for display. The has-* flags say which
 // capabilities it has; the other fields are only meaningful when their
 // flag is set.
+// Issue #74: a choice a vacuum offers (fan "max" shown as "Max"), one of
+// its rooms, one of its wearing parts.
+export struct ModeItem {
+    value: string,
+    label: string,
+}
+
+export struct VacuumRoomItem {
+    id: int,
+    name: string,
+}
+
+export struct VacuumPartItem {
+    id: string,
+    name: string,
+    // Percent of its life left.
+    left: int,
+}
+
+// Issue #74: one of a device's own on/off settings.
+export struct OptionItem {
+    id: string,
+    name: string,
+    on: bool,
+    // A choice option (night vision: auto / on / off): its value and the
+    // choices; none = an on/off toggle.
+    value: string,
+    choices: [ModeItem],
+}
+
 export struct DeviceItem {
     id: string,
     name: string,
@@ -97,6 +127,78 @@ export struct DeviceItem {
     lock-state: string,
     // What a metering device draws: "40.2 W \u{2022} 1.23 kWh"; "" = none.
     energy-text: string,
+    // ---- Issue #74 ----
+    // A robot vacuum: its state ("docked", "cleaning", "returning",
+    // "paused", "idle", "error") and its line ("Charging \u{2022} 85 %",
+    // or what's wrong).
+    has-vacuum: bool,
+    vacuum-state: string,
+    vacuum-text: string,
+    // Its suction, mopping water and mop route: the current one and the
+    // choices it offers (none = it has no such setting).
+    vacuum-fan: string,
+    vacuum-fans: [ModeItem],
+    vacuum-water: string,
+    vacuum-waters: [ModeItem],
+    vacuum-mop: string,
+    vacuum-mops: [ModeItem],
+    // "This run: 14.5 m² \u{2022} 21 min", "" if not known.
+    vacuum-run-text: string,
+    vacuum-rooms: [VacuumRoomItem],
+    vacuum-parts: [VacuumPartItem],
+    // "272 cleanings \u{2022} 6977 m² \u{2022} 118 h" and "Quiet 22:00-08:00".
+    vacuum-totals-text: string,
+    vacuum-quiet-text: string,
+    // Its map can be shown (turned on at setup; app.slint draws it).
+    vacuum-has-map: bool,
+    // The device's own settings (a plug's status light...), as toggles.
+    options: [OptionItem],
+    // Issue #43: a camera that gives pictures (app.slint shows them); one
+    // that pans and tilts, and its saved positions (value = its token).
+    has-camera: bool,
+    camera-ptz: bool,
+    camera-presets: [ModeItem],
+}
+
+// One wearing part: name, a bar of its life left, Reset (tapped twice:
+// it's for after the part was replaced).
+component PartRow inherits HorizontalLayout {
+    in property <VacuumPartItem> part;
+    callback reset();
+    property <bool> confirm: false;
+    spacing: Theme.space-s;
+    VerticalLayout {
+        horizontal-stretch: 1;
+        alignment: center;
+        spacing: Theme.space-xxs;
+        Text {
+            text: part.name + "  " + part.left + " % left";
+            color: part.left <= 10 ? Theme.error : Theme.text;
+            font-size: Theme.font-caption;
+        }
+        Rectangle {
+            height: 6px;
+            border-radius: 3px;
+            background: Theme.surface-pressed;
+            Rectangle {
+                x: 0;
+                width: parent.width * clamp(part.left, 0, 100) / 100;
+                border-radius: 3px;
+                background: part.left <= 10 ? Theme.error : Theme.accent;
+            }
+        }
+    }
+    ActionButton {
+        text: confirm ? "Replaced?" : "Reset";
+        clicked => {
+            if (confirm) {
+                confirm = false;
+                root.reset();
+            } else {
+                confirm = true;
+            }
+        }
+    }
 }
 
 // On/off, big enough for a finger.
@@ -245,6 +347,17 @@ export component DeviceRow inherits Rectangle {
     callback set-cover-position(string, int);
     callback set-climate(string, string, float, string);
     callback set-lock(string, bool);
+    // Issue #74: (device, action, its argument): start / pause / dock /
+    // locate (no argument), set_fan / set_water / set_mop (the choice),
+    // clean_rooms (a room id), reset_part (the part's id).
+    callback vacuum-action(string, string, string);
+    // Issue #74: (device, option id, on) -- or for a choice option,
+    // set-option-value (device, option id, value).
+    callback set-option(string, string, bool);
+    callback set-option-value(string, string, string);
+    // Issue #43: (device, pan, tilt) one step; (device, preset token).
+    callback camera-move(string, float, float);
+    callback camera-preset(string, string);
     // Issue #85: a palette colour tapped; a remote button pressed (an IR
     // light's brightness steps).
     callback set-color(string, string);
@@ -480,6 +593,213 @@ export component DeviceRow inherits Rectangle {
             color: Theme.text;
             font-size: Theme.font-body;
             overflow: elide;
+        }
+
+        // A vacuum: what it does (or what's wrong), and its buttons: Start
+        // -- Pause while it cleans --, Home, Find.
+        // (On the controls page the tile above already says it -- unless
+        // something's wrong.)
+        if item.has-vacuum && (!root.in-sheet || item.vacuum-state == "error"): Text {
+            text: item.vacuum-text;
+            color: item.vacuum-state == "error" ? Theme.error : Theme.text-muted;
+            font-size: Theme.font-caption;
+            wrap: word-wrap;
+        }
+        if item.has-vacuum: HorizontalLayout {
+            spacing: Theme.space-xs;
+            ActionButton {
+                text: item.vacuum-state == "cleaning" ? "Pause" : "Start";
+                primary: item.vacuum-state != "cleaning";
+                horizontal-stretch: 1;
+                clicked => {
+                    root.vacuum-action(item.id, item.vacuum-state == "cleaning" ? "pause" : "start", "");
+                }
+            }
+            ActionButton {
+                text: "Home";
+                horizontal-stretch: 1;
+                clicked => {
+                    root.vacuum-action(item.id, "dock", "");
+                }
+            }
+            ActionButton {
+                text: "Find";
+                horizontal-stretch: 1;
+                clicked => {
+                    root.vacuum-action(item.id, "locate", "");
+                }
+            }
+        }
+        if item.has-vacuum && item.vacuum-run-text != "": Text {
+            text: item.vacuum-run-text;
+            color: Theme.text-muted;
+            font-size: Theme.font-caption;
+        }
+        // Suction, water, mop route: one row of choices each.
+        if item.has-vacuum && item.vacuum-fans.length > 0: Text {
+            text: "Suction";
+            color: Theme.text-muted;
+            font-size: Theme.font-caption;
+        }
+        if item.has-vacuum && item.vacuum-fans.length > 0: HorizontalLayout {
+            spacing: Theme.space-xs;
+            for m in item.vacuum-fans: Choice {
+                text: m.label;
+                selected: m.value == item.vacuum-fan;
+                clicked => {
+                    root.vacuum-action(item.id, "set_fan", m.value);
+                }
+            }
+        }
+        if item.has-vacuum && item.vacuum-waters.length > 0: Text {
+            text: "Mop water";
+            color: Theme.text-muted;
+            font-size: Theme.font-caption;
+        }
+        if item.has-vacuum && item.vacuum-waters.length > 0: HorizontalLayout {
+            spacing: Theme.space-xs;
+            for m in item.vacuum-waters: Choice {
+                text: m.label;
+                selected: m.value == item.vacuum-water;
+                clicked => {
+                    root.vacuum-action(item.id, "set_water", m.value);
+                }
+            }
+        }
+        if item.has-vacuum && item.vacuum-mops.length > 0: Text {
+            text: "Mop route";
+            color: Theme.text-muted;
+            font-size: Theme.font-caption;
+        }
+        if item.has-vacuum && item.vacuum-mops.length > 0: HorizontalLayout {
+            spacing: Theme.space-xs;
+            for m in item.vacuum-mops: Choice {
+                text: m.label;
+                selected: m.value == item.vacuum-mop;
+                clicked => {
+                    root.vacuum-action(item.id, "set_mop", m.value);
+                }
+            }
+        }
+        // Rooms: tap one to clean just it. None yet: how to get them.
+        if item.has-vacuum: Text {
+            text: item.vacuum-rooms.length > 0 ? "Clean a room"
+                : "To clean single rooms: divide the map into rooms in the vendor's app (then Pair again here, for their names). Until then it cleans everything.";
+            color: Theme.text-muted;
+            font-size: Theme.font-caption;
+            wrap: word-wrap;
+        }
+        if item.has-vacuum && item.vacuum-rooms.length > 0: VerticalLayout {
+            spacing: Theme.space-xs;
+            for r in item.vacuum-rooms: Choice {
+                text: r.name;
+                selected: false;
+                clicked => {
+                    root.vacuum-action(item.id, "clean_rooms", r.id);
+                }
+            }
+        }
+        if item.has-vacuum && item.vacuum-parts.length > 0: Text {
+            text: "Parts";
+            color: Theme.text-muted;
+            font-size: Theme.font-caption;
+        }
+        if item.has-vacuum: VerticalLayout {
+            spacing: Theme.space-xs;
+            for p in item.vacuum-parts: PartRow {
+                part: p;
+                reset => {
+                    root.vacuum-action(item.id, "reset_part", p.id);
+                }
+            }
+        }
+        if item.has-vacuum && (item.vacuum-totals-text != "" || item.vacuum-quiet-text != ""): Text {
+            text: item.vacuum-totals-text + (item.vacuum-totals-text != "" && item.vacuum-quiet-text != "" ? "\n" : "") + item.vacuum-quiet-text;
+            color: Theme.text-muted;
+            font-size: Theme.font-caption;
+            wrap: word-wrap;
+        }
+
+        // A camera that moves: a cross of arrows (one step per tap), then
+        // its saved positions.
+        if item.has-camera && item.camera-ptz: HorizontalLayout {
+            alignment: center;
+            spacing: Theme.space-xs;
+            VerticalLayout {
+                alignment: center;
+                ActionButton {
+                    text: "\u{25C0}";
+                    clicked => {
+                        root.camera-move(item.id, -0.5, 0);
+                    }
+                }
+            }
+            VerticalLayout {
+                spacing: Theme.space-xs;
+                ActionButton {
+                    text: "\u{25B2}";
+                    clicked => {
+                        root.camera-move(item.id, 0, 0.5);
+                    }
+                }
+                ActionButton {
+                    text: "\u{25BC}";
+                    clicked => {
+                        root.camera-move(item.id, 0, -0.5);
+                    }
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                ActionButton {
+                    text: "\u{25B6}";
+                    clicked => {
+                        root.camera-move(item.id, 0.5, 0);
+                    }
+                }
+            }
+        }
+        if item.has-camera && item.camera-presets.length > 0: HorizontalLayout {
+            spacing: Theme.space-xs;
+            for p in item.camera-presets: Choice {
+                text: p.label;
+                selected: false;
+                clicked => {
+                    root.camera-preset(item.id, p.value);
+                }
+            }
+        }
+
+        // The device's own settings: a toggle each, or a row of choices.
+        for o in item.options: VerticalLayout {
+            spacing: Theme.space-xs;
+            HorizontalLayout {
+                spacing: Theme.space-m;
+                Text {
+                    text: o.name;
+                    color: o.choices.length > 0 ? Theme.text-muted : Theme.text;
+                    font-size: o.choices.length > 0 ? Theme.font-caption : Theme.font-body;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    wrap: word-wrap;
+                }
+                if o.choices.length == 0: Toggle {
+                    on: o.on;
+                    toggled(on) => {
+                        root.set-option(item.id, o.id, on);
+                    }
+                }
+            }
+            if o.choices.length > 0: HorizontalLayout {
+                spacing: Theme.space-xs;
+                for c in o.choices: Choice {
+                    text: c.label;
+                    selected: c.value == o.value;
+                    clicked => {
+                        root.set-option-value(item.id, o.id, c.value);
+                    }
+                }
+            }
         }
 
         // A cover: where it is, the three buttons, and -- for one that can

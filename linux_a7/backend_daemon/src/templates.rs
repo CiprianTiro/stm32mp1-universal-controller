@@ -106,6 +106,11 @@ pub struct Template {
     /* Adapter actions to repeat when access is revoked ("Pair again"). */
     #[serde(default)]
     pub reauth: Vec<String>,
+    /* Issue #74 (pattern P5): the device is only reached through its
+     * vendor's cloud -- it works only while the hub has internet. Screens
+     * say so (wizard TemplateInfo, the device page). */
+    #[serde(default)]
+    pub cloud: bool,
     #[serde(default)]
     pub defaults: Defaults,
     /* For adapter "http" only (issue #75): the device's HTTP API, described
@@ -242,6 +247,16 @@ pub enum Discovery {
         #[serde(default)]
         fill: BTreeMap<String, String>,
     },
+    /* Issue #74: devices announcing themselves to the whole network on
+     * UDP `port`, in a vendor's own packing that `decode` names (the hub
+     * knows: "roborock" -> {duid}, {address}). The port must be opened in
+     * hub-firewall.nft. */
+    UdpListen {
+        port: u16,
+        decode: UdpDecoder,
+        #[serde(default)]
+        fill: BTreeMap<String, String>,
+    },
     /* Issue #73 (netscan.rs): the hosts on the hub's own network whose
      * MAC address says one of these makers ("Espressif", see oui.rs).
      * Values: {address}, {mac}, {mac_hex}, {manufacturer}, {interface}.
@@ -285,6 +300,13 @@ pub enum Discovery {
     },
 }
 
+/* The vendor packings udp_listen can read (discovery.rs). */
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum UdpDecoder {
+    Roborock,
+}
+
 /* No conditions (the methods that have no "match"). */
 static NO_MATCH: BTreeMap<String, String> = BTreeMap::new();
 
@@ -296,6 +318,7 @@ impl Discovery {
             | Discovery::UdpBroadcast { fill, .. }
             | Discovery::UdpMulticast { fill, .. }
             | Discovery::WsDiscovery { fill }
+            | Discovery::UdpListen { fill, .. }
             | Discovery::NetworkScan { fill, .. }
             | Discovery::PortProbe { fill, .. }
             | Discovery::DeviceAnnounce { fill, .. }
@@ -775,6 +798,10 @@ pub struct Variant {
     pub steps: Vec<Step>,
 }
 
+fn default_otp_field() -> String {
+    "code".into()
+}
+
 /* The step types -- each exists for a setup pattern (wiki Device-Catalog).
  * After the last step the wizard always asks for name and room; templates
  * don't repeat that. */
@@ -802,13 +829,30 @@ pub enum Step {
     },
     /* A code the device shows, typed in (P3). */
     CodeFromDevice { action: String, field: String },
-    /* Vendor account login (P4/P5, later #74). */
+    /* Vendor account login (P4/P5, issue #74), in up to three screens:
+     *   1. `fields` (e.g. email, password) -> the adapter's `action`;
+     *   2. if `otp_action`: the one-time code the vendor sends, in input
+     *      `otp_field` -> `otp_action` (skipped if `action` says the
+     *      vendor needs none: plain value login_needs_code = "no");
+     *   3. if `list_action`: the account's devices (cloud_list) to pick
+     *      one from -- its values are the device's.
+     * Afterwards the wizard forgets the account's password, the code and
+     * every value named "login_*" (the session): only what the picked
+     * device needs stays (wizard.rs). */
     VendorLogin {
+        /* Shown: "Log in to your Roborock account". */
+        vendor: String,
+        fields: Vec<String>,
         action: String,
         #[serde(default)]
         otp_action: Option<String>,
+        #[serde(default = "default_otp_field")]
+        otp_field: String,
         #[serde(default)]
         list_action: Option<String>,
+        /* Under the fields: what this login is for, where the code goes. */
+        #[serde(default)]
+        hint: String,
     },
     /* One choice changing what follows, e.g. two protocols. */
     Choice {
@@ -1074,7 +1118,23 @@ impl Template {
                     input(field)?;
                     actions.insert(action);
                 }
-                Step::VendorLogin { action, otp_action, list_action } => {
+                Step::VendorLogin {
+                    action,
+                    otp_action,
+                    list_action,
+                    fields,
+                    otp_field,
+                    ..
+                } => {
+                    if fields.is_empty() {
+                        return Err(format!("variant {variant:?}: a vendor_login without fields"));
+                    }
+                    for f in fields {
+                        input(f)?;
+                    }
+                    if otp_action.is_some() {
+                        input(otp_field)?;
+                    }
                     actions.insert(action);
                     actions.extend(otp_action.iter().map(String::as_str));
                     actions.extend(list_action.iter().map(String::as_str));
@@ -1213,7 +1273,7 @@ mod tests {
     /* The hub's own list: a template using a new capability is checked
      * against what device.rs really has. */
     const ALL_CAPS: [&str; crate::device::CAPABILITY_NAMES.len()] = crate::device::CAPABILITY_NAMES;
-    const ADAPTERS: [&str; 7] = ["m4-led", "wled", "lg-webos", "ir-blaster", "wiz", "http", "mqtt"];
+    const ADAPTERS: [&str; 11] = ["m4-led", "wled", "lg-webos", "ir-blaster", "wiz", "http", "mqtt", "roborock", "ezviz", "tapo", "camera"];
 
     fn known() -> Known<'static> {
         Known {

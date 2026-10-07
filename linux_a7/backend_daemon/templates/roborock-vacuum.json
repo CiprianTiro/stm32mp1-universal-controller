@@ -1,0 +1,72 @@
+{
+  "$comment": "Roborock robot vacuums: the key from the Roborock account once, then LAN only (pattern P4). Found by their UDP broadcasts. Format: wiki Device-Templates.",
+  "format": 1,
+  "id": "roborock-vacuum",
+  "version": 1,
+  "name": "Roborock vacuum",
+  "category": "vacuums",
+  "description": "Roborock robot vacuums set up with the Roborock app (S5 Max, S6, S7, S8, Q5, ...); Mi Home ones with their token.",
+  "adapter": "roborock",
+  "capabilities": ["vacuum"],
+  "inputs": [
+    { "id": "email", "type": "text", "label": "Roborock account email", "hint": "The email you log in to the Roborock app with", "validate": { "pattern": "email" } },
+    { "id": "map", "type": "toggle", "label": "Show the map", "hint": "The map only comes from Roborock's cloud: it needs internet, and the hub keeps a Roborock session for it (never your password). Everything else works without.", "required": false, "default": false },
+    { "id": "code", "type": "text", "label": "Code from the email", "hint": "6 digits, from Roborock's email", "validate": { "pattern": "digits", "min_length": 4, "max_length": 8 } },
+    {
+      "id": "protocol", "type": "choice", "label": "Which app was the vacuum set up with?",
+      "choices": [
+        { "value": "tcp", "label": "The Roborock app" },
+        { "value": "miio", "label": "Xiaomi Mi Home" }
+      ],
+      "default": "tcp"
+    },
+    { "id": "host", "type": "text", "label": "Vacuum address", "hint": "Its IP address, from your router or the app's network info, e.g. 192.168.1.134", "validate": { "pattern": "host" } },
+    { "id": "duid", "type": "text", "label": "Device id (duid)", "hint": "From a Roborock token tool", "validate": { "min_length": 10, "max_length": 64 } },
+    { "id": "local_key", "type": "secret", "label": "Local key", "hint": "16 characters, from a Roborock token tool", "validate": { "min_length": 16, "max_length": 16 } },
+    { "id": "token", "type": "secret", "label": "Token", "hint": "32 hex digits, from a Mi Home token extractor", "validate": { "pattern": "hex", "min_length": 32, "max_length": 32 } }
+  ],
+  "discovery": [
+    { "method": "udp_listen", "port": 58866, "decode": "roborock", "fill": { "host": "{address}", "duid": "{duid}" } }
+  ],
+  "setup": [
+    {
+      "id": "account",
+      "label": "Log in to the Roborock account",
+      "steps": [
+        {
+          "type": "vendor_login",
+          "vendor": "Roborock",
+          "fields": ["email", "map"],
+          "action": "send_code",
+          "otp_action": "login",
+          "list_action": "list_devices",
+          "hint": "Roborock emails you a code. The hub uses the account once, to fetch the vacuum's key; after that it controls the vacuum on your network only, also without internet. Your password is never asked."
+        },
+        { "type": "test" }
+      ]
+    },
+    {
+      "id": "manual",
+      "label": "Enter the key or token",
+      "steps": [
+        {
+          "type": "choice",
+          "field": "protocol",
+          "then": {
+            "tcp": [ { "type": "form", "fields": ["host", "duid", "local_key"] } ],
+            "miio": [ { "type": "form", "fields": ["host", "token"] } ]
+          }
+        },
+        { "type": "test" }
+      ]
+    }
+  ],
+  "errors": {
+    "refused": "{message}",
+    "vendor": "{message}",
+    "unreachable": "The hub can't reach the vacuum. Is it on, and on the same WiFi as the hub?"
+  },
+  "identity": "{duid}",
+  "reauth": ["send_code"],
+  "defaults": { "name": "Vacuum" }
+}

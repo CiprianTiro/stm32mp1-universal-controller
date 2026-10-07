@@ -1,0 +1,24 @@
+{
+  "$comment": "ESP32-CAM boards running the CameraWebServer example (or compatible): a picture from /capture, MJPEG on :81/stream. Format: wiki Device-Templates.",
+  "format": 1,
+  "id": "esp32-cam",
+  "version": 1,
+  "name": "ESP32-CAM",
+  "category": "cameras",
+  "description": "ESP32-CAM boards with the CameraWebServer firmware: a picture on the hub's screen, live video in the app.",
+  "adapter": "camera",
+  "capabilities": ["camera"],
+  "inputs": [
+    { "id": "host", "type": "text", "label": "Board address", "hint": "Its serial monitor prints it at start, e.g. 192.168.1.60", "validate": { "pattern": "host" } }
+  ],
+  "discovery": [
+    { "method": "port_probe", "port": 81, "manufacturers": ["Espressif"], "fill": { "host": "{address}", "mac": "{mac}" } }
+  ],
+  "setup": [
+    { "id": "guided", "label": "Find the board", "steps": [ { "type": "discover" }, { "type": "test" } ] },
+    { "id": "advanced", "label": "Enter the address", "steps": [ { "type": "form", "fields": ["host"] }, { "type": "test" } ] }
+  ],
+  "adapter_config": { "kind": "esp32cam" },
+  "identity": "{mac}",
+  "defaults": { "name": "Camera" }
+}

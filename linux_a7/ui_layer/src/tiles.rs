@@ -48,6 +48,10 @@ pub fn kind(d: &Device, templates: &[Template]) -> &'static str {
         "tv"
     } else if c.cover.is_some() {
         "blind"
+    } else if c.vacuum.is_some() {
+        "vacuum"
+    } else if category == "cameras" {
+        "camera"
     } else if c.climate.is_some() {
         "climate"
     } else if let Some(lock) = &c.lock {
@@ -79,6 +83,12 @@ pub fn kind(d: &Device, templates: &[Template]) -> &'static str {
 }
 
 /// A light (the "N on" chip, "Turn all off").
+/// A plug (any: a Shelly, an EZVIZ, a Tasmota), or anything that measures
+/// power: what the power chip lists.
+pub fn is_plug(d: &Device, templates: &[Template]) -> bool {
+    d.capabilities.energy.is_some() || kind(d, templates) == "plug"
+}
+
 pub fn is_light(d: &Device, templates: &[Template]) -> bool {
     matches!(kind(d, templates), "light" | "light-off" | "strip") && d.capabilities.switch.is_some()
 }
@@ -122,6 +132,31 @@ fn capital(word: &str) -> String {
     chars.next().map_or(String::new(), |first| first.to_uppercase().chain(chars).collect())
 }
 
+/// A vacuum's one line: what's wrong, else what it does and its battery:
+/// "Cleaning \u{2022} 84 %", "Charging \u{2022} 100 %", "Stuck: move it...".
+pub fn vacuum_line(vacuum: &crate::ws_client::Vacuum) -> String {
+    if !vacuum.error.is_empty() {
+        return vacuum.error.clone();
+    }
+    let doing = if vacuum.detail.is_empty() { capital(&vacuum.state) } else { capital(&vacuum.detail) };
+    match vacuum.battery {
+        Some(battery) => format!("{doing} \u{2022} {battery} %"),
+        None => doing,
+    }
+}
+
+/// A vacuum's run: "This run: 14.5 m² \u{2022} 21 min" ("Last run" when
+/// it's back); "" before it ever cleaned.
+pub fn vacuum_run(vacuum: &crate::ws_client::Vacuum) -> String {
+    match (vacuum.area_m2, vacuum.minutes) {
+        (Some(area), Some(minutes)) if area > 0.0 || minutes > 0 => {
+            let which = if vacuum.state == "cleaning" || vacuum.state == "paused" { "This run" } else { "Last run" };
+            format!("{which}: {area:.1} m² \u{2022} {minutes} min")
+        }
+        _ => String::new(),
+    }
+}
+
 /// The tile's one line: what matters about it now.
 pub fn state_line(d: &Device, now: u64) -> String {
     let c = &d.capabilities;
@@ -159,6 +194,11 @@ pub fn state_line(d: &Device, now: u64) -> String {
         }
     } else if let Some(lock) = &c.lock {
         capital(&lock.state)
+    } else if let Some(vacuum) = &c.vacuum {
+        vacuum_line(vacuum)
+    } else if let (Some(switch), true) = (&c.switch, d.template.contains("camera")) {
+        /* A camera's switch is its privacy mode (#74, tapo.rs). */
+        if switch.on { "Watching" } else { "Privacy mode" }.to_string()
     } else if let Some(switch) = &c.switch {
         let mut parts = vec![if switch.on { "On" } else { "Off" }.to_string()];
         if let (true, Some(dimmer)) = (switch.on, &c.dimmer) {
@@ -170,6 +210,11 @@ pub fn state_line(d: &Device, now: u64) -> String {
             }
         }
         parts.join(dot)
+    } else if c.camera.as_ref().is_some_and(|c| c.snapshot) && c.switch.is_none() {
+        /* A camera with pictures only (RTSP, ESP32-CAM, #43); its ONVIF
+         * motion, when it reports some. */
+        let motion = c.sensor.as_ref().and_then(|s| s.readings.get("motion")).is_some_and(|r| r.value >= 1.0);
+        if motion { "Motion now" } else { "Tap for its picture" }.into()
     } else if let Some(sensor) = &c.sensor {
         /* Temperature and humidity first, at most two values. */
         let mut readings: Vec<(&String, &crate::ws_client::Reading)> = sensor.readings.iter().collect();
@@ -241,12 +286,14 @@ fn level(d: &Device) -> i32 {
 pub fn tile(d: &Device, templates: &[Template], accent: slint::Color, now: u64) -> TileItem {
     let tint = tint(d, accent);
     let climate_on = d.capabilities.climate.as_ref().is_some_and(|c| c.mode != "off");
+    /* A vacuum at work (#74) is "on" like a running AC: the tile lights up. */
+    let vacuum_busy = d.capabilities.vacuum.as_ref().is_some_and(|v| v.state == "cleaning" || v.state == "returning");
     TileItem {
         id: d.id.clone().into(),
         name: d.name.clone().into(),
         state: state_line(d, now).into(),
         icon: kind(d, templates).into(),
-        on: is_on(d) || climate_on,
+        on: is_on(d) || climate_on || vacuum_busy,
         can_toggle: d.capabilities.switch.is_some() && reachable(d),
         tint,
         on_tint: readable_on(tint),
@@ -270,9 +317,14 @@ pub fn chips(devices: &[&Device], templates: &[Template]) -> Vec<FilterChip> {
     if lights_on > 0 {
         chips.push(chip(LIGHTS, format!("{lights_on} on"), "light", false));
     }
+    /* Power: what's measured, in all; with plugs but nothing measuring
+     * (EZVIZ plugs only say on/off), how many plugs. */
     let metered: Vec<f64> = devices.iter().filter_map(|d| d.capabilities.energy.as_ref()).map(|e| e.power_w).collect();
+    let plugs = devices.iter().filter(|d| is_plug(d, templates)).count();
     if !metered.is_empty() {
         chips.push(chip(ENERGY, watts(metered.iter().sum()), "power", false));
+    } else if plugs > 0 {
+        chips.push(chip(ENERGY, if plugs == 1 { "1 plug".into() } else { format!("{plugs} plugs") }, "power", false));
     }
     let offline = devices.iter().filter(|d| !reachable(d)).count();
     if offline > 0 {
@@ -305,7 +357,7 @@ pub fn groups(devices: &[&Device], filter: &str, templates: &[Template], accent:
         .filter(|d| match filter {
             FAVOURITES => d.favourite,
             LIGHTS => is_light(d, templates) && is_on(d) && reachable(d),
-            ENERGY => d.capabilities.energy.is_some(),
+            ENERGY => is_plug(d, templates),
             OFFLINE => !reachable(d),
             f => f.strip_prefix(ROOM).is_none_or(|room| d.room == room),
         })
@@ -315,9 +367,15 @@ pub fn groups(devices: &[&Device], filter: &str, templates: &[Template], accent:
     };
     let tiles = |list: Vec<&Device>| list.into_iter().map(|d| tile(d, templates, accent, now)).collect::<Vec<_>>();
     if filter == ENERGY {
-        /* The biggest consumers first. */
-        let power = |d: &Device| d.capabilities.energy.as_ref().map_or(0.0, |e| e.power_w);
-        picked.sort_by(|a, b| power(b).total_cmp(&power(a)).then_with(|| by_name(a, b)));
+        /* What measures first, the biggest consumers on top; then the
+         * plugs that don't measure. */
+        let power = |d: &Device| d.capabilities.energy.as_ref().map(|e| e.power_w);
+        picked.sort_by(|a, b| {
+            (power(b).is_some(), power(b).unwrap_or(0.0))
+                .partial_cmp(&(power(a).is_some(), power(a).unwrap_or(0.0)))
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| by_name(a, b))
+        });
         return vec![(String::new(), tiles(picked))];
     }
     picked.sort_by(by_name);
@@ -378,6 +436,25 @@ mod tests {
         let all = sample();
         let kinds: Vec<&str> = all.iter().map(|d| kind(d, &[])).collect();
         assert_eq!(kinds, ["light", "plug", "strip", "sensor"]);
+    }
+
+    /* Issue #74: the power chip lists every plug -- the ones that
+     * measure first (biggest on top), then cloud plugs that only switch. */
+    #[test]
+    fn the_power_chip_lists_all_plugs() {
+        let mut all = sample();
+        all.push(device(serde_json::json!({"id": "ez", "name": "Desk plug", "template": "ezviz-plug", "online": "online",
+            "capabilities": {"switch": {"on": true}}})));
+        let templates: Vec<Template> = vec![serde_json::from_value(serde_json::json!(
+            {"id": "ezviz-plug", "name": "EZVIZ smart plug", "category": "plugs", "variants": []})).unwrap()];
+        let refs: Vec<&Device> = all.iter().collect();
+        let groups = groups(&refs, ENERGY, &templates, accent(), 0);
+        let names: Vec<String> = groups[0].1.iter().map(|t| t.name.to_string()).collect();
+        assert_eq!(names, ["Kettle", "Desk plug"]);
+        /* Without anything measuring: "N plugs". */
+        let only_ezviz: Vec<&Device> = all.iter().filter(|d| d.id == "ez").collect();
+        let chip = chips(&only_ezviz, &templates).into_iter().find(|c| c.id == ENERGY).unwrap();
+        assert_eq!(chip.label, "1 plug");
     }
 
     #[test]

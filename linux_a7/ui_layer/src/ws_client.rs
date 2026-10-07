@@ -32,6 +32,11 @@ use tungstenite::Message;
 pub enum Request {
     Subscribe,
     ListDevices,
+    /// Live video of a camera (backend camera.rs): frames of exactly
+    /// width x height come as binary messages into VIDEO until
+    /// UnwatchCamera. Asking again just keeps it going.
+    WatchCamera { id: String, width: u16, height: u16 },
+    UnwatchCamera,
     /// Change one capability of one device, e.g. capability "switch",
     /// value {"on": true}.
     Command {
@@ -50,6 +55,9 @@ pub enum Request {
     PairingStatus,
     CancelPairing,
     ListClients,
+    /* Issue #74: Settings > Accounts. */
+    ListAccounts,
+    RemoveAccount { id: String },
     RevokeClient { id: String },
     // The setup hotspot (issue #36; only accepted from the hub itself).
     StartHotspot,
@@ -97,6 +105,11 @@ pub enum Request {
     /// Issue #95: star a device (name and room could follow).
     UpdateDeviceInfo {
         id: String,
+        /* A new name / room (the device page's "Name and room"). */
+        #[serde(skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        room: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         favourite: Option<bool>,
     },
@@ -222,6 +235,114 @@ pub struct Capabilities {
     pub climate: Option<Climate>,
     pub lock: Option<Lock>,
     pub energy: Option<Energy>,
+    /* Issue #74: a robot vacuum. */
+    pub vacuum: Option<Vacuum>,
+    /* Issue #74: a device's own on/off settings. */
+    pub options: Option<Options>,
+    /* Issue #43: a camera's pictures and stream. */
+    pub camera: Option<Camera>,
+}
+
+#[derive(Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct Camera {
+    #[serde(default)]
+    pub snapshot: bool,
+    #[serde(default)]
+    pub stream: bool,
+    #[serde(default)]
+    pub ptz: bool,
+    #[serde(default)]
+    pub presets: Vec<CameraPreset>,
+}
+
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct CameraPreset {
+    pub token: String,
+    pub name: String,
+}
+
+#[derive(Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct Options {
+    #[serde(default)]
+    pub options: Vec<DeviceOption>,
+}
+
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct DeviceOption {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub on: bool,
+    /* A choice option (a camera's night vision): its value and choices. */
+    #[serde(default)]
+    pub value: Option<String>,
+    #[serde(default)]
+    pub choices: Vec<String>,
+}
+
+/* Issue #74 -- device.rs's Vacuum: what the card shows. */
+#[derive(Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct Vacuum {
+    /* "docked", "cleaning", "returning", "paused", "idle", "error",
+     * "unknown". */
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub battery: Option<u8>,
+    /* The vendor's own word for the state ("charging"). */
+    #[serde(default)]
+    pub detail: String,
+    /* What's wrong, "" if nothing. */
+    #[serde(default)]
+    pub error: String,
+    /* Its modes and the choices it offers (#74, the full vacuum). */
+    #[serde(default)]
+    pub fan: Option<String>,
+    #[serde(default)]
+    pub fans: Vec<String>,
+    #[serde(default)]
+    pub water: Option<String>,
+    #[serde(default)]
+    pub waters: Vec<String>,
+    #[serde(default)]
+    pub mop: Option<String>,
+    #[serde(default)]
+    pub mops: Vec<String>,
+    #[serde(default)]
+    pub area_m2: Option<f64>,
+    #[serde(default)]
+    pub minutes: Option<u32>,
+    #[serde(default)]
+    pub rooms: Vec<VacuumRoom>,
+    #[serde(default)]
+    pub parts: Vec<VacuumPart>,
+    #[serde(default)]
+    pub totals: Option<VacuumTotals>,
+    #[serde(default)]
+    pub quiet_hours: Option<String>,
+    /* Its map can be fetched (the "map" action). */
+    #[serde(default)]
+    pub map: bool,
+}
+
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct VacuumRoom {
+    pub id: u32,
+    pub name: String,
+}
+
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct VacuumPart {
+    pub id: String,
+    pub name: String,
+    pub left: u8,
+}
+
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct VacuumTotals {
+    pub cleanings: u32,
+    pub area_m2: f64,
+    pub hours: f64,
 }
 
 /* Issue #77 -- backend_daemon's device.rs has the rules; these are only
@@ -271,6 +392,9 @@ pub struct Energy {
     pub voltage_v: Option<f64>,
     #[serde(default)]
     pub current_a: Option<f64>,
+    /* Issue #74: today's use (EZVIZ plugs count per day). */
+    #[serde(default)]
+    pub today_kwh: Option<f64>,
 }
 
 #[derive(Deserialize, Clone, Debug, PartialEq)]
@@ -337,6 +461,9 @@ pub struct Template {
     pub can_reauth: bool,
     #[serde(default)]
     pub can_reconfigure: bool,
+    /* Issue #74: only through the vendor's cloud (needs internet). */
+    #[serde(default)]
+    pub cloud: bool,
 }
 
 #[derive(Deserialize, Clone, Debug, PartialEq)]
@@ -441,6 +568,17 @@ pub struct Pairing {
     pub fingerprint_short: String,
 }
 
+/// A vendor account the hub is signed in to (ws.rs's `AccountInfo`,
+/// issue #74).
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct Account {
+    pub id: String,
+    pub vendor: String,
+    pub account: String,
+    #[serde(default)]
+    pub devices: Vec<String>,
+}
+
 /// A paired client (auth.rs's `ClientInfo`).
 #[derive(Deserialize, Clone, Debug, PartialEq)]
 pub struct Client {
@@ -499,6 +637,7 @@ enum ServerMessage {
     WifiNetworks { networks: Vec<WifiNetwork> },
     Pairing(Pairing),
     Clients { clients: Vec<Client> },
+    Accounts { accounts: Vec<Account> },
     Settings(HubSettings),
     /* Issue #47: the scenes (automations: stage 3). */
     Automations {
@@ -541,6 +680,8 @@ pub enum Action {
 pub enum Update {
     Connected,
     Disconnected,
+    /// The camera's live video couldn't start (the reason).
+    VideoFailed(String),
     /// The complete device list (after connecting, or after missed events).
     Devices(Vec<Device>),
     DeviceChanged(Device),
@@ -553,6 +694,7 @@ pub enum Update {
     ActionDone(Action, Result<(), String>),
     Pairing(Pairing),
     Clients(Vec<Client>),
+    Accounts(Vec<Account>),
     /// The hub's settings: after connecting, and whenever they change --
     /// from this screen or from a phone (issue #39).
     Settings(HubSettings),
@@ -595,6 +737,44 @@ const NETWORK_REFRESH: Duration = Duration::from_secs(2);
 /// How long one read waits for a message before the loop checks for
 /// requests from the GUI again. Short enough that a tap goes out at once.
 const READ_TIMEOUT: Duration = Duration::from_millis(100);
+
+/// One frame of a camera's live video, already as the picture the GUI
+/// shows (RGB, 3 bytes a pixel): made here, on the connection thread,
+/// so the GUI thread only has to put it on the screen.
+pub struct VideoFrame {
+    pub id: String,
+    pub pixels: slint::SharedPixelBuffer<slint::Rgb8Pixel>,
+}
+
+/// The NEWEST video frame, not yet shown. Frames don't go through the
+/// update channel: one the GUI had no time for is replaced here by the
+/// next, so the picture never falls behind.
+pub static VIDEO: std::sync::Mutex<Option<VideoFrame>> = std::sync::Mutex::new(None);
+
+/// Called (on the connection thread) each time a new frame is in VIDEO:
+/// main.rs wakes the GUI with it, so a frame is shown the moment it
+/// comes -- not at the next POLL, which would show 15 frames a second
+/// on a 50 ms grid, unevenly (some for 50 ms, some for 100: choppy).
+pub static FRAME_READY: std::sync::OnceLock<Box<dyn Fn() + Send + Sync>> = std::sync::OnceLock::new();
+
+/// A frame from its binary message (backend ws.rs video_message): "VF1"
+/// and a zero byte, width and height (u16 little-endian), the id's length
+/// (u8) and the id, then the pixels. None if it isn't one.
+pub fn parse_frame(bytes: &[u8]) -> Option<VideoFrame> {
+    if bytes.len() < 9 || &bytes[..4] != b"VF1\0" {
+        return None;
+    }
+    let width = u16::from_le_bytes([bytes[4], bytes[5]]) as u32;
+    let height = u16::from_le_bytes([bytes[6], bytes[7]]) as u32;
+    let id_end = 9 + bytes[8] as usize;
+    let id = std::str::from_utf8(bytes.get(9..id_end)?).ok()?.to_string();
+    let pixels = bytes.get(id_end..)?;
+    if pixels.len() != (width * height * 3) as usize {
+        return None;
+    }
+    // The one copy: from the message straight into the picture.
+    Some(VideoFrame { id, pixels: slint::SharedPixelBuffer::clone_from_slice(pixels, width, height) })
+}
 
 type Socket = tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>>;
 
@@ -692,6 +872,21 @@ fn serve(socket: &mut Socket, request_rx: &mpsc::Receiver<Request>, update_tx: &
         // 3. Whatever arrives within READ_TIMEOUT.
         let text = match socket.read() {
             Ok(Message::Text(text)) => text,
+            // A camera's video frame: into VIDEO (replacing one not yet
+            // shown), not the update channel.
+            Ok(Message::Binary(bytes)) => {
+                if let Some(frame) = parse_frame(&bytes) {
+                    // Only wake the GUI if it took the last one: a frame
+                    // still waiting means a wake-up is already on its way.
+                    let waiting = VIDEO.lock().unwrap().replace(frame).is_some();
+                    if !waiting {
+                        if let Some(ready) = FRAME_READY.get() {
+                            ready();
+                        }
+                    }
+                }
+                continue;
+            }
             // Ping/Pong frames keep the connection alive (tungstenite
             // answers them itself); nothing for us.
             Ok(_) => continue,
@@ -778,6 +973,7 @@ fn to_update(request: &Request, reply: ServerMessage) -> Option<Update> {
         (_, ServerMessage::WifiNetworks { networks }) => Some(Update::Networks(networks)),
         (_, ServerMessage::Pairing(pairing)) => Some(Update::Pairing(pairing)),
         (_, ServerMessage::Clients { clients }) => Some(Update::Clients(clients)),
+        (_, ServerMessage::Accounts { accounts }) => Some(Update::Accounts(accounts)),
         (_, ServerMessage::Settings(settings)) => Some(Update::Settings(settings)),
         (_, ServerMessage::Templates { templates }) => Some(Update::Templates(templates)),
         (_, ServerMessage::Found { devices }) => Some(Update::Found(devices)),
@@ -816,6 +1012,7 @@ fn to_update(request: &Request, reply: ServerMessage) -> Option<Update> {
         (Request::CaptureScene { .. } | Request::DeleteScene { .. }, ServerMessage::Error { message }) => {
             Some(Update::ScenesFailed(message))
         }
+        (Request::WatchCamera { .. }, ServerMessage::Error { message }) => Some(Update::VideoFailed(message)),
         (Request::RemoveDevice { .. }, ServerMessage::Ack) => Some(Update::Removed(Ok(()))),
         (Request::RemoveDevice { .. }, ServerMessage::Error { message }) => Some(Update::Removed(Err(message))),
         (Request::WifiScan, ServerMessage::Error { message }) => Some(Update::ScanFailed(message)),

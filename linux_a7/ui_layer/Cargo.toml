@@ -72,6 +72,11 @@ tungstenite = "0.24"
 # ServerResponse shapes exactly (see src/ws_client.rs).
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Issue #74: a vacuum's map arrives base64-packed (src/vacuum_map.rs).
+base64 = "0.23"
+# Issue #43/#74: camera pictures arrive as JPEG (pure Rust decoder; already
+# in the build through Slint's image support).
+zune-jpeg = "0.5"
 
 # The hub's local time (issue #39, src/zones.rs): the clock runs on UTC,
 # the time zone is a hub setting. chrono-tz carries the time zone database

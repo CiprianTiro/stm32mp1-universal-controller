@@ -48,18 +48,30 @@ FILESEXTRAPATHS:prepend := "/home/builder/linux_a7/backend_daemon:"
 SRC_URI = " \
     file://Cargo.toml \
     file://Cargo.lock \
+    file://src/accounts.rs \
     file://src/adapters/mod.rs \
+    file://src/adapters/camera.rs \
     file://src/adapters/channels.rs \
+    file://src/adapters/cloud.rs \
     file://src/adapters/lg_webos.rs \
     file://src/adapters/m4_led.rs \
+    file://src/adapters/miio.rs \
     file://src/adapters/mqtt_generic.rs \
     file://src/adapters/esp_prov/mod.rs \
+    file://src/adapters/ezviz.rs \
     file://src/adapters/esp_prov/ble.rs \
     file://src/adapters/esp_prov/pb.rs \
     file://src/adapters/esp_prov/srp.rs \
     file://src/adapters/http_generic.rs \
+    file://src/adapters/ipcam.rs \
+    file://src/adapters/onvif.rs \
     file://src/adapters/ir_blaster.rs \
     file://src/adapters/net.rs \
+    file://src/adapters/roborock.rs \
+    file://src/adapters/roborock_cloud.rs \
+    file://src/adapters/roborock_map.rs \
+    file://src/adapters/roborock_proto.rs \
+    file://src/adapters/tapo.rs \
     file://src/adapters/wiz.rs \
     file://src/adapters/wled.rs \
     file://src/auth.rs \
@@ -221,3 +233,13 @@ FILES:${PN} += " \
 # The IR code library (issue #82, src/ir_library.rs): data from its own
 # recipe, always installed with the daemon that reads it.
 RDEPENDS:${PN} += "ir-library"
+
+# Issue #74: vendor clouds (adapters/cloud.rs) are checked against the
+# public certificate authorities, like a browser does -- the system list,
+# /etc/ssl/certs/ca-certificates.crt. The image had none before.
+RDEPENDS:${PN} += "ca-certificates"
+
+# Issue #43/#74: camera pictures -- backend_daemon runs ffmpeg (built lean,
+# recipes-multimedia/ffmpeg/ffmpeg_%.bbappend) on a camera's stream while
+# someone looks at it (src/adapters/camera.rs).
+RDEPENDS:${PN} += "ffmpeg"

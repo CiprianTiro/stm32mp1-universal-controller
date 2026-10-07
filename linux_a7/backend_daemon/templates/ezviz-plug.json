@@ -1,0 +1,41 @@
+{
+  "$comment": "EZVIZ smart plugs (T30 and alike): no local API, so CLOUD ONLY (pattern P5) -- works only while the hub has internet. Format: wiki Device-Templates.",
+  "format": 1,
+  "id": "ezviz-plug",
+  "version": 1,
+  "name": "EZVIZ smart plug",
+  "category": "plugs",
+  "description": "EZVIZ T30 and other EZVIZ plugs, through the EZVIZ account. Needs internet: EZVIZ plugs can't be reached on the local network.",
+  "adapter": "ezviz",
+  "capabilities": ["switch"],
+  "inputs": [
+    { "id": "email", "type": "text", "label": "EZVIZ account email (or phone)", "hint": "What you log in to the EZVIZ app with", "validate": { "min_length": 3, "max_length": 128 } },
+    { "id": "password", "type": "secret", "label": "EZVIZ password", "hint": "Used once to log in; the hub doesn't keep it", "validate": { "min_length": 1, "max_length": 128 } },
+    { "id": "code", "type": "text", "label": "Verification code", "hint": "EZVIZ sent it by SMS or email (two-step verification is on)", "validate": { "pattern": "digits", "min_length": 4, "max_length": 8 } }
+  ],
+  "setup": [
+    {
+      "id": "account",
+      "label": "Log in to the EZVIZ account",
+      "steps": [
+        {
+          "type": "vendor_login",
+          "vendor": "EZVIZ",
+          "fields": ["email", "password"],
+          "action": "login",
+          "otp_action": "login_code",
+          "list_action": "list_devices",
+          "hint": "EZVIZ plugs only work through EZVIZ's cloud: this plug will need internet. The hub keeps a login session, never your password."
+        },
+        { "type": "test" }
+      ]
+    }
+  ],
+  "errors": {
+    "vendor": "{message}"
+  },
+  "identity": "{serial}",
+  "cloud": true,
+  "reauth": ["login"],
+  "defaults": { "name": "Plug" }
+}
