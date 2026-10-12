@@ -1,0 +1,52 @@
+# The phone app (issue #48): analyze, test, and build the Android APK on
+# every change to the app -- or to the hub's design tokens, which the app
+# reads through a symlink (mobile_app/assets/tokens.json).
+# iOS builds need a Mac and signing: see mobile_app/README.md.
+name: mobile_app
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "mobile_app/**"
+      - "linux_a7/ui_layer/ui/tokens.json"
+      - ".github/workflows/mobile_app.yml"
+  pull_request:
+    paths:
+      - "mobile_app/**"
+      - "linux_a7/ui_layer/ui/tokens.json"
+      - ".github/workflows/mobile_app.yml"
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile_app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: "3.38.3"
+          cache: true
+
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
+
+      # A release build signed with the debug key (the template's default):
+      # installable for testing; store signing comes with distribution.
+      - run: flutter build apk --release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: universal-controller-apk
+          path: mobile_app/build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 14

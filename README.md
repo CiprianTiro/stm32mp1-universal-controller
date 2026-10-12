@@ -28,6 +28,7 @@ stm32mp1-universal-controller/
 ├── yocto_layers/     # Custom distribution bitbake configuration layers (meta-rust, meta-app)
 ├── firmware_m4/      # Real-time coprocessor control logic workspace (C/FreeRTOS infrastructure)
 ├── linux_a7/         # Core application stack (Asynchronous Rust backend daemon + Slint GUI UI)
+├── mobile_app/       # Android + iOS phone app (Flutter): pairing, control, setup wizard, automations
 └── README.md         # Navigation entry point
 ```
 

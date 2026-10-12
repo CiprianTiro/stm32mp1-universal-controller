@@ -18,6 +18,7 @@ SRC_URI = " \
     file://26-hotspot.network \
     file://hub-avahi-start.sh \
     file://10-hub-avahi.conf \
+    file://uchub.service \
 "
 
 S = "${WORKDIR}"
@@ -44,6 +45,8 @@ do_install() {
     install -D -m 0755 ${WORKDIR}/hub-avahi-start.sh ${D}${libexecdir}/hub-avahi-start
     install -D -m 0644 ${WORKDIR}/10-hub-avahi.conf \
         ${D}${systemd_system_unitdir}/avahi-daemon.service.d/10-hub-avahi.conf
+    # The LAN API announced as _uchub._tcp, for the phone app (#48).
+    install -D -m 0644 ${WORKDIR}/uchub.service ${D}${sysconfdir}/avahi/services/uchub.service
 
     # Enable the wlan0 instance of wpa_supplicant's template unit. This is
     # exactly what `systemctl enable wpa_supplicant@wlan0` would create: a
@@ -57,6 +60,7 @@ do_install() {
 
 FILES:${PN} += " \
     ${libexecdir}/hub-avahi-start \
+    ${sysconfdir}/avahi/services/uchub.service \
     ${systemd_system_unitdir}/avahi-daemon.service.d/10-hub-avahi.conf \
     ${systemd_system_unitdir}/hub-hotspot.service \
     ${libexecdir}/hub-hotspot-if \
