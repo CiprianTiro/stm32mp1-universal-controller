@@ -81,6 +81,7 @@ SRC_URI = " \
     file://src/zones.rs \
     file://src/ws_client.rs \
     file://src/tiles.rs \
+    file://src/vacuum_map.rs \
     file://ui-layer.service \
 "
 

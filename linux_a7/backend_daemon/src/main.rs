@@ -6,6 +6,7 @@ use tokio::time::interval;
  * part of this crate" -- this is what actually makes their code exist in
  * the final binary at all. It does NOT run anything in them; nothing in
  * either file executes until something below explicitly spawns it. */
+mod accounts;
 mod adapters;
 mod auth;
 mod automations;
@@ -26,6 +27,7 @@ mod netscan;
 mod network;
 mod oui;
 mod oui_table;
+mod power_link;
 mod rpmsg;
 mod secrets;
 mod settings;
@@ -121,6 +123,10 @@ async fn main() {
         Box::new(adapters::lg_webos::LgWebos),
         Box::new(adapters::ir_blaster::IrBlaster),
         Box::new(adapters::wiz::Wiz::new()),
+        Box::new(adapters::roborock::Roborock),
+        Box::new(adapters::ezviz::Ezviz),
+        Box::new(adapters::tapo::Tapo),
+        Box::new(adapters::ipcam::IpCam),
         Box::new(http_generic.clone()),
         Box::new(mqtt_generic.clone()),
     ]));
@@ -213,6 +219,8 @@ async fn main() {
         settings.clone(),
     ));
     tokio::spawn(automations::run(automations.clone(), events_tx.subscribe()));
+    /* Issue #99: devices powered by a plug follow its measurement. */
+    tokio::spawn(power_link::run(control.clone(), events_tx.subscribe()));
 
     /* Cloud sync (mqtt.rs). local_clients: how many WebSocket clients are
      * connected right now -- ws.rs counts, health.rs (inside mqtt.rs)

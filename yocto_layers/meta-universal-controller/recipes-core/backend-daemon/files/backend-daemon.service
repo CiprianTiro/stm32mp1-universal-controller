@@ -124,8 +124,12 @@ RemoveIPC=yes
 # (changing owners or user ids, setting the clock, ...) and the ones that
 # change priorities or resource limits, and only native
 # 32-bit ARM ones. A refused call fails with "permission denied".
+# setpriority back in: camera.rs starts the screen's live-video ffmpeg at
+# a LOWER priority (nice 10) so the UI always comes first. Harmless:
+# without CAP_SYS_NICE a process can only lower its own priority.
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged @resources
+SystemCallFilter=setpriority
 SystemCallErrorNumber=EPERM
 SystemCallArchitectures=native
 # Only these kinds of sockets: Unix (D-Bus for Bluetooth, wpa_supplicant,

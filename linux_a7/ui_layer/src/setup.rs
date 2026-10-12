@@ -157,7 +157,19 @@ impl Setup {
         if !self.cancelled.is_empty() && text(&get("session")) == self.cancelled {
             return;
         }
-        let kind = text(&get("step"));
+        let mut kind = text(&get("step"));
+        // Issue #74: a vendor account login is one step of the hub, in
+        // three screens ("phase"); the page draws each as its own kind:
+        // "login" (email...), "login_code", "login_pick" (the account's
+        // devices).
+        if kind == "vendor_login" {
+            kind = match text(&get("phase")).as_str() {
+                "code" => "login_code",
+                "pick" => "login_pick",
+                _ => "login",
+            }
+            .to_string();
+        }
         // Going back onto a step that runs by itself (the test, waiting for
         // the device): it would run at once and lead forward again to the
         // step Back was pressed on -- Back seemed to do nothing (#95). Go
@@ -191,6 +203,13 @@ impl Setup {
                 }
             }
             "choice" | "code_from_device" => self.fields = vec![field_of(&get("field"))],
+            "login" | "login_code" => {
+                body = text(&get("hint"));
+                if let Some(fields) = get("fields").as_array() {
+                    self.fields = fields.iter().map(field_of).collect();
+                }
+            }
+            "login_pick" => body = text(&get("hint")),
             // Both wait for the device (#42: provision_ble sets up its WiFi
             // over Bluetooth), with a hint and a countdown.
             "confirm_on_device" | "provision_ble" => body = text(&get("hint")),
@@ -239,6 +258,34 @@ impl Setup {
                 })
                 .collect()
         });
+        // The account's devices (login_pick), in the same rows: `address`
+        // carries the vendor's id, `type_name` the line under the name. On
+        // the login screen: the saved accounts (#74), `address` = its id.
+        let found = if kind == "login" {
+            get("accounts").as_array().map_or(vec![], |list| {
+                list.iter()
+                    .map(|a| FoundItem {
+                        template: self.template.clone().into(),
+                        name: text(&a["label"]).into(),
+                        address: text(&a["id"]).into(),
+                        type_name: "Signed in: use it".into(),
+                    })
+                    .collect()
+            })
+        } else if kind == "login_pick" {
+            get("devices").as_array().map_or(vec![], |list| {
+                list.iter()
+                    .map(|d| FoundItem {
+                        template: self.template.clone().into(),
+                        name: text(&d["name"]).into(),
+                        address: text(&d["id"]).into(),
+                        type_name: text(&d["detail"]).into(),
+                    })
+                    .collect()
+            })
+        } else {
+            found
+        };
         ui.set_wizard_found(model(found));
         // The template's other ways in, offered on the discover step.
         let variants: Vec<VariantItem> = self.template(&self.template).map_or(vec![], |t| {
@@ -389,13 +436,37 @@ impl Setup {
     }
 
     /// A device from the discover step's list, or "search again" (None).
+    /// On a vendor login (#74): a device of the account, or "start over"
+    /// (another email, a new code).
     pub fn pick_found(&mut self, ui: &AppWindow, tx: &Sender<Request>, address: Option<String>) {
         if self.busy {
             return;
         }
+        let login = self.step == "login_code" || self.step == "login_pick";
         let mut values = Map::new();
-        if let Some(address) = address {
-            values.insert("found".into(), json!(address));
+        // A saved account (#74): its id, plus the screen's choices (a
+        // vacuum's "Show the map") -- not the email and password fields.
+        if self.step == "login" {
+            if let Some(id) = address {
+                values.insert("account".into(), json!(id));
+                for field in self.fields.iter().filter(|f| f.kind == "toggle" || f.kind == "choice") {
+                    values.insert(field.id.clone(), json!(self.values.get(&field.id).cloned().unwrap_or_default()));
+                }
+                self.answer(ui, tx, values);
+            }
+            return;
+        }
+        match address {
+            Some(id) if login => {
+                values.insert("device".into(), json!(id));
+            }
+            Some(address) => {
+                values.insert("found".into(), json!(address));
+            }
+            None if login => {
+                values.insert("restart".into(), json!(true));
+            }
+            None => {}
         }
         self.answer(ui, tx, values);
     }
@@ -494,7 +565,7 @@ fn field_of(value: &Value) -> Field {
 fn field_values(get: &dyn Fn(&str) -> Value, kind: &str) -> Vec<Option<String>> {
     let one = |f: &Value| f.get("value").map(text);
     match kind {
-        "form" => get("fields").as_array().map_or(vec![], |f| f.iter().map(one).collect()),
+        "form" | "login" | "login_code" => get("fields").as_array().map_or(vec![], |f| f.iter().map(one).collect()),
         "choice" | "code_from_device" => vec![one(&get("field"))],
         _ => vec![],
     }

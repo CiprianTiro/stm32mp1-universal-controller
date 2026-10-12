@@ -106,6 +106,13 @@ compile_inside_container() {
     # kept a third copy in /var/log/messages. Two fewer root daemons, too.
     # Outside the "fresh local.conf" block above, so an existing build
     # folder picks it up as well; the grep keeps it from being added twice.
+    # Issue #43/#74: ffmpeg (camera pictures) is marked "commercial" by
+    # Yocto because of codec patents -- accepted for this project's hub;
+    # see recipes-multimedia/ffmpeg/ffmpeg_%.bbappend. Outside the "fresh
+    # local.conf" block too, so existing builds get it.
+    if ! grep -q "commercial_ffmpeg" conf/local.conf; then
+        echo 'LICENSE_FLAGS_ACCEPTED += "commercial_ffmpeg"' >> conf/local.conf
+    fi
     if ! grep -q "VIRTUAL-RUNTIME_base-utils-syslog" conf/local.conf; then
         echo "  -> Dropping busybox syslogd/klogd (journald does the logging)..."
         echo 'VIRTUAL-RUNTIME_base-utils-syslog = ""' >> conf/local.conf

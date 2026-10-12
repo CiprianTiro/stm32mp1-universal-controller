@@ -1,0 +1,25 @@
+{
+  "$comment": "Any IP camera with an RTSP stream (ONVIF cameras: Reolink, Hikvision, Dahua, Tapo...): pictures on the hub (key frames only), the stream for apps. Format: wiki Device-Templates.",
+  "format": 1,
+  "id": "rtsp-camera",
+  "version": 1,
+  "name": "IP camera (RTSP)",
+  "category": "cameras",
+  "description": "Any camera with an RTSP stream: a picture on the hub's screen, full video in the app on your phone.",
+  "adapter": "camera",
+  "capabilities": ["camera"],
+  "inputs": [
+    { "id": "host", "type": "text", "label": "Camera address", "hint": "e.g. 192.168.1.70", "validate": { "pattern": "host" } },
+    { "id": "path", "type": "text", "label": "Stream path", "hint": "From the camera's manual; pick its SMALL stream for pictures (Tapo: /stream2, Reolink: /h264Preview_01_sub, Hikvision: /Streaming/Channels/102)", "default": "/stream2", "validate": { "max_length": 128 } },
+    { "id": "port", "type": "number", "label": "RTSP port", "default": 554, "validate": { "min": 1, "max": 65535 } },
+    { "id": "stream_user", "type": "text", "label": "User name", "required": false, "validate": { "max_length": 64 } },
+    { "id": "stream_password", "type": "secret", "label": "Password", "required": false, "validate": { "max_length": 64 } },
+    { "id": "url", "type": "secret", "label": "Stream URL", "hint": "The whole rtsp://user:password@address:port/path", "validate": { "min_length": 10, "max_length": 256 } }
+  ],
+  "setup": [
+    { "id": "guided", "label": "Enter the camera's details", "steps": [ { "type": "form", "fields": ["host", "path", "port", "stream_user", "stream_password"] }, { "type": "test" } ] },
+    { "id": "advanced", "label": "Enter the stream URL", "steps": [ { "type": "form", "fields": ["url"] }, { "type": "test" } ] }
+  ],
+  "adapter_config": { "kind": "rtsp" },
+  "defaults": { "name": "Camera" }
+}

@@ -20,6 +20,16 @@ export struct ClientItem {
 }
 
 
+// A vendor account the hub is signed in to (issue #74).
+export struct AccountItem {
+    id: string,
+    // "EZVIZ", "Roborock".
+    vendor: string,
+    account: string,
+    // "Used by: Kettle plug, S7" or "No devices use it".
+    devices-text: string,
+}
+
 // One tappable row of the settings menu.
 component MenuRow inherits Rectangle {
     in property <string> title;
@@ -66,6 +76,7 @@ export component SettingsPage inherits Rectangle {
     callback back();
     callback open-network();
     callback open-clients();
+    callback open-accounts();
     callback open-appearance();
     callback open-time-zone();
     callback open-scenes();
@@ -99,6 +110,13 @@ export component SettingsPage inherits Rectangle {
                 : client-count + " devices can control this hub";
             clicked => {
                 open-clients();
+            }
+        }
+        MenuRow {
+            title: "Accounts";
+            detail: "Vendor accounts the hub is signed in to";
+            clicked => {
+                open-accounts();
             }
         }
         MenuRow {
@@ -222,6 +240,83 @@ export component ClientsPage inherits Rectangle {
             primary: true;
             clicked => {
                 pair-new();
+            }
+        }
+    }
+}
+
+// Settings > Accounts (issue #74): the vendor accounts the hub is signed
+// in to, and "Sign out" (tapped twice) for each.
+export component AccountsPage inherits Rectangle {
+    in property <[AccountItem]> accounts;
+    callback back();
+    callback sign-out(string);
+    property <string> confirm;
+
+    background: Theme.background;
+
+    VerticalLayout {
+        padding: Theme.space-l;
+        spacing: Theme.space-m;
+
+        PageHeader {
+            title: "Accounts";
+            back => {
+                confirm = "";
+                root.back();
+            }
+        }
+        Text {
+            text: "Vendor accounts the hub signed in to when you added their devices. It keeps their sign-in (never the password), so the next device from the same account is added with a tap. Sign out: its devices then need \u{201C}Pair again\u{201D}.";
+            color: Theme.text-muted;
+            font-size: Theme.font-caption;
+            wrap: word-wrap;
+        }
+        if accounts.length == 0: Text {
+            text: "None yet.";
+            color: Theme.text-muted;
+            font-size: Theme.font-subtitle;
+        }
+        ListView {
+            vertical-stretch: 1;
+            for a in accounts: VerticalLayout {
+                padding-bottom: Theme.space-s;
+                Rectangle {
+                    border-radius: Theme.radius-medium;
+                    background: Theme.surface;
+                    HorizontalLayout {
+                        padding: Theme.space-l;
+                        spacing: Theme.space-m;
+                        VerticalLayout {
+                            alignment: center;
+                            horizontal-stretch: 1;
+                            Text {
+                                text: a.vendor + ": " + a.account;
+                                color: Theme.text;
+                                font-size: Theme.font-subtitle;
+                                overflow: elide;
+                            }
+                            Text {
+                                text: a.devices-text;
+                                color: Theme.text-muted;
+                                font-size: Theme.font-caption;
+                                wrap: word-wrap;
+                            }
+                        }
+                        ActionButton {
+                            text: confirm == a.id ? "Sure?" : "Sign out";
+                            destructive: true;
+                            clicked => {
+                                if (confirm == a.id) {
+                                    confirm = "";
+                                    sign-out(a.id);
+                                } else {
+                                    confirm = a.id;
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }

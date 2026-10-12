@@ -111,6 +111,17 @@ impl Secrets {
             .collect()
     }
 
+    /* Forgets one secret (issue #74: an account signed out); true if it
+     * was there. */
+    pub fn remove_one(&self, device: &str, name: &str) -> bool {
+        let mut all = self.all.lock().unwrap();
+        let removed = all.get_mut(device).is_some_and(|d| d.remove(name).is_some());
+        if removed {
+            self.save(&all);
+        }
+        removed
+    }
+
     /* Forgets all of a device's secrets (the device was removed). */
     pub fn remove(&self, device: &str) {
         let mut all = self.all.lock().unwrap();

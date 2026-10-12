@@ -10,6 +10,8 @@
  *              certificate (the LG TV: its certificate is self-signed, so
  *              the hub trusts the one it saw at pairing -- "trust on first
  *              use" -- and refuses any other afterwards)
+ *   https_pinned  one HTTPS POST to a device with a PINNED certificate
+ *              (issue #74: Tapo cameras; same trust-on-first-use)
  *   wake_on_lan  the "magic packet" that switches on a device whose
  *              network is asleep (the TV in standby)
  *   udp_request  one UDP request/answer, with retries (WiZ bulbs; issue
@@ -358,6 +360,10 @@ struct PinnedCert {
     /* The fingerprint seen in the handshake, for the caller. */
     seen: Mutex<Option<String>>,
     algorithms: rustls::crypto::WebPkiSupportedAlgorithms,
+    /* Issue #74 (https_pinned): also old devices' certificates -- X.509
+     * version 1 and 1024-bit RSA keys (a Tapo camera after a firmware
+     * update), which the usual checks refuse to read. See verify_raw. */
+    legacy: bool,
 }
 
 impl PinnedCert {
@@ -366,8 +372,77 @@ impl PinnedCert {
             expected,
             seen: Mutex::new(None),
             algorithms: rustls::crypto::ring::default_provider().signature_verification_algorithms,
+            legacy: false,
         }
     }
+
+    fn legacy(expected: Option<String>) -> Self {
+        PinnedCert { legacy: true, ..PinnedCert::new(expected) }
+    }
+}
+
+/* One DER element at the start of `data`: (tag, its content, the bytes
+ * after it). */
+fn der(data: &[u8]) -> Option<(u8, &[u8], &[u8])> {
+    let tag = *data.first()?;
+    let first = *data.get(1)? as usize;
+    let (length, header) = if first < 0x80 {
+        (first, 2)
+    } else {
+        let count = first & 0x7F;
+        if count == 0 || count > 4 {
+            return None;
+        }
+        let mut length = 0usize;
+        for i in 0..count {
+            length = (length << 8) | *data.get(2 + i)? as usize;
+        }
+        (length, 2 + count)
+    };
+    let content = data.get(header..header + length)?;
+    Some((tag, content, &data[header + length..]))
+}
+
+/* A certificate's public key, read straight from its DER -- the same place
+ * in every X.509 version: (is it RSA, the key). */
+fn certificate_key(cert: &[u8]) -> Option<(bool, &[u8])> {
+    let (_, certificate, _) = der(cert)?;
+    let (_, tbs, _) = der(certificate)?;
+    let mut rest = tbs;
+    /* [0] version: absent in version 1. */
+    if rest.first() == Some(&0xA0) {
+        rest = der(rest)?.2;
+    }
+    /* serial, signature algorithm, issuer, validity, subject. */
+    for _ in 0..5 {
+        rest = der(rest)?.2;
+    }
+    let (_, spki, _) = der(rest)?;
+    let (_, algorithm, after) = der(spki)?;
+    let (_, oid, _) = der(algorithm)?;
+    let (_, bits, _) = der(after)?;
+    /* rsaEncryption 1.2.840.113549.1.1.1 */
+    let rsa = oid == [0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x01];
+    /* A BIT STRING starts with its count of unused bits (0). */
+    Some((rsa, bits.get(1..)?))
+}
+
+/* The handshake signature, checked with the key read by certificate_key
+ * (legacy devices only). 1024-bit RSA: ring's legacy PKCS#1 checks (no
+ * PSS at that size -- such devices are only offered PKCS#1). */
+fn verify_raw(cert: &[u8], message: &[u8], scheme: SignatureScheme, signature: &[u8]) -> bool {
+    use ring::signature as sig;
+    let Some((rsa, key)) = certificate_key(cert) else { return false };
+    let algorithm: &dyn sig::VerificationAlgorithm = match (scheme, rsa) {
+        (SignatureScheme::RSA_PKCS1_SHA256, true) => &sig::RSA_PKCS1_1024_8192_SHA256_FOR_LEGACY_USE_ONLY,
+        (SignatureScheme::RSA_PKCS1_SHA512, true) => &sig::RSA_PKCS1_1024_8192_SHA512_FOR_LEGACY_USE_ONLY,
+        (SignatureScheme::RSA_PKCS1_SHA384, true) => &sig::RSA_PKCS1_2048_8192_SHA384,
+        (SignatureScheme::ECDSA_NISTP256_SHA256, false) => &sig::ECDSA_P256_SHA256_ASN1,
+        (SignatureScheme::ECDSA_NISTP384_SHA384, false) => &sig::ECDSA_P384_SHA384_ASN1,
+        (SignatureScheme::ED25519, false) => &sig::ED25519,
+        _ => return false,
+    };
+    sig::UnparsedPublicKey::new(algorithm, key).verify(message, signature).is_ok()
 }
 
 impl ServerCertVerifier for PinnedCert {
@@ -393,7 +468,12 @@ impl ServerCertVerifier for PinnedCert {
         cert: &CertificateDer<'_>,
         dss: &DigitallySignedStruct,
     ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls12_signature(message, cert, dss, &self.algorithms)
+        match rustls::crypto::verify_tls12_signature(message, cert, dss, &self.algorithms) {
+            Err(_) if self.legacy && verify_raw(cert.as_ref(), message, dss.scheme, dss.signature()) => {
+                Ok(HandshakeSignatureValid::assertion())
+            }
+            other => other,
+        }
     }
 
     fn verify_tls13_signature(
@@ -406,8 +486,141 @@ impl ServerCertVerifier for PinnedCert {
     }
 
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        self.algorithms.supported_schemes()
+        let schemes = self.algorithms.supported_schemes();
+        if !self.legacy {
+            return schemes;
+        }
+        /* Legacy: PKCS#1 only for RSA (a 1024-bit key can't be checked
+         * with PSS here). */
+        schemes
+            .into_iter()
+            .filter(|s| !matches!(s, SignatureScheme::RSA_PSS_SHA256 | SignatureScheme::RSA_PSS_SHA384 | SignatureScheme::RSA_PSS_SHA512))
+            .collect()
     }
+}
+
+/* Issue #43: one plain HTTP POST of any body (ONVIF's SOAP XML); the
+ * reply's body whatever its status -- SOAP errors come as HTTP 400/500
+ * with the reason inside. */
+pub async fn http_request_raw(host: &str, path: &str, content_type: &str, body: Vec<u8>) -> Result<Bytes, NetError> {
+    let unreachable = |e: String| NetError::new(ErrorKind::Unreachable, e);
+    let work = async {
+        let stream = TcpStream::connect(with_port(host, 80))
+            .await
+            .map_err(|e| unreachable(format!("can't reach {host}: {e}")))?;
+        let (mut sender, connection) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
+            .await
+            .map_err(|e| unreachable(format!("{host}: {e}")))?;
+        tokio::spawn(async move {
+            let _ = connection.await;
+        });
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri(path)
+            .header(HOST, host)
+            .header(CONTENT_TYPE, content_type)
+            .body(Full::new(Bytes::from(body)))
+            .map_err(|e| NetError::new(ErrorKind::Unsupported, format!("{host}: {e}")))?;
+        let reply = sender
+            .send_request(request)
+            .await
+            .map_err(|e| unreachable(format!("{host} broke off the reply: {e}")))?;
+        Limited::new(reply.into_body(), MAX_REPLY)
+            .collect()
+            .await
+            .map(|b| b.to_bytes())
+            .map_err(|e| NetError::new(ErrorKind::Unsupported, format!("{host}: bad reply: {e}")))
+    };
+    /* A PullMessages waits up to 20 s by design. */
+    match tokio::time::timeout(Duration::from_secs(30), work).await {
+        Ok(result) => result,
+        Err(_) => Err(NetError::new(ErrorKind::Timeout, format!("{host} isn't answering"))),
+    }
+}
+
+/* Issue #74: one HTTPS POST (a JSON body) to a device whose certificate is
+ * self-signed: pinned like ws_open's -- `expected` None at setup (any
+ * certificate, its fingerprint returned to be saved), Some afterwards
+ * (only that one). Returns the reply's body, its HTTP status and the
+ * fingerprint seen. `headers`: extra ones (a Tapo camera's Seq, Tapo_tag). */
+pub async fn https_pinned(
+    host: &str,
+    port: u16,
+    path: &str,
+    headers: &[(&str, String)],
+    body: Vec<u8>,
+    expected: Option<&str>,
+) -> Result<(Bytes, u16, Option<String>), NetError> {
+    match tokio::time::timeout(HTTP_TIMEOUT, https_pinned_inner(host, port, path, headers, body, expected)).await {
+        Ok(result) => result,
+        Err(_) => Err(NetError::new(
+            ErrorKind::Timeout,
+            format!("{host} isn't answering (no reply within {} s)", HTTP_TIMEOUT.as_secs()),
+        )),
+    }
+}
+
+async fn https_pinned_inner(
+    host: &str,
+    port: u16,
+    path: &str,
+    headers: &[(&str, String)],
+    body: Vec<u8>,
+    expected: Option<&str>,
+) -> Result<(Bytes, u16, Option<String>), NetError> {
+    let unreachable = |e: String| NetError::new(ErrorKind::Unreachable, e);
+    let tcp = TcpStream::connect((host, port))
+        .await
+        .map_err(|e| unreachable(format!("can't reach {host}:{port}: {e}")))?;
+    let verifier = Arc::new(PinnedCert::legacy(expected.map(str::to_string)));
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let config = rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .map_err(|e| unreachable(format!("TLS setup: {e}")))?
+        .dangerous()
+        .with_custom_certificate_verifier(verifier.clone())
+        .with_no_client_auth();
+    let name = ServerName::try_from(host.to_string()).map_err(|e| unreachable(format!("{host}: {e}")))?;
+    let tls = tokio_rustls::TlsConnector::from(Arc::new(config)).connect(name, tcp).await;
+    let seen = verifier.seen.lock().unwrap().clone();
+    let tls = match tls {
+        Ok(tls) => tls,
+        Err(_) if expected.is_some() && seen.is_some() && seen.as_deref() != expected => {
+            return Err(NetError::new(
+                ErrorKind::Refused,
+                format!("{host} presented a different certificate than at setup"),
+            ));
+        }
+        Err(e) => return Err(unreachable(format!("{host}:{port}: TLS failed: {e}"))),
+    };
+    let (mut sender, connection) = hyper::client::conn::http1::handshake(TokioIo::new(tls))
+        .await
+        .map_err(|e| unreachable(format!("{host}: {e}")))?;
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+    let mut builder = Request::builder()
+        .method(Method::POST)
+        .uri(path)
+        .header(HOST, format!("{host}:{port}"))
+        .header(CONTENT_TYPE, "application/json; charset=UTF-8");
+    for (name, value) in headers {
+        builder = builder.header(*name, value);
+    }
+    let request = builder
+        .body(Full::new(Bytes::from(body)))
+        .map_err(|e| NetError::new(ErrorKind::Unsupported, format!("{host}: {e}")))?;
+    let reply = sender
+        .send_request(request)
+        .await
+        .map_err(|e| unreachable(format!("{host} broke off the reply: {e}")))?;
+    let status = reply.status().as_u16();
+    let bytes = Limited::new(reply.into_body(), MAX_REPLY)
+        .collect()
+        .await
+        .map_err(|e| NetError::new(ErrorKind::Unsupported, format!("{host}: bad reply: {e}")))?
+        .to_bytes();
+    Ok((bytes, status, seen))
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -794,5 +1007,40 @@ mod tests {
         let err = http_json(Method::GET, "127.0.0.1:9", "/json", None).await.unwrap_err();
         assert_eq!(err.kind, ErrorKind::Unreachable);
         assert!(err.message.starts_with("can't reach 127.0.0.1:9"), "{err}");
+    }
+}
+
+#[cfg(test)]
+mod legacy_cert_tests {
+    use super::*;
+
+    fn hex(text: &str) -> Vec<u8> {
+        (0..text.len()).step_by(2).map(|i| u8::from_str_radix(&text[i..i + 2], 16).unwrap()).collect()
+    }
+
+    /* The project's Tapo camera's certificate after its firmware update:
+     * X.509 version 1, RSA 1024 -- its key is found. */
+    #[test]
+    fn a_version_1_certificate_key_is_read() {
+        let cam = hex("308201e730820150021330306431313637303739303239646464316400300d06092a864886f70d01010b050030323114301206035504030c0b545052492d444556494345310d300b060355040a0c0454505249310b30090603550406130255533020170d3031303130313030303030305a180f32303730313233313233353935395a30323114301206035504030c0b545052492d444556494345310d300b060355040a0c0454505249310b300906035504061302555330819f300d06092a864886f70d010101050003818d0030818902818100b824a5905d28da6b78f62636cce7cb6628e375c91d981e5160242fa653b829ed03941b8525b238dbc6d7bae791bf228c7b51fcc357de1ff8946614653d22c5d7fa097142a464eee70072baa64da6b87f7de20e91663414de80847638b19db94ee5baba02a17cff82690e32d37a5ffb20036502118c31d34fec4ad47585a81f2f0203010001300d06092a864886f70d01010b050003818100770cc80200ed30eec62e32ad638e9e41cd79c7a098b211c32a47cfaa7e93176765e3ce41a43e04ef2bfd236df1f7d725f46345865bd8d3290d63cf9fe879142fd2b585f6dbbe1bd941ad9c6e7fcff80ecf2ee698e9d981026c00e11ff1b4e814612f325fd936ec4428148f96ebc265c981f2cb112b06cdfe105f4b472d13cf14");
+        let (rsa, key) = certificate_key(&cam).unwrap();
+        assert!(rsa);
+        /* RSAPublicKey: SEQUENCE { modulus, exponent 65537 }. */
+        assert_eq!(key[0], 0x30);
+        assert!(key.ends_with(&[0x02, 0x03, 0x01, 0x00, 0x01]));
+    }
+
+    /* Signatures made with OpenSSL (1024-bit RSA, PKCS#1 SHA-256; EC P-256)
+     * are accepted; a changed message isn't. */
+    #[test]
+    fn legacy_signatures_are_checked() {
+        let message = b"tls handshake message";
+        let (rsa_cert, rsa_sig) = (hex("308201d63082013fa00302010202141b2e1d51cb5333f3107f3eca845b287f52547427300d06092a864886f70d01010b050030163114301206035504030c0b545052492d444556494345301e170d3236313030333233303732355a170d3336303933303233303732355a30163114301206035504030c0b545052492d44455649434530819f300d06092a864886f70d010101050003818d0030818902818100abc68c1d4c61c00e65ce2923929afd2c7139c7211eb3fa5376927165dde525e514b171ec8e6906110311af1ae74310361983f46df928416de1d34f594abfb1f7d74098408e81de3139596deefd822abf72f44c2ad60f5160b0840ac3de758aad888dfb7ad16ee8e1dda0d1e1d68ce1742efcd0e9af572f750389fc5d814c44610203010001a321301f301d0603551d0e0416041424d6c23db100e80a556c35ac3b15908553189b6b300d06092a864886f70d01010b0500038181006184eeeb0bf7ff4b2f187e25ae5a52fd0de38709033090370517b54a38bb6aeee52783757ea188ef5d77610607a5cc49b675396380d2d1ef63ca898f7205f33126a2d84177ef208ecd6d2a3bd5177dd5aafe2140101d2a2e334c6654cd42b6a1cfa9ac871c3f40c93c53b5c9d332a8e6208e353ff087a6d7118499c61a736497"), hex("9bfeba4eff6cdb2058f5fcf397cca23e40f4e7ec2a8842d5f8e0226df5e34797cab691e3fd804abbbd46c60ef6c9384b0d10054a7a85911224c2b96a8b0c07955131a1bb2cc0da1ef4b59287c0286e2421b53fc4ccfe738c9a3b5c3447c726904dff60a4068d2eb32df4b4c8835280369e74c4d40f0bdba1a3b5aed2c8fd9362"));
+        assert!(verify_raw(&rsa_cert, message, SignatureScheme::RSA_PKCS1_SHA256, &rsa_sig));
+        assert!(!verify_raw(&rsa_cert, b"tls handshake massage", SignatureScheme::RSA_PKCS1_SHA256, &rsa_sig));
+        assert!(!verify_raw(&rsa_cert, message, SignatureScheme::RSA_PSS_SHA256, &rsa_sig));
+        let (ec_cert, ec_sig) = (hex("308201633082010aa003020102021419c49aec7b878805b8e095c9bb6e05a23e4c0901300a06082a8648ce3d04030230323114301206035504030c0b545052492d444556494345310d300b060355040a0c0454505249310b3009060355040613025553301e170d3236313030333233303635365a170d3336303933303233303635365a30323114301206035504030c0b545052492d444556494345310d300b060355040a0c0454505249310b30090603550406130255533059301306072a8648ce3d020106082a8648ce3d03010703420004956457ce3b2adbf2219a4af5ee404aafec345911a1427424c669263c398aed240bc03ddad9bffe844b6c7940d7bfde8f46a59d6ba5e8fbbeb0320b75e93073fc300a06082a8648ce3d040302034700304402202ef852b6948162c52cdb3662a8e459111260e2efb3fdb40c672adcd1069c234802201c27018d729acefe6278f7f04a4c9b7a6deaeea6e9315d0055567085006c3f91"), hex("3046022100a8e2f982298448d9b6b5662a4ef72584430d5b818dfe7148b475597129077d10022100cd1e1e318785c636eb928926ead5feb54150f959d89b03ec9f7c854fbd58c3e6"));
+        assert!(verify_raw(&ec_cert, message, SignatureScheme::ECDSA_NISTP256_SHA256, &ec_sig));
+        assert!(!verify_raw(&ec_cert, message, SignatureScheme::RSA_PKCS1_SHA256, &ec_sig));
     }
 }

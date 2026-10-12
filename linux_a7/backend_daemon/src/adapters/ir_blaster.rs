@@ -652,7 +652,10 @@ impl Task {
 
         let mut want: Vec<&str> = Vec::new();
         let mut drop: Vec<&str> = Vec::new();
-        (if light && map.can_switch() { &mut want } else { &mut drop }).push("switch");
+        /* Powered by a plug (issue #99): it keeps its `switch` whatever
+         * its buttons -- the plug is its power (power_link.rs). */
+        let powered = self.light_setting(crate::power_link::POWERED_BY).await.is_some();
+        (if (light && map.can_switch()) || powered { &mut want } else { &mut drop }).push("switch");
         (if light && !map.colors.is_empty() { &mut want } else { &mut drop }).push("color");
         if let Err(e) = self.hub.add_capabilities(&self.id, &want).await {
             println!("ir-blaster: {}: {e}", self.id);

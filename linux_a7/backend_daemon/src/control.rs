@@ -169,6 +169,16 @@ impl Control {
         /* 1. The rules, for every device (the result is thrown away here:
          *    state.rs applies the change itself, below). */
         device::set_capability(&device, capability, value.clone(), Origin::Client)?;
+        /* Issue #99: switching a device that's powered by a plug switches
+         * the plug too (power_link.rs). */
+        if capability == "switch" {
+            if let Some(link) = crate::power_link::link_of(&device) {
+                let on = value["on"].as_bool().unwrap_or(false);
+                /* Boxed: it calls command() again, for the plug. */
+                Box::pin(crate::power_link::switch(self, &device, &link, on)).await?;
+                return self.get(id).await?.ok_or_else(|| format!("{id} disappeared"));
+            }
+        }
         /* 2. Carry it out. */
         if device.source.is_virtual() {
             return self.set(id, capability, value, Origin::Client).await;
@@ -255,6 +265,13 @@ impl Control {
             reply,
         })
         .await?
+    }
+
+    /* Issue #99: forgets some adapter settings (a plug link undone),
+     * without restarting the adapter. */
+    pub async fn remove_config(&self, id: &str, keys: &[&str]) -> Result<Device, String> {
+        let keys = keys.iter().map(|k| k.to_string()).collect();
+        self.ask(|reply| Msg::RemoveConfig { id: id.to_string(), keys, reply }).await?
     }
 
     /* A device's real state, as its adapter reports it (adapters::Hub). */
