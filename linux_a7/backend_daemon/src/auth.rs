@@ -46,6 +46,15 @@ const MAX_WRONG_CODES: u32 = 5;
  * connection would be a flash write otherwise). */
 const LAST_SEEN_SAVE_INTERVAL: u64 = 3600;
 
+/* The kinds of client (issue #106). */
+const KIND_APP: &str = "app";
+const KIND_PANEL: &str = "panel";
+const KINDS: [&str; 2] = [KIND_APP, KIND_PANEL];
+
+fn default_kind() -> String {
+    KIND_APP.to_string()
+}
+
 /* A paired client as stored. */
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 struct Client {
@@ -53,6 +62,11 @@ struct Client {
     name: String,
     /* SHA-256 of its key, hex. The key itself is never stored. */
     token_sha256: String,
+    /* What it is (issue #106): "app" (a phone, a PC tool) or "panel" (a
+     * second touchscreen, ui_layer in panel mode). Clients paired before
+     * #106 have none stored: "app". */
+    #[serde(default = "default_kind")]
+    kind: String,
     /* Unix time (seconds). */
     created: u64,
     last_seen: u64,
@@ -63,6 +77,7 @@ struct Client {
 pub struct ClientInfo {
     pub id: String,
     pub name: String,
+    pub kind: String,
     pub created: u64,
     pub last_seen: u64,
 }
@@ -179,18 +194,29 @@ impl Auth {
     }
 
     /* A client offers `code`. On success it's paired: a new client entry
-     * with a fresh key, which is returned (and never again). */
+     * with a fresh key, which is returned (and never again). As an "app":
+     * the tests' shorthand -- ws.rs uses pair_as. */
+    #[cfg(test)]
     pub fn pair(&self, code: &str, client_name: &str) -> Result<Paired, String> {
-        self.pair_inner(code, client_name, false)
+        self.pair_inner(code, client_name, KIND_APP, false)
+    }
+
+    /* The same, saying what kind of client it is (issue #106: "app" or
+     * "panel"; anything else is refused). */
+    pub fn pair_as(&self, code: &str, client_name: &str, kind: &str) -> Result<Paired, String> {
+        if !KINDS.contains(&kind) {
+            return Err(format!("kind must be one of {}", KINDS.join(", ")));
+        }
+        self.pair_inner(code, client_name, kind, false)
     }
 
     /* Bluetooth setup: the code was already proven by the key exchange
      * (whose attempt was counted in begin_code_attempt). */
     pub fn pair_proven(&self, code: &str, client_name: &str) -> Result<Paired, String> {
-        self.pair_inner(code, client_name, true)
+        self.pair_inner(code, client_name, KIND_APP, true)
     }
 
-    fn pair_inner(&self, code: &str, client_name: &str, proven: bool) -> Result<Paired, String> {
+    fn pair_inner(&self, code: &str, client_name: &str, kind: &str, proven: bool) -> Result<Paired, String> {
         let name = client_name.trim();
         if name.is_empty() || name.chars().count() > 40 || name.chars().any(char::is_control) {
             return Err("client_name must be 1-40 characters".into());
@@ -227,6 +253,7 @@ impl Auth {
             id: id.clone(),
             name: name.to_string(),
             token_sha256: sha256_hex(token.as_bytes()),
+            kind: kind.to_string(),
             created: now,
             last_seen: now,
         });
@@ -338,6 +365,7 @@ fn info(c: &Client) -> ClientInfo {
     ClientInfo {
         id: c.id.clone(),
         name: c.name.clone(),
+        kind: c.kind.clone(),
         created: c.created,
         last_seen: c.last_seen,
     }
@@ -486,6 +514,22 @@ mod tests {
         let (save_tx, _) = watch::channel(Vec::new());
         let restarted = Auth::new(stored, save_tx);
         assert_eq!(restarted.authenticate(&paired.token).unwrap().name, "Phone");
+    }
+
+    /* Issue #106: a wall panel pairs as "panel"; a phone (and anything
+     * paired before #106, stored without a kind) is an "app". */
+    #[test]
+    fn panels_are_told_apart_from_apps() {
+        let (a, _) = auth();
+        let code = a.start_pairing().code.unwrap();
+        assert!(a.pair_as(&code, "Kitchen", "toaster").unwrap_err().contains("kind must be"));
+        let panel = a.pair_as(&code, "Kitchen", "panel").unwrap();
+        assert_eq!(a.authenticate(&panel.token).unwrap().kind, "panel");
+        let old: Client = serde_json::from_value(serde_json::json!({
+            "id": "c-1", "name": "Phone", "token_sha256": "00", "created": 1, "last_seen": 1
+        }))
+        .unwrap();
+        assert_eq!(old.kind, "app");
     }
 
     #[test]

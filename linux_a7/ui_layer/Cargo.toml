@@ -66,6 +66,14 @@ fontique = { version = "0.11", default-features = false, features = ["fontconfig
 # main.rs), so a synchronous WebSocket client on its own thread fits it
 # better than an async one would.
 tungstenite = "0.24"
+# Issue #106: a wall panel talks to the hub over the LAN door,
+# wss://<hub>:8443 (panel.rs): TLS by rustls -- pure Rust, its crypto from
+# `ring`, exactly as backend_daemon does it (same versions: one copy of
+# each in the cargo cache, and ring already cross-compiles for the A7).
+# No certificate authorities: the hub's self-signed certificate is pinned
+# by its SHA-256 fingerprint (ring also does that hash).
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+ring = "0.17"
 
 # JSON (de)serialization for the WebSocket messages -- same crates
 # backend_daemon uses for the same reason: matching its ClientRequest/

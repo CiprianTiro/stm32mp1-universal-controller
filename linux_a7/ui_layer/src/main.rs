@@ -17,6 +17,7 @@ mod display;
 mod ir_finder;
 mod automation_text;
 mod ir_layout;
+mod panel;
 mod pointer;
 mod setup;
 mod theme;
@@ -69,6 +70,174 @@ const DEVICE_MESSAGE_TIME: Duration = Duration::from_secs(4);
 // app.slint on every build.
 slint::include_modules!();
 
+/// Issue #106: the wall panel's own pages (panel.slint) -- connecting to a
+/// hub the first time, and "This panel" in the settings. The slow parts
+/// (finding hubs, the TLS handshake, pairing) run on their own threads;
+/// their results come back to the GUI with invoke_from_event_loop.
+fn setup_panel(ui: &AppWindow, panel_mode: bool, config: &std::sync::Arc<std::sync::Mutex<Option<panel::PanelConfig>>>) {
+    ui.set_panel_mode(panel_mode);
+    if !panel_mode {
+        return;
+    }
+    // The UI's normal screen at once, with "can't reach the hub" if it
+    // can't -- not the hub's "starting" welcome screen (that's about the
+    // hub on this machine).
+    ui.set_ever_connected(true);
+    match config.lock().unwrap().as_ref() {
+        Some(c) => show_panel_paired(ui, c),
+        None => show_panel_unpaired(ui, ""),
+    }
+    // The hub being connected to (step "code"): (host, port, name, full
+    // fingerprint). The screen only shows the short fingerprint.
+    let chosen: std::sync::Arc<std::sync::Mutex<Option<(String, u16, String, String)>>> = Default::default();
+
+    let weak = ui.as_weak();
+    ui.on_panel_search(move || {
+        let Some(ui) = weak.upgrade() else { return };
+        search_hubs(&ui);
+    });
+
+    // A hub picked (found, or typed): read its certificate to compare.
+    let (weak, picked) = (ui.as_weak(), chosen.clone());
+    let choose = std::rc::Rc::new(move |name: String, host: String, port: u16| {
+        let Some(ui) = weak.upgrade() else { return };
+        ui.set_panel_message("".into());
+        ui.set_panel_busy(format!("Connecting to {name}\u{2026}").into());
+        let (weak, picked) = (ui.as_weak(), picked.clone());
+        std::thread::spawn(move || {
+            let result = panel::read_fingerprint(&host, port);
+            let _ = slint::invoke_from_event_loop(move || {
+                let Some(ui) = weak.upgrade() else { return };
+                ui.set_panel_busy("".into());
+                match result {
+                    Ok(fingerprint) => {
+                        ui.set_panel_hub_name(name.clone().into());
+                        ui.set_panel_fingerprint(panel::short_fingerprint(&fingerprint).into());
+                        *picked.lock().unwrap() = Some((host, port, name, fingerprint));
+                        ui.set_panel_typed("".into());
+                        ui.set_panel_step("code".into());
+                    }
+                    Err(e) => ui.set_panel_message(e.into()),
+                }
+            });
+        });
+    });
+    let choose_found = choose.clone();
+    ui.on_panel_choose(move |hub| choose_found(hub.name.to_string(), hub.host.to_string(), hub.port as u16));
+
+    let weak = ui.as_weak();
+    ui.on_panel_type_address(move || {
+        let Some(ui) = weak.upgrade() else { return };
+        ui.set_panel_message("".into());
+        ui.set_panel_typed("".into());
+        ui.set_panel_step("address".into());
+    });
+
+    // A typed address: "192.168.1.140", or with a port "hub.local:9443".
+    let weak = ui.as_weak();
+    ui.on_panel_address_done(move || {
+        let Some(ui) = weak.upgrade() else { return };
+        let typed = ui.get_panel_typed().trim().to_string();
+        let (host, port) = match typed.rsplit_once(':') {
+            Some((host, port)) if port.parse::<u16>().is_ok() => (host.to_string(), port.parse().unwrap()),
+            _ => (typed.clone(), panel::HUB_PORT),
+        };
+        if host.is_empty() {
+            return;
+        }
+        choose(host.clone(), host, port);
+    });
+
+    // The code typed: pair, pinned to the certificate the person saw.
+    let (weak, picked, shared) = (ui.as_weak(), chosen.clone(), config.clone());
+    ui.on_panel_pair(move || {
+        let Some(ui) = weak.upgrade() else { return };
+        let Some((host, port, name, fingerprint)) = picked.lock().unwrap().clone() else { return };
+        let code: String = ui.get_panel_typed().chars().filter(char::is_ascii_digit).collect();
+        if code.is_empty() {
+            return;
+        }
+        ui.set_panel_message("".into());
+        ui.set_panel_busy("Pairing\u{2026}".into());
+        let (weak, shared) = (ui.as_weak(), shared.clone());
+        std::thread::spawn(move || {
+            let result = panel::pair(&host, port, &name, &fingerprint, &code);
+            let _ = slint::invoke_from_event_loop(move || {
+                let Some(ui) = weak.upgrade() else { return };
+                ui.set_panel_busy("".into());
+                match result {
+                    Ok(config) => {
+                        println!("ui_layer: paired with hub {} ({}) as {}", config.hub_name, config.host, config.client_id);
+                        show_panel_paired(&ui, &config);
+                        // ws_client connects as soon as this is set.
+                        *shared.lock().unwrap() = Some(config);
+                    }
+                    Err(e) => {
+                        ui.set_panel_typed("".into());
+                        ui.set_panel_message(e.into());
+                    }
+                }
+            });
+        });
+    });
+
+    let weak = ui.as_weak();
+    ui.on_panel_back(move || {
+        let Some(ui) = weak.upgrade() else { return };
+        ui.set_panel_message("".into());
+        ui.set_panel_typed("".into());
+        ui.set_panel_step("find".into());
+    });
+
+    // "Unpair this panel": forget the hub here (the hub still lists the
+    // panel until it's removed there -- its key is gone from here).
+    let (weak, shared) = (ui.as_weak(), config.clone());
+    ui.on_panel_unpair(move || {
+        let Some(ui) = weak.upgrade() else { return };
+        panel::forget();
+        *shared.lock().unwrap() = None;
+        ui.set_connected(false);
+        ui.set_page(setup::PAGE_DEVICES);
+        show_panel_unpaired(&ui, "");
+    });
+}
+
+/// A panel paired with a hub: its details for "This panel".
+fn show_panel_paired(ui: &AppWindow, config: &panel::PanelConfig) {
+    ui.set_panel_paired(true);
+    ui.set_panel_hub_name(config.hub_name.clone().into());
+    ui.set_panel_hub_address(config.host.clone().into());
+    ui.set_panel_fingerprint(panel::short_fingerprint(&config.fingerprint).into());
+    ui.set_panel_problem("".into());
+}
+
+/// A panel without a hub: the "Connect to a hub" page, searching at once.
+fn show_panel_unpaired(ui: &AppWindow, message: &str) {
+    ui.set_panel_paired(false);
+    ui.set_panel_step("find".into());
+    ui.set_panel_typed("".into());
+    ui.set_panel_message(message.into());
+    search_hubs(ui);
+}
+
+/// Asks the network for hubs (panel.rs, ~2 s) and lists them.
+fn search_hubs(ui: &AppWindow) {
+    ui.set_panel_busy("Looking for hubs on the network\u{2026}".into());
+    let weak = ui.as_weak();
+    std::thread::spawn(move || {
+        let hubs = panel::discover(Duration::from_secs(2));
+        let _ = slint::invoke_from_event_loop(move || {
+            let Some(ui) = weak.upgrade() else { return };
+            ui.set_panel_busy("".into());
+            let items: Vec<HubItem> = hubs
+                .into_iter()
+                .map(|h| HubItem { name: h.name.into(), host: h.host.into(), port: i32::from(h.port) })
+                .collect();
+            ui.set_panel_hubs(std::rc::Rc::new(slint::VecModel::from(items)).into());
+        });
+    });
+}
+
 fn main() {
     // Since issue #59 this process starts very early in boot (see
     // ui-layer.service), so first wait for the real display driver.
@@ -105,7 +274,14 @@ fn main() {
     // awaited inline) and gets back the two channel ends this loop uses:
     // `request_tx` to send requests (commands, WiFi actions), `update_rx`
     // to receive what backend_daemon reports (devices, network, ...).
-    let (request_tx, update_rx) = ws_client::start();
+    //
+    // Issue #106: on a wall panel, the hub it's paired with (None until
+    // it is) -- shared with ws_client, which connects as soon as it's set.
+    let panel_mode = panel::panel_mode();
+    let panel_config = std::sync::Arc::new(std::sync::Mutex::new(if panel_mode { panel::load() } else { None }));
+    let target = if panel_mode { ws_client::Target::Panel(panel_config.clone()) } else { ws_client::Target::Local };
+    let (request_tx, update_rx) = ws_client::start(target);
+    setup_panel(&ui, panel_mode, &panel_config);
 
     // The device list (issue #34): what backend_daemon last reported,
     // turned into the rows app.slint shows. See DeviceRows. Shared (Rc +
@@ -1054,8 +1230,22 @@ fn main() {
                 ws_client::Update::Connected => {
                     ui.set_connected(true);
                     ui.set_ever_connected(true);
-                    // For the settings page's "N devices can control this hub".
-                    let _ = request_tx.send(ws_client::Request::ListClients);
+                    ui.set_panel_problem("".into());
+                    // For the settings page's "N devices can control this
+                    // hub" -- the hub's own screen only (#106).
+                    if !ui.get_panel_mode() {
+                        let _ = request_tx.send(ws_client::Request::ListClients);
+                    }
+                }
+                // Issue #106, a panel: why it can't connect, for the banner
+                // and "This panel".
+                ws_client::Update::HubProblem(why) => ui.set_panel_problem(why.into()),
+                // Issue #106: the hub removed this panel; ws_client already
+                // forgot the pairing. Back to "Connect to a hub".
+                ws_client::Update::PanelRemoved(why) => {
+                    ui.set_connected(false);
+                    ui.set_page(setup::PAGE_DEVICES);
+                    show_panel_unpaired(&ui, &format!("The hub removed this panel ({why}). Connect it again:"));
                 }
                 ws_client::Update::Disconnected => {
                     ui.set_connected(false);

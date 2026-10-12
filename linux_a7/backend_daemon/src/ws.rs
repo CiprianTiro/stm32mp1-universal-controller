@@ -220,6 +220,9 @@ enum ClientRequest {
     Pair {
         code: String,
         client_name: String,
+        /* Issue #106: "panel" for a second touchscreen; default "app". */
+        #[serde(default)]
+        kind: Option<String>,
     },
     Auth {
         token: String,
@@ -987,7 +990,7 @@ async fn handle_message(
             *subscriptions.video = None;
             Next::Send(ServerMessage::Ack)
         }
-        ClientRequest::Pair { code, client_name } => match auth.pair(&code, &client_name) {
+        ClientRequest::Pair { code, client_name, kind } => match auth.pair_as(&code, &client_name, kind.as_deref().unwrap_or("app")) {
             Ok(paired) => {
                 println!("ws.rs: {client_name:?} paired as {} from {}", paired.client_id, session.peer.ip());
                 session.client = auth.authenticate(&paired.token);
