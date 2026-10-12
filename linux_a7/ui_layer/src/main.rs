@@ -16,6 +16,7 @@
 mod display;
 mod ir_finder;
 mod automation_text;
+mod backlight;
 mod ir_layout;
 mod panel;
 mod pointer;
@@ -255,9 +256,18 @@ fn main() {
     let on_monitor = output.as_deref().is_some_and(display::is_external);
     let pointer = std::rc::Rc::new(pointer::Pointer::new(on_monitor));
     let hook_pointer = pointer.clone();
+    // Issue #107: a wall panel's screen dims and turns off when nobody
+    // uses it; a touch on the dark screen only wakes it (backlight.rs).
+    let backlight = std::rc::Rc::new(panel::panel_mode().then(backlight::Backlight::new));
+    let hook_backlight = backlight.clone();
     slint::BackendSelector::new()
         .backend_name("linuxkms".into())
-        .with_libinput_event_hook(move |event| hook_pointer.on_event(event))
+        .with_libinput_event_hook(move |event| {
+            if hook_backlight.as_ref().as_ref().is_some_and(|b| b.on_input(event)) {
+                return true;
+            }
+            hook_pointer.on_event(event)
+        })
         .select()
         .expect("failed to set up Slint's KMS backend");
 
@@ -268,6 +278,25 @@ fn main() {
     // service).
     let ui = AppWindow::new().expect("failed to start the UI on the display (see the ui_layer: lines above for the chosen output)");
     pointer.attach(&ui);
+    // The panel's screen resting (see above): checked once a second; and
+    // every 5 s its temperature for Settings > This panel (#107).
+    let backlight_timer = slint::Timer::default();
+    if backlight.is_some() {
+        let backlight = backlight.clone();
+        let weak = ui.as_weak();
+        let ticks = std::cell::Cell::new(0u32);
+        backlight_timer.start(slint::TimerMode::Repeated, Duration::from_secs(1), move || {
+            if let Some(b) = backlight.as_ref() {
+                b.tick();
+            }
+            ticks.set(ticks.get().wrapping_add(1));
+            if ticks.get() % 5 == 1 {
+                if let Some(ui) = weak.upgrade() {
+                    ui.set_panel_health(panel::health_text().into());
+                }
+            }
+        });
+    }
 
     // Starts ws_client.rs's background thread (see its own doc comment for
     // why this needs to be a separate OS thread rather than something
@@ -541,6 +570,12 @@ fn main() {
     let tx = request_tx.clone();
     ui.on_set_color(move |id, hex| {
         let value = serde_json::json!({ "hex": hex.as_str() });
+        let _ = tx.send(ws_client::Request::Command { id: id.to_string(), capability: "color".into(), value });
+    });
+    // Issue #107: a white by its warmth.
+    let tx = request_tx.clone();
+    ui.on_set_white(move |id, kelvin| {
+        let value = serde_json::json!({ "kelvin": kelvin });
         let _ = tx.send(ws_client::Request::Command { id: id.to_string(), capability: "color".into(), value });
     });
     let tx = request_tx.clone();
@@ -1178,6 +1213,13 @@ fn main() {
         if ui.get_clock_date() != date.as_str() {
             ui.set_clock_date(date.into());
         }
+        // Issue #107: the landscape clock card's pieces.
+        let (greeting, day, night) = zones::clock_card(&clock_settings.borrow().time_zone, now);
+        if ui.get_clock_greeting() != greeting.as_str() || ui.get_clock_day() != day.as_str() || ui.get_clock_night() != night {
+            ui.set_clock_greeting(greeting.into());
+            ui.set_clock_day(day.into());
+            ui.set_clock_night(night);
+        }
     });
     ages_timer.start(slint::TimerMode::Repeated, std::time::Duration::from_secs(30), move || {
         if let Ok(mut rows) = rows_for_ages.try_borrow_mut() {
@@ -1806,6 +1848,12 @@ struct DeviceRows {
     /// The filter chips as last shown, and their model on the screen.
     chips: Vec<FilterChip>,
     chip_model: std::rc::Rc<slint::VecModel<FilterChip>>,
+    /// Issue #107: the landscape home screen's category cards, likewise.
+    categories: Vec<CategoryItem>,
+    category_model: std::rc::Rc<slint::VecModel<CategoryItem>>,
+    /// ...and the room cards.
+    room_cards: Vec<CategoryItem>,
+    room_model: std::rc::Rc<slint::VecModel<CategoryItem>>,
     /// Favourites start selected the first time there are any.
     filter_chosen: bool,
     /// To read the filter, the column count, the theme (weak: see the
@@ -1819,6 +1867,10 @@ impl DeviceRows {
         ui.set_tile_rows(grid.clone().into());
         let chip_model = std::rc::Rc::new(slint::VecModel::default());
         ui.set_filter_chips(chip_model.clone().into());
+        let category_model = std::rc::Rc::new(slint::VecModel::default());
+        ui.set_home_categories(category_model.clone().into());
+        let room_model = std::rc::Rc::new(slint::VecModel::default());
+        ui.set_home_rooms(room_model.clone().into());
         DeviceRows {
             devices: Default::default(),
             templates: Vec::new(),
@@ -1827,6 +1879,10 @@ impl DeviceRows {
             shape: Vec::new(),
             chips: Vec::new(),
             chip_model,
+            categories: Vec::new(),
+            category_model,
+            room_cards: Vec::new(),
+            room_model,
             filter_chosen: false,
             ui: ui.as_weak(),
         }
@@ -1869,7 +1925,13 @@ impl DeviceRows {
             }
         }
         let filter = ui.get_device_filter().to_string();
-        let filter = if chips.iter().any(|c| c.id == filter.as_str()) { filter } else { tiles::ALL.to_string() };
+        // A category (#107) has no chip: it counts while it has devices.
+        let categories = tiles::categories(&all, &self.templates);
+        let known = chips.iter().any(|c| c.id == filter.as_str()) || categories.iter().any(|c| c.id == filter.as_str());
+        let filter = if known { filter } else { tiles::ALL.to_string() };
+        if ui.get_home_category() != "" && filter == tiles::ALL {
+            ui.set_home_category("".into());
+        }
         // Only real changes reach the screen: every change redraws.
         if ui.get_device_filter() != filter.as_str() {
             ui.set_device_filter(filter.as_str().into());
@@ -1888,17 +1950,51 @@ impl DeviceRows {
         }
         self.chips = chips;
 
+        // The landscape home screen's category cards (issue #107).
+        let same_categories = categories.len() == self.categories.len() && categories.iter().zip(&self.categories).all(|(a, b)| a == b);
+        if !same_categories {
+            self.category_model.set_vec(categories.clone());
+            self.categories = categories;
+        }
+        let rooms = tiles::room_cards(&all, &self.templates);
+        if rooms != self.room_cards {
+            self.room_model.set_vec(rooms.clone());
+            self.room_cards = rooms;
+        }
+
+        // The landscape home screen's climate (issue #107), only when it
+        // changed (every change redraws).
+        let (place, temperature, humidity) =
+            tiles::climate(&all).map_or_else(Default::default, |c| (c.place, c.temperature, c.humidity));
+        if ui.get_home_climate() != temperature.as_str() || ui.get_home_humidity() != humidity.as_str() || ui.get_home_climate_place() != place.as_str() {
+            ui.set_home_climate(temperature.into());
+            ui.set_home_humidity(humidity.into());
+            ui.set_home_climate_place(place.into());
+        }
+
         // The grid: each group's heading, then its tiles in rows.
         let columns = ui.get_tile_columns().max(1) as usize;
         let accent = ui.global::<Theme>().get_accent();
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
         let mut rows: Vec<(String, Vec<TileItem>)> = Vec::new();
-        for (heading, group) in tiles::groups(&all, &filter, &self.templates, accent, now) {
-            if !heading.is_empty() {
-                rows.push((heading, Vec::new()));
-            }
-            for chunk in group.chunks(columns) {
+        // Issue #107: the landscape home screen pages its tiles -- no
+        // headings (the room tabs say where you are), and the tiles run on
+        // across rooms so every page is full.
+        let paged = ui.get_tile_paged();
+        let groups = tiles::groups(&all, &filter, &self.templates, accent, now);
+        if paged {
+            let flat: Vec<TileItem> = groups.into_iter().flat_map(|(_, group)| group).collect();
+            for chunk in flat.chunks(columns) {
                 rows.push((String::new(), chunk.to_vec()));
+            }
+        } else {
+            for (heading, group) in groups {
+                if !heading.is_empty() {
+                    rows.push((heading, Vec::new()));
+                }
+                for chunk in group.chunks(columns) {
+                    rows.push((String::new(), chunk.to_vec()));
+                }
             }
         }
         let shape: Vec<(String, Vec<String>)> =

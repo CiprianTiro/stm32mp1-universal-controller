@@ -70,19 +70,87 @@ component NavItem inherits Rectangle {
 }
 
 // The bottom bar: Home, Scenes, Automations, Settings. `current` is the
-// place shown (0-3).
+// place shown (0-3). `vertical` (issue #107, a landscape screen): a rail
+// down the left edge instead -- the height a bar would take is what a
+// landscape screen has least of.
 export component NavBar inherits Rectangle {
     in property <int> current;
+    in property <bool> vertical: false;
+    // Issue #107, the rail: the hub's connection at its foot -- a green
+    // dot, or red and "Offline" when the hub can't be reached.
+    in property <bool> online: true;
     callback go(int);
 
     background: Theme.surface;
-    // A hairline above it.
+    // A hairline above it (on its right as a rail).
     Rectangle {
+        x: vertical ? parent.width - 1px : 0;
         y: 0;
-        height: 1px;
+        width: vertical ? 1px : parent.width;
+        height: vertical ? parent.height : 1px;
         background: Theme.outline;
     }
-    HorizontalLayout {
+    if vertical: VerticalLayout {
+        alignment: center;
+        spacing: Theme.space-l;
+        NavItem {
+            height: 64px;
+            icon: "home";
+            label: "Home";
+            current: root.current == 0;
+            clicked => {
+                root.go(0);
+            }
+        }
+        NavItem {
+            height: 64px;
+            icon: "scenes";
+            label: "Scenes";
+            current: root.current == 1;
+            clicked => {
+                root.go(1);
+            }
+        }
+        NavItem {
+            height: 64px;
+            icon: "automation";
+            label: "Rules";
+            current: root.current == 2;
+            clicked => {
+                root.go(2);
+            }
+        }
+        NavItem {
+            height: 64px;
+            icon: "settings";
+            label: "Settings";
+            current: root.current == 3;
+            clicked => {
+                root.go(3);
+            }
+        }
+    }
+    if vertical: VerticalLayout {
+        y: parent.height - self.height - Theme.space-l;
+        height: self.preferred-height;
+        spacing: Theme.space-xxs;
+        HorizontalLayout {
+            alignment: center;
+            Rectangle {
+                width: 10px;
+                height: 10px;
+                border-radius: 5px;
+                background: root.online ? Theme.ok : Theme.error;
+            }
+        }
+        Text {
+            text: root.online ? "Hub" : "Offline";
+            color: root.online ? Theme.text-muted : Theme.error;
+            font-size: Theme.font-caption;
+            horizontal-alignment: center;
+        }
+    }
+    if !vertical: HorizontalLayout {
         padding-top: Theme.space-xs;
         padding-bottom: Theme.space-xs;
         NavItem {
@@ -116,6 +184,121 @@ export component NavBar inherits Rectangle {
             clicked => {
                 root.go(3);
             }
+        }
+    }
+}
+
+// Issue #107: a scene on the landscape home screen -- a full-width
+// rounded button: its sparkle in an accent circle, its name, a small play
+// mark at the end. `running`: waiting for it to finish (the play mark
+// becomes "...").
+export component SceneButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> running;
+    callback clicked();
+
+    height: 52px;
+    border-radius: Theme.radius-medium * 2;
+    background: touch.pressed || running ? Theme.surface-pressed : Theme.surface;
+    animate background { duration: 150ms; }
+    HorizontalLayout {
+        padding-left: Theme.space-s;
+        padding-right: Theme.space-m;
+        spacing: Theme.space-m;
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 36px;
+                height: 36px;
+                border-radius: self.height / 2;
+                background: Theme.accent.mix(Theme.surface, 0.25);
+                Icon {
+                    width: 20px;
+                    height: 20px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    kind: "scenes";
+                    color: Theme.accent;
+                }
+            }
+        }
+        Text {
+            horizontal-stretch: 1;
+            text: root.text;
+            color: Theme.text;
+            font-size: Theme.font-body;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        VerticalLayout {
+            alignment: center;
+            if !running: Icon {
+                width: 18px;
+                height: 18px;
+                kind: "play";
+                color: Theme.text-muted;
+            }
+            if running: Text {
+                text: "\u{2026}";
+                color: Theme.text-muted;
+                font-size: Theme.font-body;
+            }
+        }
+    }
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// Issue #107: a scene on the landscape home screen's left side -- a small
+// rounded tile (two per row): its sparkle in an accent circle, top left,
+// and its name at the bottom. While it runs: the circle fills and the
+// name says so.
+export component SceneTile inherits Rectangle {
+    in property <string> text;
+    in property <bool> running;
+    callback clicked();
+
+    border-radius: Theme.radius-medium * 2;
+    background: touch.pressed ? Theme.surface-pressed
+        : running ? Theme.accent.mix(Theme.surface, 0.18) : Theme.surface;
+    animate background { duration: 150ms; }
+    // Compact: the sparkle beside the name (two rows fit under the clock).
+    HorizontalLayout {
+        padding-left: Theme.space-s;
+        padding-right: Theme.space-s;
+        spacing: Theme.space-s;
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 30px;
+                height: 30px;
+                border-radius: self.height / 2;
+                background: running ? Theme.accent : Theme.accent.mix(Theme.surface, 0.22);
+                Icon {
+                    width: 18px;
+                    height: 18px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    kind: "scenes";
+                    color: running ? Theme.on-accent : Theme.accent;
+                }
+            }
+        }
+        Text {
+            horizontal-stretch: 1;
+            text: running ? root.text + " \u{2026}" : root.text;
+            color: Theme.text;
+            font-size: Theme.font-body;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
         }
     }
 }
@@ -181,6 +364,20 @@ export component BigLevel inherits Rectangle {
     property <int> drag-level: -1;
     property <int> pending: -1;
     property <int> shown: drag-level >= 0 ? drag-level : (pending >= 0 ? pending : level);
+    // Issue #107: the light follows the finger WHILE it's down (as in
+    // Apple Home and the phone app): where the finger is, every 150 ms at
+    // most -- never a request per pixel.
+    property <int> live-sent: -1;
+    Timer {
+        interval: 150ms;
+        running: drag-level >= 0;
+        triggered => {
+            if (drag-level != live-sent && drag-level != level) {
+                live-sent = drag-level;
+                set(drag-level);
+            }
+        }
+    }
 
     changed level => {
         pending = -1;
@@ -235,16 +432,119 @@ export component BigLevel inherits Rectangle {
             if (event.kind == PointerEventKind.down) {
                 drag-level = level-at(self.mouse-x);
             } else if (event.kind == PointerEventKind.up) {
-                if (drag-level >= 0 && drag-level != level) {
+                if (drag-level >= 0 && drag-level != level && drag-level != live-sent) {
                     pending = drag-level;
                     set(drag-level);
+                } else if (drag-level >= 0) {
+                    pending = drag-level;
                 }
                 drag-level = -1;
+                live-sent = -1;
             }
         }
         moved => {
             if (self.pressed) {
                 drag-level = level-at(self.mouse-x);
+            }
+        }
+    }
+}
+
+// Issue #107: the landscape screen's brightness -- a tall pill filled from
+// the bottom in the light's colour, the level and a bulb on it (the phone
+// app's control, Apple Home's). Like BigLevel it follows the finger and
+// sends while it moves (every 150 ms at most), then once more on release.
+export component PillLevel inherits Rectangle {
+    in property <int> level;
+    in property <color> tint: Theme.accent;
+    in property <color> on-tint: Theme.on-accent;
+    in property <bool> enabled: true;
+    callback set(int);
+
+    property <int> drag-level: -1;
+    property <int> pending: -1;
+    property <int> live-sent: -1;
+    property <int> shown: drag-level >= 0 ? drag-level : (pending >= 0 ? pending : level);
+    changed level => {
+        pending = -1;
+    }
+    Timer {
+        interval: 2s;
+        running: pending >= 0;
+        triggered => {
+            pending = -1;
+        }
+    }
+    Timer {
+        interval: 150ms;
+        running: drag-level >= 0;
+        triggered => {
+            if (drag-level != live-sent && drag-level != level) {
+                live-sent = drag-level;
+                set(drag-level);
+            }
+        }
+    }
+
+    property <length> radius: self.width * 0.32;
+    property <length> fill: self.height * max(shown, 0) / 100;
+    property <color> fill-color: enabled ? root.tint : Theme.text-muted.mix(Theme.surface, 0.5);
+    border-radius: radius;
+    background: Theme.surface;
+    // The filled part, from the bottom: a rounded piece for the bottom
+    // corners and a square one above it (the software renderer doesn't
+    // round what a rounded parent clips).
+    if fill > 0: Rectangle {
+        y: parent.height - self.height;
+        height: min(fill, 2 * radius);
+        border-radius: radius;
+        background: fill-color;
+    }
+    if fill > radius: Rectangle {
+        y: parent.height - fill;
+        height: fill - radius;
+        background: fill-color;
+    }
+    VerticalLayout {
+        alignment: end;
+        padding-bottom: Theme.space-l;
+        spacing: Theme.space-xs;
+        Text {
+            text: shown + " %";
+            color: shown > 14 && enabled ? root.on-tint : Theme.text;
+            font-size: Theme.font-title;
+            horizontal-alignment: center;
+        }
+        HorizontalLayout {
+            alignment: center;
+            Icon {
+                kind: "light";
+                color: shown > 14 && enabled ? root.on-tint : Theme.text-muted;
+            }
+        }
+    }
+    TouchArea {
+        enabled: root.enabled;
+        function level-at(y: length) -> int {
+            return max(1, min(100, round((1 - y / self.height) * 100)));
+        }
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.down) {
+                drag-level = level-at(self.mouse-y);
+            } else if (event.kind == PointerEventKind.up) {
+                if (drag-level >= 0 && drag-level != level && drag-level != live-sent) {
+                    set(drag-level);
+                }
+                if (drag-level >= 0) {
+                    pending = drag-level;
+                }
+                drag-level = -1;
+                live-sent = -1;
+            }
+        }
+        moved => {
+            if (self.pressed) {
+                drag-level = level-at(self.mouse-y);
             }
         }
     }

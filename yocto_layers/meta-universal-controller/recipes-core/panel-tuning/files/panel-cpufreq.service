@@ -1,0 +1,15 @@
+# Issue #107 (heat): the CPU's clock follows the load ("ondemand"): at
+# rest it stays at arm_freq_min (config.txt: 600 MHz), and goes up to
+# arm_freq (1000 MHz) only while there's work -- drawing a page, a TLS
+# handshake. The cpufreq driver may come up a moment after this unit:
+# it waits up to 10 s for it.
+[Unit]
+Description=Wall panel: CPU clock follows the load (ondemand)
+After=systemd-modules-load.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'g=/sys/devices/system/cpu/cpufreq/policy0/scaling_governor; for i in $(seq 50); do if [ -w "$g" ]; then echo ondemand > "$g"; echo "panel-cpufreq: governor $(cat "$g")"; exit 0; fi; sleep 0.2; done; echo "panel-cpufreq: no cpufreq driver, left as it is"'
+
+[Install]
+WantedBy=multi-user.target

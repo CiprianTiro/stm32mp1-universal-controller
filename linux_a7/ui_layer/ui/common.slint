@@ -7,6 +7,7 @@
 // purpose, fixes both everywhere.
 
 import { Theme } from "theme.slint";
+import { Icon } from "icons.slint";
 
 // The UI's button (issue #39), in place of std-widgets' Button, which
 // doesn't follow the theme (its own colors, a smaller font). Same
@@ -60,10 +61,19 @@ export component PageHeader inherits HorizontalLayout {
     callback back();
     spacing: Theme.space-l;
     height: Theme.touch-height;
-    HeaderButton {
-        text: "< Back";
-        clicked => {
-            root.back();
+    // Back: a round arrow, like the home screen's round buttons (#107).
+    Rectangle {
+        width: self.height;
+        border-radius: self.height / 2;
+        background: back-touch.pressed ? Theme.surface-pressed : Theme.surface;
+        Icon {
+            kind: "back";
+            color: Theme.text;
+        }
+        back-touch := TouchArea {
+            clicked => {
+                root.back();
+            }
         }
     }
     Text {

@@ -1,0 +1,25 @@
+# WiFi (wlan0) for systemd-networkd (issue #61). wpa_supplicant joins the
+# network; networkd then gets an address over DHCP, like for Ethernet.
+#
+# The route metrics decide which link carries traffic when BOTH are up:
+# lower wins. Ethernet's is 10 (80-wired.network, from systemd), WiFi's is
+# 20 -- so the cable is used while it's plugged in, and WiFi, already
+# connected as a hot spare, takes over the moment the cable is pulled (the
+# kernel drops a link's routes when it loses carrier). No script decides
+# anything; it's plain routing.
+[Match]
+Name=wlan0
+
+[Network]
+DHCP=yes
+
+[DHCP]
+RouteMetric=20
+UseMTU=yes
+ClientIdentifier=mac
+
+# IPv6 routes learned from router advertisements default to metric 1024 on
+# every link, which would make both links equal. 2048 keeps WiFi second for
+# IPv6 too.
+[IPv6AcceptRA]
+RouteMetric=2048

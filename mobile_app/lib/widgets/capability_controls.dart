@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import '../hub/device.dart';
 import '../hub/hub_store.dart';
 import '../theme/tokens.dart';
+import 'hero_controls.dart' show LiveSender;
 
 part 'device_extras.dart';
 
@@ -131,10 +132,11 @@ class _SwitchControl extends StatelessWidget {
 
 // ---- dimmer ----
 
-/// A slider that follows the finger locally and sends once, on release:
-/// a request per pixel of drag would flood the device.
+/// A slider that follows the finger locally and sends on release -- and,
+/// with [onLive], also during the drag at a pace the device can take
+/// (hero_controls.dart's LiveSender: never a request per pixel).
 class _LevelSlider extends StatefulWidget {
-  const _LevelSlider({required this.value, required this.onCommit, this.divisions, this.label});
+  const _LevelSlider({required this.value, required this.onCommit, this.onLive, this.divisions, this.label});
 
   /// 0..100, the range of every level in the protocol (dimmer, cover
   /// position, volume).
@@ -144,6 +146,7 @@ class _LevelSlider extends StatefulWidget {
   final int? divisions;
   final String Function(double)? label;
   final ValueChanged<double> onCommit;
+  final Future<void> Function(int)? onLive;
 
   @override
   State<_LevelSlider> createState() => _LevelSliderState();
@@ -151,6 +154,7 @@ class _LevelSlider extends StatefulWidget {
 
 class _LevelSliderState extends State<_LevelSlider> {
   double? _dragging;
+  late final LiveSender _live = LiveSender((v) => widget.onLive?.call(v) ?? Future.value());
 
   @override
   Widget build(BuildContext context) {
@@ -161,8 +165,12 @@ class _LevelSliderState extends State<_LevelSlider> {
       max: _LevelSlider.max,
       divisions: widget.divisions,
       label: widget.label?.call(v) ?? '${v.round()} %',
-      onChanged: (x) => setState(() => _dragging = x),
+      onChanged: (x) {
+        setState(() => _dragging = x);
+        if (widget.onLive != null) _live.offer(x.round());
+      },
       onChangeEnd: (x) {
+        _live.stop();
         setState(() => _dragging = null);
         widget.onCommit(x);
       },
@@ -184,6 +192,8 @@ class _DimmerControl extends StatelessWidget {
       child: _LevelSlider(
         value: level.toDouble(),
         divisions: 100,
+        // The light follows the finger (Apple Home style).
+        onLive: (v) => hub.command(device.id, 'dimmer', {'level': v}),
         onCommit: (v) => runRequest(context, () => hub.command(device.id, 'dimmer', {'level': v.round()})),
       ),
     );
@@ -525,6 +535,8 @@ class _MediaControl extends StatelessWidget {
                 value: volume.toDouble(),
                 divisions: 100,
                 label: (v) => '${v.round()}',
+                // The TV's volume follows the finger too.
+                onLive: (v) => hub.command(device.id, 'media', {'volume': v, 'muted': muted, 'input': input}),
                 onCommit: (v) => send(v: v.round()),
               ),
             ),

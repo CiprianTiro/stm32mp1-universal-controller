@@ -1,0 +1,5 @@
+# Issue #107: the wall panel's UI (user hubui, group video) dims and turns
+# off the screen's backlight when nobody uses it (ui_layer's backlight.rs).
+# Only these two files of the backlight device become writable for the
+# group; everything else in sysfs stays root's.
+SUBSYSTEM=="backlight", ACTION=="add", RUN+="/bin/chgrp video /sys%p/brightness /sys%p/bl_power", RUN+="/bin/chmod g+w /sys%p/brightness /sys%p/bl_power"

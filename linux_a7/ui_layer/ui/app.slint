@@ -22,9 +22,9 @@ import "../fonts/DejaVuSans.ttf";
 import { Theme, Splash, Glyphs } from "theme.slint";
 import { HeaderButton } from "common.slint";
 import { DeviceItem, MediaInputItem, ColorChip, DeviceRow, ModeItem } from "devices.slint";
-import { TileItem, TileRow, FilterChip, TileGrid, FilterBar } from "tiles.slint";
+import { TileItem, TileRow, FilterChip, TileGrid, FilterBar, CategoryItem, CategoryGrid } from "tiles.slint";
 import { Icon } from "icons.slint";
-import { IconButton, NavBar, SceneChip, BigLevel } from "home.slint";
+import { IconButton, NavBar, SceneChip, SceneButton, SceneTile, BigLevel, PillLevel } from "home.slint";
 import { TemplateItem, FoundItem, FieldItem, ChoiceItem, VariantItem, AddDevicePage, WizardPage, DevicePage } from "wizard.slint";
 import { RemoteItem, RemotePage } from "remote.slint";
 import { IrRemotePage, IrKeyItem, IrRow } from "ir_remote.slint";
@@ -115,7 +115,8 @@ export component AppWindow inherits Window {
     in property <[FilterChip]> filter-chips;
     in-out property <string> device-filter: "all";
     // Tiles side by side: 2 on the touchscreen, 3 at 800x600, 4 wider.
-    out property <int> tile-columns: root.width < 600px ? 2 : root.width < 1000px ? 3 : 4;
+    out property <int> tile-columns: wide ? (home-grid-width < 420px ? 2 : home-grid-width < 640px ? 3 : 4)
+        : root.width < 600px ? 2 : root.width < 1000px ? 3 : 4;
     // The device whose controls page (page 20) is open: its full card
     // (devices.slint's DeviceRow), and whether it's a favourite.
     in property <DeviceItem> controls-item;
@@ -129,6 +130,26 @@ export component AppWindow inherits Window {
     // Friday 3 October", set by main.rs in the hub's time zone.
     in property <string> clock-time;
     in property <string> clock-date;
+    // Issue #107: the landscape clock card's pieces (zones.rs clock_card):
+    // "Good evening", "Friday, 2 October", night (a moon, not a sun).
+    in property <string> clock-greeting;
+    in property <string> clock-day;
+    in property <bool> clock-night;
+    // Issue #107: the room's temperature and humidity ("21.5 °C   48 %")
+    // and where they're measured, for the landscape home screen.
+    in property <string> home-climate;
+    in property <string> home-climate-place;
+    // ...the humidity on its own ("48 %"; "" = not measured).
+    in property <string> home-humidity;
+    // The category cards (tiles.rs categories()), and the one open ("" =
+    // the cards themselves; else its filter id, "cat:lights").
+    in property <[CategoryItem]> home-categories;
+    in-out property <string> home-category;
+    in-out property <string> home-category-name;
+    // The other way to look at the house: a card per room; and which
+    // view the home screen shows ("categories" / "rooms").
+    in property <[CategoryItem]> home-rooms;
+    in-out property <string> home-view: "categories";
 
     // The mouse pointer (issue #38), drawn by this file at the bottom:
     // Slint's software renderer doesn't draw one by itself. main.rs follows
@@ -171,6 +192,7 @@ export component AppWindow inherits Window {
     in property <string> panel-fingerprint;
     // Why it can't connect right now (ws_client's HubProblem).
     in property <string> panel-problem;
+    in property <string> panel-health;
     in-out property <string> panel-typed;
     callback panel-search();
     callback panel-choose(HubItem);
@@ -273,6 +295,10 @@ export component AppWindow inherits Window {
     callback save-location(string);
     // Where the location page goes back to (Settings or the editor).
     in-out property <int> location-back: 4;
+    // Where Back leads from Scenes and Automations: the page they were
+    // opened from (Home, or Settings).
+    in-out property <int> scenes-back: 0;
+    in-out property <int> automations-back: 0;
     in-out property <string> clients-message;
     // The pairing screen, filled in by main.rs (see PairingPage).
     in property <string> pairing-state;
@@ -369,6 +395,7 @@ export component AppWindow inherits Window {
     // Issue #85: an IR light's colour chip, and its brightness -/+ (a
     // press of that device's remote button).
     callback set-color(string, string);
+    callback set-white(string, int);
     callback device-press(string, string);
 
     // ---- Adding and setting up devices (issue #40, wizard.slint) -------
@@ -519,9 +546,414 @@ export component AppWindow inherits Window {
     // device, drawn from its capabilities (devices.slint).
     // Issue #95: the bottom bar's height on the four main places (Home,
     // Scenes, Automations, Settings), 0 elsewhere.
-    property <length> nav-height: (page == 0 || page == 4 || page == 14 || page == 16) && ever-connected ? 68px : 0px;
+    property <bool> main-place: (page == 0 || page == 4 || page == 14 || page == 16) && ever-connected;
+    // The menu: a bar at the bottom -- not on a landscape screen (#107),
+    // where the home screen's top right has Scenes, Automations and
+    // Settings as round buttons, and every other page its Back.
+    property <length> nav-height: main-place && !wide ? 68px : 0px;
 
-    if page == 0: VerticalLayout {
+    // Issue #107: a LANDSCAPE screen -- the wall panel's 800 x 480, an
+    // HDMI monitor. The four main places become a rail on the left (a
+    // bottom bar takes the height a landscape screen has least of), and
+    // the home page has two columns: the time, the room's climate and the
+    // scenes on the left -- calm, readable from across the room -- and big
+    // tiles on the right. The DK2's portrait touchscreen keeps one column.
+    property <bool> wide: root.width > root.height;
+    // (No rail any more: the home screen's menu is in its left column,
+    // the other pages' at the bottom. Kept at 0 for the pages' layout.)
+    property <length> rail-width: 0px;
+    property <length> home-left-width: wide ? clamp(root.width * 0.36, 250px, 420px) : 0px;
+    property <length> home-grid-width: root.width - home-left-width - 3 * Theme.space-l;
+
+    // The four main places, from any menu.
+    function go-place(place: int) {
+        if (place == 0) {
+            device-back = 0;
+            page = 0;
+            // Home again: the category cards (#107).
+            if (root.home-category != "") {
+                root.home-category = "";
+                root.pick-filter("all");
+            }
+        } else if (place == 1) {
+            root.scenes-back = 0;
+            root.open-scenes();
+        } else if (place == 2) {
+            root.automations-back = 0;
+            root.open-automations();
+        } else {
+            page = 4;
+        }
+    }
+    // The landscape tiles come in pages, no scrolling (#107): as many rows
+    // of big tiles (136 px) as fit under the room tabs, above the dots.
+    // main.rs reads tile-paged to leave out the room headings.
+    out property <bool> tile-paged: wide;
+    property <int> tile-rows-per-page: max(1, floor((root.height - 2 * Theme.space-l - 52px - 20px - 2 * Theme.space-s + Theme.space-s) / (136px + Theme.space-s)));
+    property <int> tile-page: 0;
+    changed device-filter => {
+        tile-page = 0;
+    }
+
+    // Issue #107: the landscape home screen's background -- a soft glow of
+    // the accent from the top left, so it reads as a wall display rather
+    // than a settings menu.
+    if page == 0 && wide: Rectangle {
+        x: rail-width;
+        width: parent.width - rail-width;
+        height: parent.height;
+        background: @linear-gradient(150deg, Theme.accent.mix(Theme.background, 0.10) 0%, Theme.background 55%);
+    }
+    if page == 0 && wide: HorizontalLayout {
+        x: rail-width;
+        y: 0;
+        width: parent.width - rail-width;
+        height: parent.height;
+        padding: Theme.space-l;
+        spacing: Theme.space-l;
+
+        // Left (#107): the clock card -- greeting, time, date, and the
+        // room's temperature and humidity -- then the scenes as small
+        // tiles, two per row.
+        VerticalLayout {
+            width: home-left-width;
+            spacing: Theme.space-m;
+            Rectangle {
+                height: clock-card.preferred-height;
+                border-radius: Theme.radius-medium * 3;
+                background: Theme.surface.mix(Theme.background, 0.55);
+                clock-card := VerticalLayout {
+                    padding: Theme.space-l;
+                    padding-bottom: Theme.space-m;
+                    spacing: Theme.space-xxs;
+                    HorizontalLayout {
+                        spacing: Theme.space-xs;
+                        VerticalLayout {
+                            alignment: center;
+                            Icon {
+                                width: 18px;
+                                height: 18px;
+                                kind: root.clock-night ? "night" : "sun";
+                                color: Theme.accent;
+                            }
+                        }
+                        Text {
+                            horizontal-stretch: 1;
+                            text: root.clock-greeting;
+                            color: Theme.text-muted;
+                            font-size: Theme.font-body;
+                            vertical-alignment: center;
+                        }
+                        // The hub's connection: a green dot, or red
+                        // "Offline".
+                        HorizontalLayout {
+                            spacing: Theme.space-xs;
+                            VerticalLayout {
+                                alignment: center;
+                                Rectangle {
+                                    width: 10px;
+                                    height: 10px;
+                                    border-radius: 5px;
+                                    background: root.connected ? Theme.ok : Theme.error;
+                                }
+                            }
+                            if !root.connected: Text {
+                                text: "Offline";
+                                color: Theme.error;
+                                font-size: Theme.font-caption;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                    Text {
+                        text: root.clock-time;
+                        color: Theme.text;
+                        font-size: Theme.font-clock;
+                    }
+                    Text {
+                        text: root.clock-day;
+                        color: Theme.text;
+                        font-size: Theme.font-subtitle;
+                        overflow: elide;
+                    }
+                    if root.home-climate != "": VerticalLayout {
+                        padding-top: Theme.space-m;
+                        spacing: Theme.space-s;
+                        Rectangle {
+                            height: 1px;
+                            background: Theme.outline;
+                        }
+                        // The temperature as a headline, the humidity beside it.
+                        HorizontalLayout {
+                            spacing: Theme.space-l;
+                            alignment: start;
+                            HorizontalLayout {
+                                spacing: Theme.space-xs;
+                                VerticalLayout {
+                                    alignment: center;
+                                    Icon {
+                                        width: 32px;
+                                        height: 32px;
+                                        kind: "sensor";
+                                        color: Theme.accent;
+                                    }
+                                }
+                                Text {
+                                    text: root.home-climate;
+                                    color: Theme.text;
+                                    font-size: Theme.font-display;
+                                    vertical-alignment: center;
+                                }
+                            }
+                            if root.home-humidity != "": HorizontalLayout {
+                                spacing: Theme.space-xs;
+                                VerticalLayout {
+                                    alignment: center;
+                                    Icon {
+                                        kind: "humidity";
+                                        color: Theme.accent;
+                                    }
+                                }
+                                Text {
+                                    text: root.home-humidity;
+                                    color: Theme.text-muted;
+                                    font-size: Theme.font-title;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                        Text {
+                            text: root.home-climate-place;
+                            color: Theme.text-muted;
+                            font-size: Theme.font-caption;
+                            overflow: elide;
+                        }
+                    }
+                }
+            }
+            if !connected: Text {
+                text: root.panel-mode && root.panel-problem != "" ? "Can't reach the hub: " + root.panel-problem
+                    : "Connection to the hub lost, reconnecting\u{2026}";
+                color: Theme.error;
+                font-size: Theme.font-caption;
+                wrap: word-wrap;
+            }
+            if device-message != "": Text {
+                text: device-message;
+                color: device-message-ok ? Theme.ok : Theme.error;
+                font-size: Theme.font-caption;
+                wrap: word-wrap;
+            }
+            // The scenes: a heading with "All" (the Scenes page), then the
+            // tiles; they scroll only when there are more than fit.
+            if scenes.length > 0: HorizontalLayout {
+                padding-top: Theme.space-xs;
+                Text {
+                    horizontal-stretch: 1;
+                    text: "Scenes";
+                    color: Theme.text;
+                    font-size: Theme.font-subtitle;
+                }
+                Text {
+                    text: "All \u{203A}";
+                    color: Theme.accent;
+                    font-size: Theme.font-body;
+                    vertical-alignment: center;
+                    TouchArea {
+                        clicked => {
+                            root.go-place(1);
+                        }
+                    }
+                }
+            }
+            Flickable {
+                vertical-stretch: 1;
+                property <length> gap: Theme.space-s;
+                property <length> tile-width: (self.width - gap) / 2;
+                property <length> tile-height: 52px;
+                content-height: max(self.height, ceil(scenes.length / 2) * (tile-height + gap));
+                for scene[i] in scenes: SceneTile {
+                    x: mod(i, 2) * (parent.tile-width + parent.gap);
+                    y: floor(i / 2) * (parent.tile-height + parent.gap);
+                    width: parent.tile-width;
+                    height: parent.tile-height;
+                    text: scene.name;
+                    running: scene-running == scene.id;
+                    clicked => {
+                        root.run-scene(scene.id);
+                    }
+                }
+            }
+        }
+
+        // Right: the category cards -- or, once one is open, its devices.
+        VerticalLayout {
+            spacing: Theme.space-s;
+            HorizontalLayout {
+                // Finger-sized (#107): 52 px, about 9 mm on the panel at 0.8;
+                // at 40 px the switch and + were hard to hit near the edge.
+                height: 52px;
+                spacing: Theme.space-s;
+                if home-category != "": Rectangle {
+                    width: 52px;
+                    border-radius: self.height / 2;
+                    background: back-touch.pressed ? Theme.surface-pressed : Theme.surface;
+                    Icon {
+                        kind: "back";
+                        color: Theme.text;
+                    }
+                    back-touch := TouchArea {
+                        clicked => {
+                            root.home-category = "";
+                            root.pick-filter("all");
+                        }
+                    }
+                }
+                // On the cards: Categories | Rooms.
+                if home-category == "" && home-rooms.length > 0: Rectangle {
+                    width: view-row.preferred-width + 8px;
+                    border-radius: self.height / 2;
+                    background: Theme.surface;
+                    view-row := HorizontalLayout {
+                        x: 4px;
+                        padding-top: 4px;
+                        padding-bottom: 4px;
+                        for v in [{id: "categories", label: "Categories"}, {id: "rooms", label: "Rooms"}]: Rectangle {
+                            width: view-label.preferred-width + 2 * Theme.space-l;
+                            border-radius: self.height / 2;
+                            background: home-view == v.id ? Theme.accent : transparent;
+                            view-label := Text {
+                                text: v.label;
+                                color: home-view == v.id ? Theme.on-accent : Theme.text;
+                                font-size: Theme.font-body;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                            TouchArea {
+                                clicked => {
+                                    root.home-view = v.id;
+                                }
+                            }
+                        }
+                    }
+                }
+                Text {
+                    horizontal-stretch: 1;
+                    text: home-category == "" ? "" : home-category-name;
+                    color: Theme.text;
+                    font-size: Theme.font-title;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                // All the lights off: a pill like the buttons around it.
+                if home-category == "cat:lights": Rectangle {
+                    width: all-off-row.preferred-width;
+                    border-radius: self.height / 2;
+                    background: all-off-touch.pressed ? Theme.surface-pressed : Theme.surface;
+                    all-off-row := HorizontalLayout {
+                        padding-left: Theme.space-m;
+                        padding-right: Theme.space-l;
+                        spacing: Theme.space-xs;
+                        VerticalLayout {
+                            alignment: center;
+                            Icon {
+                                width: 20px;
+                                height: 20px;
+                                kind: "power-button";
+                                color: Theme.text;
+                            }
+                        }
+                        Text {
+                            text: "All off";
+                            color: Theme.text;
+                            font-size: Theme.font-body;
+                            vertical-alignment: center;
+                        }
+                    }
+                    all-off-touch := TouchArea {
+                        clicked => {
+                            root.all-off();
+                        }
+                    }
+                }
+                // The other main places (#107): Scenes, Automations,
+                // Settings as round buttons -- the home screen is Home.
+                if home-category == "": HorizontalLayout {
+                    spacing: Theme.space-s;
+                    for place in [{n: 1, icon: "scenes"}, {n: 2, icon: "automation"}, {n: 3, icon: "settings"}]: Rectangle {
+                        width: 52px;
+                        border-radius: self.height / 2;
+                        background: place-touch.pressed ? Theme.surface-pressed : Theme.surface;
+                        Icon {
+                            kind: place.icon;
+                            color: Theme.text;
+                        }
+                        place-touch := TouchArea {
+                            clicked => {
+                                root.go-place(place.n);
+                            }
+                        }
+                    }
+                }
+                // Adding a device; a dot when new ones were found on the
+                // network (they're listed first on that page).
+                Rectangle {
+                    width: 52px;
+                    Rectangle {
+                        border-radius: self.height / 2;
+                        background: add-touch.pressed ? Theme.surface-pressed : Theme.surface;
+                        Icon {
+                            kind: "add";
+                            color: Theme.text;
+                        }
+                        add-touch := TouchArea {
+                            clicked => {
+                                root.open-add-device();
+                            }
+                        }
+                    }
+                    if found.length > 0: Rectangle {
+                        x: parent.width - 10px;
+                        y: 0;
+                        width: 10px;
+                        height: 10px;
+                        border-radius: 5px;
+                        background: Theme.accent;
+                    }
+                }
+            }
+            if home-category == "": CategoryGrid {
+                vertical-stretch: 1;
+                categories: root.home-view == "rooms" ? root.home-rooms : root.home-categories;
+                columns: home-grid-width < 420px ? 2 : 3;
+                open(c) => {
+                    root.home-category-name = c.name;
+                    root.home-category = c.id;
+                    root.pick-filter(c.id);
+                }
+            }
+            if home-category != "": TileGrid {
+                vertical-stretch: 1;
+                big: true;
+                paged: true;
+                // A category mixes rooms; a room's own page doesn't need it.
+                show-room: root.home-view != "rooms";
+                rows-per-page: root.tile-rows-per-page;
+                page <=> root.tile-page;
+                rows: root.tile-rows;
+                columns: root.tile-columns;
+                empty-text: "Nothing here right now.";
+                toggle(id, on) => {
+                    root.set-switch(id, on);
+                }
+                open(id) => {
+                    root.open-controls(id);
+                }
+            }
+        }
+    }
+
+    if page == 0 && !wide: VerticalLayout {
         y: 0;
         height: parent.height - nav-height;
         padding: Theme.space-s;
@@ -669,7 +1101,9 @@ export component AppWindow inherits Window {
     // Issue #95: one device's controls -- its full card, as the Devices
     // page showed every device until then -- with a star and its details.
     if page == 20: VerticalLayout {
-        width: min(parent.width, Theme.content-max-width);
+        // On a landscape screen wider (#107): the brightness pill beside
+        // the colours.
+        width: wide ? min(parent.width, 900px) : min(parent.width, Theme.content-max-width);
         x: (parent.width - self.width) / 2;
         padding: Theme.space-l;
         spacing: Theme.space-m;
@@ -788,8 +1222,26 @@ export component AppWindow inherits Window {
             font-size: Theme.font-body;
             wrap: word-wrap;
         }
-        // Brightness: a big slider in the light's colour.
-        if controls-item.has-dimmer: BigLevel {
+        // Issue #107: on a landscape screen a light's brightness is a tall
+        // pill on the left, its colours and the rest on the right.
+        HorizontalLayout {
+            vertical-stretch: 1;
+            spacing: Theme.space-l;
+            if wide && controls-item.has-dimmer: PillLevel {
+                width: 120px;
+                level: controls-item.level;
+                tint: controls-tile.tint;
+                on-tint: controls-tile.on-tint;
+                enabled: !controls-item.has-switch || controls-item.on;
+                set(level) => {
+                    root.set-level(controls-item.id, level);
+                }
+            }
+            VerticalLayout {
+                spacing: Theme.space-m;
+        // Brightness: a big slider in the light's colour (on a landscape
+        // screen: the tall pill, left).
+        if controls-item.has-dimmer && !wide: BigLevel {
             level: controls-item.level;
             tint: controls-tile.tint;
             enabled: !controls-item.has-switch || controls-item.on;
@@ -918,10 +1370,15 @@ export component AppWindow inherits Window {
                     set-color(id, hex) => {
                         root.set-color(id, hex);
                     }
+                    set-white(id, kelvin) => {
+                        root.set-white(id, kelvin);
+                    }
                     press(id, button) => {
                         root.device-press(id, button);
                     }
                 }
+            }
+        }
             }
         }
         if !has-card: Rectangle {
@@ -1165,8 +1622,9 @@ export component AppWindow inherits Window {
 
     // Scenes (issue #47).
     if page == 14: ScenesPage {
-        width: min(parent.width, Theme.content-max-width);
-        x: (parent.width - self.width) / 2;
+        // Issue #107: beside the rail on a landscape screen.
+        width: min(parent.width - rail-width, Theme.content-max-width);
+        x: rail-width + (parent.width - rail-width - self.width) / 2;
         y: 0;
         height: parent.height - nav-height;
         scenes: root.scenes;
@@ -1174,7 +1632,7 @@ export component AppWindow inherits Window {
         message-ok: root.scenes-message-ok;
         running: root.scene-running;
         back => {
-            page = 0;
+            page = root.scenes-back;
         }
         run(id) => {
             root.run-scene(id);
@@ -1211,8 +1669,9 @@ export component AppWindow inherits Window {
 
     // Automations (issue #47).
     if page == 16: AutomationsPage {
-        width: min(parent.width, Theme.content-max-width);
-        x: (parent.width - self.width) / 2;
+        // Issue #107: beside the rail on a landscape screen.
+        width: min(parent.width - rail-width, Theme.content-max-width);
+        x: rail-width + (parent.width - rail-width - self.width) / 2;
         y: 0;
         height: parent.height - nav-height;
         automations: root.automations;
@@ -1220,7 +1679,7 @@ export component AppWindow inherits Window {
         message-ok: root.automations-message-ok;
         running: root.automation-running;
         back => {
-            page = 4;
+            page = root.automations-back;
         }
         set-enabled(id, on) => {
             root.set-automation-enabled(id, on);
@@ -1293,8 +1752,9 @@ export component AppWindow inherits Window {
 
     if page == 4: SettingsPage {
         // Issue #38: centred, at most Theme.content-max-width wide.
-        width: min(parent.width, Theme.content-max-width);
-        x: (parent.width - self.width) / 2;
+        // Issue #107: beside the rail on a landscape screen.
+        width: min(parent.width - rail-width, Theme.content-max-width);
+        x: rail-width + (parent.width - rail-width - self.width) / 2;
         y: 0;
         height: parent.height - nav-height;
         network-detail: root.net.uplink == "ethernet" ? "Connected by cable"
@@ -1312,9 +1772,11 @@ export component AppWindow inherits Window {
             page = 22;
         }
         open-scenes => {
+            root.scenes-back = 4;
             root.open-scenes();
         }
         open-automations => {
+            root.automations-back = 4;
             root.open-automations();
         }
         open-location => {
@@ -1356,6 +1818,7 @@ export component AppWindow inherits Window {
         fingerprint-short: root.panel-fingerprint;
         connected: root.connected;
         problem: root.panel-problem;
+        health: root.panel-health;
         back => {
             page = 4;
         }
@@ -1580,16 +2043,7 @@ export component AppWindow inherits Window {
         height: nav-height;
         current: page == 14 ? 1 : page == 16 ? 2 : page == 4 ? 3 : 0;
         go(place) => {
-            if (place == 0) {
-                device-back = 0;
-                page = 0;
-            } else if (place == 1) {
-                root.open-scenes();
-            } else if (place == 2) {
-                root.open-automations();
-            } else {
-                page = 4;
-            }
+            root.go-place(place);
         }
     }
 

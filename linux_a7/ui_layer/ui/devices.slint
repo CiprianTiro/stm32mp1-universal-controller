@@ -366,6 +366,8 @@ export component DeviceRow inherits Rectangle {
     // Issue #85: a palette colour tapped; a remote button pressed (an IR
     // light's brightness steps).
     callback set-color(string, string);
+    // Issue #107: a white, by its warmth (kelvin).
+    callback set-white(string, int);
     callback press(string, string);
 
     // The lock's "Unlock Front door?" question is showing.
@@ -492,10 +494,69 @@ export component DeviceRow inherits Rectangle {
                 }
             }
         }
-        if item.has-color && item.palette.length == 0: Text {
-            text: "Color " + item.color-text;
-            color: Theme.text-muted;
-            font-size: Theme.font-caption;
+        // Issue #107: a light that takes ANY colour (a WiZ bulb, WLED): the
+        // phone app's choices -- eight colours, the current one ringed, and
+        // three whites.
+        if item.has-color && item.palette.length == 0: VerticalLayout {
+            spacing: Theme.space-m;
+            property <[{hex: string, color: color}]> presets: [
+                {hex: "#FF0000", color: #FF0000}, {hex: "#FF8800", color: #FF8800},
+                {hex: "#FFDD00", color: #FFDD00}, {hex: "#00FF00", color: #00FF00},
+                {hex: "#00FFFF", color: #00FFFF}, {hex: "#0000FF", color: #0000FF},
+                {hex: "#8800FF", color: #8800FF}, {hex: "#FF00AA", color: #FF00AA},
+            ];
+            HorizontalLayout {
+                spacing: Theme.space-s;
+                alignment: start;
+                for c in presets: Rectangle {
+                    width: 44px;
+                    height: 44px;
+                    border-radius: self.height / 2;
+                    background: c.color;
+                    border-width: c.hex == item.color-text ? 3px : 1px;
+                    border-color: c.hex == item.color-text ? Theme.text : Theme.outline;
+                    TouchArea {
+                        clicked => {
+                            root.set-color(item.id, c.hex);
+                        }
+                    }
+                }
+            }
+            HorizontalLayout {
+                spacing: Theme.space-s;
+                alignment: start;
+                for w in [{k: 2700, label: "Warm", color: #FFB45E}, {k: 4000, label: "Neutral", color: #FFE9C4}, {k: 6500, label: "Daylight", color: #E8F0FF}]: Rectangle {
+                    height: 44px;
+                    width: white-row.preferred-width;
+                    border-radius: self.height / 2;
+                    background: white-touch.pressed ? Theme.surface-pressed : Theme.surface-pressed.mix(Theme.surface, 0.5);
+                    white-row := HorizontalLayout {
+                        padding-left: Theme.space-s;
+                        padding-right: Theme.space-l;
+                        spacing: Theme.space-s;
+                        VerticalLayout {
+                            alignment: center;
+                            Rectangle {
+                                width: 28px;
+                                height: 28px;
+                                border-radius: self.height / 2;
+                                background: w.color;
+                            }
+                        }
+                        Text {
+                            text: w.label;
+                            color: Theme.text;
+                            font-size: Theme.font-body;
+                            vertical-alignment: center;
+                        }
+                    }
+                    white-touch := TouchArea {
+                        clicked => {
+                            root.set-white(item.id, w.k);
+                        }
+                    }
+                }
+            }
         }
 
         // A TV (issue #40): volume, mute, and its inputs. Like the dimmer,

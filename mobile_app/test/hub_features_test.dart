@@ -11,6 +11,7 @@ import 'package:house_controller_app/hub/hub_store.dart';
 import 'package:house_controller_app/screens/wizard_screen.dart';
 import 'package:house_controller_app/theme/tokens.dart';
 import 'package:house_controller_app/widgets/capability_controls.dart';
+import 'package:house_controller_app/widgets/hero_controls.dart';
 import 'package:house_controller_app/widgets/power_link.dart';
 
 /// A hub that answers like ws.rs for the few requests these screens send,
@@ -57,6 +58,24 @@ void main() {
         theme: tokens.theme(mode: 'dark', accent: 'sky', density: 'comfortable'),
         home: Scaffold(body: SingleChildScrollView(child: child)),
       );
+
+  test('live dimming: a fast drag sends a few values, ending where the finger is', () async {
+    final sent = <int>[];
+    // A hub answering in 20 ms.
+    final live = LiveSender((v) async {
+      sent.add(v);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }, gap: const Duration(milliseconds: 50));
+    // A finger moving 0 -> 60 % over ~120 ms (a value every 2 ms).
+    for (var v = 0; v <= 60; v++) {
+      live.offer(v);
+      await Future<void>.delayed(const Duration(milliseconds: 2));
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    expect(sent.length, lessThan(8), reason: 'paced, not one request per value: $sent');
+    expect(sent.first, 0);
+    expect(sent.last, 60, reason: 'the newest value always goes out');
+  });
 
   group('vacuum map (roborock_map.rs Map::to_json)', () {
     test('runs are unpacked exactly', () {
