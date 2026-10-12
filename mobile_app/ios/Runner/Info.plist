@@ -45,6 +45,30 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<!-- The UIScene lifecycle: iOS 27.0.1 launches every app through scenes;
+	     without this the Flutter window never appears (white screen) and plugin
+	     registration crashes. FlutterSceneDelegate (Flutter 3.38) runs it. -->
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+		<key>UISceneConfigurations</key>
+		<dict>
+			<key>UIWindowSceneSessionRoleApplication</key>
+			<array>
+				<dict>
+					<key>UISceneClassName</key>
+					<string>UIWindowScene</string>
+					<key>UISceneDelegateClassName</key>
+					<string>FlutterSceneDelegate</string>
+					<key>UISceneConfigurationName</key>
+					<string>flutter</string>
+					<key>UISceneStoryboardFile</key>
+					<string>Main</string>
+				</dict>
+			</array>
+		</dict>
+	</dict>
 	<!-- The hub's LAN API and finding it (Bonjour, _uchub._tcp). -->
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>To find your Universal Controller hub on your home network and control its devices.</string>
