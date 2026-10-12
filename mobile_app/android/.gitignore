@@ -1,0 +1,16 @@
+gradle-wrapper.jar
+/.gradle
+/captures/
+# Gradle writes reports here when run from android/ (e.g. Android Studio)
+/build/
+/gradlew
+/gradlew.bat
+/local.properties
+GeneratedPluginRegistrant.java
+.cxx/
+
+# Remember to never publicly share your keystore.
+# See https://flutter.dev/to/reference-keystore
+key.properties
+**/*.keystore
+**/*.jks

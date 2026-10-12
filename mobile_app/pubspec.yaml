@@ -1,0 +1,40 @@
+name: house_controller_app
+description: "The Universal Controller phone app (issue #48): pairs with the hub on the home network and controls its devices."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.10.1
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  # SHA-256 of the hub's certificate, for pinning (backend_daemon's tls.rs).
+  crypto: ^3.0.7
+  # The pairing key: Android Keystore / iOS Keychain.
+  flutter_secure_storage: ^11.2.0
+  # The pairing QR code on the hub's screen.
+  mobile_scanner: ^7.4.2
+  # Bluetooth setup (#36): AES-256-GCM around SPAKE2 (lib/ble/spake2.dart),
+  # BLE itself (BSD licence -- flutter_blue_plus needs a paid licence for
+  # any commercial use), and Android 12+'s runtime Bluetooth permissions.
+  cryptography: ^2.9.0
+  flutter_reactive_ble: ^5.4.2
+  permission_handler: ^12.0.1
+  # Finding the hub: its _uchub._tcp mDNS service (Bonjour on iOS, NSD on
+  # Android -- raw multicast needs a restricted entitlement on iOS).
+  nsd: ^5.0.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    # A symlink to linux_a7/ui_layer/ui/tokens.json: the hub's design tokens
+    # (#39), one file for both, so phone and hub look alike.
+    - assets/tokens.json
