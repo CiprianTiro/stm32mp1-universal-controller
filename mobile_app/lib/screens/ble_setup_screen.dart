@@ -148,7 +148,14 @@ class _BleSetupScreenState extends State<BleSetupScreen> {
             TextField(
               controller: _ssid,
               enabled: !_busy,
+              // Exactly what's typed: no suggestions, no capital first
+              // letter, no curly quotes or long dashes (iOS smart
+              // punctuation) -- a WiFi name and password are taken byte
+              // for byte by the router.
               autocorrect: false,
+              enableSuggestions: false,
+              smartDashesType: SmartDashesType.disabled,
+              smartQuotesType: SmartQuotesType.disabled,
               decoration: const InputDecoration(labelText: 'WiFi name', helperText: 'The network the hub should join'),
             ),
             SizedBox(height: sp.l),
@@ -156,10 +163,19 @@ class _BleSetupScreenState extends State<BleSetupScreen> {
               controller: _password,
               enabled: !_busy,
               obscureText: !_showPassword,
+              // Also while shown (no longer a secret field for iOS): see
+              // the WiFi name above.
               autocorrect: false,
+              enableSuggestions: false,
+              smartDashesType: SmartDashesType.disabled,
+              smartQuotesType: SmartQuotesType.disabled,
+              onChanged: (_) => setState(() {}),
               decoration: InputDecoration(
                 labelText: 'WiFi password',
                 helperText: 'Empty for an open network. Sent encrypted, only to the hub.',
+                // A space at either end is allowed in WiFi passwords, but
+                // is almost always a slip (iOS adds one after AutoFill).
+                errorText: _password.text != _password.text.trim() ? 'It starts or ends with a space: is that right?' : null,
                 suffixIcon: IconButton(
                   icon: Icon(_showPassword ? Icons.visibility_off : Icons.visibility),
                   onPressed: () => setState(() => _showPassword = !_showPassword),
