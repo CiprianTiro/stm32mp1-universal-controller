@@ -10,6 +10,10 @@
 // from then on the backend PUSHES every change. Nothing is polled except
 // the network status (cable in/out isn't a device event).
 //
+// Issue #106: or, on a WALL PANEL (panel.rs), as a paired LAN client of
+// a hub elsewhere: wss://<hub>:8443/ws, the hub's certificate pinned, and
+// "auth" with the panel's key before anything else.
+//
 // This crate has no async runtime (see Cargo.toml's comment on why
 // `tungstenite`, not `tokio-tungstenite`) -- the GUI's own event loop in
 // main.rs is a plain blocking loop. So this module runs the WebSocket
@@ -686,6 +690,14 @@ pub enum Action {
 pub enum Update {
     Connected,
     Disconnected,
+    /// Issue #106, a panel: the hub doesn't know this panel's key any more
+    /// (removed on the hub's Paired devices list). The pairing is
+    /// forgotten; the panel shows its "Connect to a hub" page again.
+    PanelRemoved(String),
+    /// Issue #106, a panel: why it can't connect right now (the hub's
+    /// certificate changed, a wrong address...), for its banner. Cleared
+    /// by Connected.
+    HubProblem(String),
     /// The camera's live video couldn't start (the reason).
     VideoFailed(String),
     /// Issue #99: the plug link was saved (or why not).
@@ -787,45 +799,137 @@ pub fn parse_frame(bytes: &[u8]) -> Option<VideoFrame> {
     Some(VideoFrame { id, pixels: slint::SharedPixelBuffer::clone_from_slice(pixels, width, height) })
 }
 
-type Socket = tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>>;
+type Socket = tungstenite::WebSocket<crate::panel::Stream>;
+
+/// Which hub this UI talks to (issue #106).
+#[derive(Clone)]
+pub enum Target {
+    /// The hub this UI runs on (the DK2's own screen).
+    Local,
+    /// A wall panel: the hub it's paired with -- None until it is (and
+    /// again after "Unpair this panel"). Shared with main.rs, which fills
+    /// it when pairing succeeds; the connection follows the change.
+    Panel(std::sync::Arc<std::sync::Mutex<Option<crate::panel::PanelConfig>>>),
+}
+
+impl Target {
+    fn panel(&self) -> Option<Option<crate::panel::PanelConfig>> {
+        match self {
+            Target::Local => None,
+            Target::Panel(shared) => Some(shared.lock().unwrap().clone()),
+        }
+    }
+}
 
 /// Starts the background connection thread and returns the two channel ends
 /// main.rs needs: `request_tx` to send a `Request`, and `update_rx` to
 /// receive `Update`s back (poll it, non-blockingly, once per GUI frame).
-pub fn start() -> (mpsc::Sender<Request>, mpsc::Receiver<Update>) {
+pub fn start(target: Target) -> (mpsc::Sender<Request>, mpsc::Receiver<Update>) {
     let (request_tx, request_rx) = mpsc::channel::<Request>();
     let (update_tx, update_rx) = mpsc::channel::<Update>();
 
-    std::thread::spawn(move || connection_loop(request_rx, update_tx));
+    std::thread::spawn(move || connection_loop(target, request_rx, update_tx));
 
     (request_tx, update_rx)
+}
+
+/// The hub's own door: plain WebSocket on loopback.
+fn connect_local() -> Result<Socket, String> {
+    let tcp = std::net::TcpStream::connect("127.0.0.1:8080").map_err(|e| e.to_string())?;
+    tungstenite::client(BACKEND_URL, crate::panel::Stream::Plain(tcp)).map(|(socket, _)| socket).map_err(|e| e.to_string())
+}
+
+/// What a panel's connection attempt came to.
+enum PanelLogin {
+    Ready(Socket),
+    /// Try again later; the reason is for the panel's banner.
+    Failed(String),
+    /// The hub refused the key: it removed this panel.
+    Removed(String),
+}
+
+/// A panel's door: TLS pinned to the hub it paired with, then "auth" with
+/// its key -- nothing else is allowed before (backend ws.rs).
+fn connect_panel(config: &crate::panel::PanelConfig) -> PanelLogin {
+    let (stream, _) = match crate::panel::connect_tls(&config.host, config.port, Some(&config.fingerprint)) {
+        Ok(connected) => connected,
+        Err(e) => return PanelLogin::Failed(e),
+    };
+    let mut socket = match tungstenite::client(crate::panel::hub_url(&config.host, config.port), stream) {
+        Ok((socket, _)) => socket,
+        Err(e) => return PanelLogin::Failed(format!("the hub refused the connection: {e}")),
+    };
+    match crate::panel::ask(&mut socket, &serde_json::json!({"action": "auth", "token": config.token})) {
+        Ok(reply) if reply["type"] == "authenticated" => PanelLogin::Ready(socket),
+        Ok(reply) if reply["type"] == "error" => {
+            PanelLogin::Removed(reply["message"].as_str().unwrap_or("the hub refused this panel's key").to_string())
+        }
+        Ok(_) => PanelLogin::Failed("unexpected answer from the hub".into()),
+        Err(e) => PanelLogin::Failed(e),
+    }
 }
 
 /// Runs forever on the background thread: connect (retrying every
 /// RETRY_DELAY), subscribe and list the devices, then serve until the
 /// connection breaks -- announce `Disconnected` and start over. Keeps all
 /// reconnection logic in one place.
-fn connection_loop(request_rx: mpsc::Receiver<Request>, update_tx: mpsc::Sender<Update>) {
+fn connection_loop(target: Target, request_rx: mpsc::Receiver<Request>, update_tx: mpsc::Sender<Update>) {
     loop {
-        let mut socket = match tungstenite::connect(BACKEND_URL) {
-            Ok((socket, _http_response)) => socket,
-            Err(e) => {
-                println!("ui_layer: failed to connect to backend_daemon: {e}");
-                std::thread::sleep(RETRY_DELAY);
+        let mut socket = match target.panel() {
+            None => match connect_local() {
+                Ok(socket) => socket,
+                Err(e) => {
+                    println!("ui_layer: failed to connect to backend_daemon: {e}");
+                    std::thread::sleep(RETRY_DELAY);
+                    continue;
+                }
+            },
+            // A panel not paired (yet, or any more): nothing to connect
+            // to. Requests from the GUI meanwhile have nowhere to go.
+            Some(None) => {
+                loop {
+                    match request_rx.try_recv() {
+                        Ok(_) | Err(mpsc::TryRecvError::Empty) => {}
+                        Err(mpsc::TryRecvError::Disconnected) => return,
+                    }
+                    if matches!(target.panel(), Some(Some(_))) {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(200));
+                }
                 continue;
             }
+            Some(Some(config)) => match connect_panel(&config) {
+                PanelLogin::Ready(socket) => socket,
+                PanelLogin::Failed(why) => {
+                    println!("ui_layer: hub {}: {why}", config.host);
+                    if update_tx.send(Update::HubProblem(why)).is_err() {
+                        return;
+                    }
+                    std::thread::sleep(RETRY_DELAY);
+                    continue;
+                }
+                PanelLogin::Removed(why) => {
+                    println!("ui_layer: the hub removed this panel ({why})");
+                    crate::panel::forget();
+                    if let Target::Panel(shared) = &target {
+                        *shared.lock().unwrap() = None;
+                    }
+                    if update_tx.send(Update::PanelRemoved(why)).is_err() {
+                        return;
+                    }
+                    continue;
+                }
+            },
         };
-        // Reads give up after READ_TIMEOUT (see serve). `tungstenite`'s
-        // stream type can wrap TLS too; ours is always the plain TCP one.
-        if let tungstenite::stream::MaybeTlsStream::Plain(tcp) = socket.get_mut() {
-            let _ = tcp.set_read_timeout(Some(READ_TIMEOUT));
-        }
+        // Reads give up after READ_TIMEOUT (see serve).
+        let _ = socket.get_mut().set_read_timeout(Some(READ_TIMEOUT));
 
         // `.send() == Err`: the GUI thread has exited; so should we.
         if update_tx.send(Update::Connected).is_err() {
             return;
         }
-        if !serve(&mut socket, &request_rx, &update_tx) {
+        if !serve(&mut socket, &target, &request_rx, &update_tx) {
             return;
         }
         let _ = update_tx.send(Update::Disconnected);
@@ -840,7 +944,10 @@ fn connection_loop(request_rx: mpsc::Receiver<Request>, update_tx: mpsc::Sender<
 /// way at once -- and the backend answers them strictly in order, so
 /// `in_flight` (oldest first) says which request each reply belongs to.
 /// Events can arrive at any moment in between; they're told apart by type.
-fn serve(socket: &mut Socket, request_rx: &mpsc::Receiver<Request>, update_tx: &mpsc::Sender<Update>) -> bool {
+fn serve(socket: &mut Socket, target: &Target, request_rx: &mpsc::Receiver<Request>, update_tx: &mpsc::Sender<Update>) -> bool {
+    // A panel follows the hub's network status no more than it can
+    // change it (that's the hub's own screen, #106).
+    let is_panel = matches!(target, Target::Panel(_));
     let mut in_flight: VecDeque<Request> = VecDeque::new();
     // Subscribe first, THEN ask: nothing that changes in between is lost.
     // The settings first (issue #39): the chosen look should replace the
@@ -865,7 +972,12 @@ fn serve(socket: &mut Socket, request_rx: &mpsc::Receiver<Request>, update_tx: &
                 Err(mpsc::TryRecvError::Disconnected) => return false,
             }
         }
-        if Instant::now() >= next_network {
+        // "Unpair this panel" (main.rs emptied the target): hang up.
+        if matches!(target.panel(), Some(None)) {
+            let _ = socket.close(None);
+            return true;
+        }
+        if !is_panel && Instant::now() >= next_network {
             next_network = Instant::now() + NETWORK_REFRESH;
             outbox.push_back(Request::GetNetworkStatus);
         }

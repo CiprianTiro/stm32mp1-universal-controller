@@ -45,6 +45,11 @@ mod automation_text;
 #[path = "../../../linux_a7/ui_layer/src/ws_client.rs"]
 #[allow(dead_code)]
 mod ws_client;
+// Issue #106: the wall panel's connection, pairing and hub finder
+// (ws_client.rs uses it); its unit tests run here.
+#[path = "../../../linux_a7/ui_layer/src/panel.rs"]
+#[allow(dead_code)]
+mod panel;
 // Issue #74: the vacuum map renderer.
 #[path = "../../../linux_a7/ui_layer/src/vacuum_map.rs"]
 mod vacuum_map;

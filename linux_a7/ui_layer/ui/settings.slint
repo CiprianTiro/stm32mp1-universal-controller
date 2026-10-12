@@ -73,7 +73,12 @@ export component SettingsPage inherits Rectangle {
     in property <string> scenes-detail;
     in property <string> automations-detail;
     in property <string> location-detail;
+    // Issue #106: a wall panel -- the hub's network and paired devices are
+    // only on the hub's own screen; "This panel" instead.
+    in property <bool> panel: false;
+    in property <string> panel-detail;
     callback back();
+    callback open-panel();
     callback open-network();
     callback open-clients();
     callback open-accounts();
@@ -96,14 +101,21 @@ export component SettingsPage inherits Rectangle {
                 root.back();
             }
         }
-        MenuRow {
+        if panel: MenuRow {
+            title: "This panel";
+            detail: panel-detail;
+            clicked => {
+                open-panel();
+            }
+        }
+        if !panel: MenuRow {
             title: "Network";
             detail: network-detail;
             clicked => {
                 open-network();
             }
         }
-        MenuRow {
+        if !panel: MenuRow {
             title: "Paired devices";
             detail: client-count == 0 ? "No phones or computers paired yet"
                 : client-count == 1 ? "1 device can control this hub"

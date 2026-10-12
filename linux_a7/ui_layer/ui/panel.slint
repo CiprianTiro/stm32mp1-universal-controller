@@ -1,0 +1,318 @@
+// panel.slint -- the wall panel's own pages (issue #106): connecting to a
+// hub the first time, and "This panel" in the settings.
+//
+// A wall panel is this same UI on another machine (a Raspberry Pi, #107),
+// controlling the hub over the network -- see src/panel.rs for how it
+// connects and pairs. Like everything here these pages only show what
+// main.rs gives them and pass taps on.
+
+import { ListView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { PageHeader, ActionButton } from "common.slint";
+import { Keyboard } from "keyboard.slint";
+
+// A hub found on the network (mDNS).
+export struct HubItem {
+    name: string,
+    host: string,
+    port: int,
+}
+
+// Connecting a new panel to a hub, in three steps (`step`):
+//   "find"     the hubs found on the network; or type an address
+//   "address"  typing the hub's address
+//   "code"     the hub's certificate to compare, then the pairing code
+// While main.rs works (searching, connecting, pairing) `busy` says what.
+export component PanelSetupPage inherits Rectangle {
+    in property <string> step;
+    in property <[HubItem]> hubs;
+    in property <string> busy;
+    in property <string> message;
+    // The chosen hub (step "code") and its certificate, short form.
+    in property <string> hub-name;
+    in property <string> fingerprint-short;
+    // Typed text: the address, then the code. Two-way with the keyboard.
+    in-out property <string> typed;
+    callback search();
+    callback choose(HubItem);
+    callback type-address();
+    callback address-done();
+    callback backspace();
+    callback pair();
+    callback back();
+
+    background: Theme.background;
+
+    VerticalLayout {
+        padding: Theme.space-l;
+        spacing: Theme.space-m;
+
+        Text {
+            text: "Connect to a hub";
+            color: Theme.text;
+            font-size: Theme.font-title;
+        }
+
+        if step == "find": Text {
+            text: "This screen controls a hub on your network. Pick it, then type the pairing code shown on the hub's screen (Settings \u{2192} Paired devices \u{2192} Pair a new device).";
+            color: Theme.text-muted;
+            font-size: Theme.font-body;
+            wrap: word-wrap;
+        }
+
+        if message != "": Text {
+            text: message;
+            color: Theme.error;
+            font-size: Theme.font-body;
+            wrap: word-wrap;
+        }
+
+        if busy != "": Text {
+            text: busy;
+            color: Theme.accent;
+            font-size: Theme.font-subtitle;
+            wrap: word-wrap;
+        }
+
+        // ---- 1. Which hub ----
+        if step == "find" && busy == "" && hubs.length == 0: Text {
+            text: "No hub found yet. Is it on, and on the same network?";
+            color: Theme.text-muted;
+            font-size: Theme.font-subtitle;
+            wrap: word-wrap;
+        }
+        if step == "find": ListView {
+            vertical-stretch: 1;
+            for h in hubs: VerticalLayout {
+                padding-bottom: Theme.space-s;
+                Rectangle {
+                    height: Theme.touch-height + Theme.space-l;
+                    border-radius: Theme.radius-medium;
+                    background: touch.pressed ? Theme.surface-pressed : Theme.surface;
+                    VerticalLayout {
+                        padding-left: Theme.space-xl;
+                        alignment: center;
+                        Text {
+                            text: h.name;
+                            color: Theme.text;
+                            font-size: Theme.font-subtitle;
+                        }
+                        Text {
+                            text: h.host;
+                            color: Theme.text-muted;
+                            font-size: Theme.font-caption;
+                        }
+                    }
+                    touch := TouchArea {
+                        clicked => {
+                            root.choose(h);
+                        }
+                    }
+                }
+            }
+        }
+        if step == "find": HorizontalLayout {
+            spacing: Theme.space-m;
+            ActionButton {
+                text: "Search again";
+                enabled: busy == "";
+                clicked => {
+                    root.search();
+                }
+            }
+            ActionButton {
+                text: "Type an address";
+                enabled: busy == "";
+                clicked => {
+                    root.type-address();
+                }
+            }
+        }
+
+        // ---- 1b. Typing the address ----
+        if step == "address": Text {
+            text: "The hub's address, e.g. 192.168.1.140 (shown on the hub's pairing screen).";
+            color: Theme.text-muted;
+            font-size: Theme.font-body;
+            wrap: word-wrap;
+        }
+        if step == "address": Rectangle {
+            height: Theme.touch-height;
+            background: Theme.surface;
+            border-radius: Theme.radius-medium;
+            Text {
+                x: Theme.space-l;
+                text: typed + "|";
+                color: Theme.text;
+                font-size: Theme.font-heading;
+                vertical-alignment: center;
+            }
+        }
+
+        // ---- 2. Compare the certificate, type the code ----
+        if step == "code": Text {
+            text: "Hub " + hub-name;
+            color: Theme.text;
+            font-size: Theme.font-subtitle;
+        }
+        if step == "code": Rectangle {
+            border-radius: Theme.radius-medium;
+            background: Theme.surface;
+            VerticalLayout {
+                padding: Theme.space-l;
+                spacing: Theme.space-xs;
+                Text {
+                    text: "Certificate";
+                    color: Theme.text-muted;
+                    font-size: Theme.font-caption;
+                }
+                Text {
+                    text: fingerprint-short;
+                    color: Theme.text;
+                    font-size: Theme.font-heading;
+                    letter-spacing: Theme.space-xxs;
+                }
+                Text {
+                    text: "It must be the same as on the hub's pairing screen. If it isn't, don't go on: something else is answering instead of your hub.";
+                    color: Theme.text-muted;
+                    font-size: Theme.font-caption;
+                    wrap: word-wrap;
+                }
+            }
+        }
+        if step == "code": Rectangle {
+            height: Theme.touch-height;
+            background: Theme.surface;
+            border-radius: Theme.radius-medium;
+            Text {
+                x: Theme.space-l;
+                // The placeholder's digits also put their glyphs into the
+                // embedded font (see PasswordPage in network.slint).
+                text: typed == "" ? "Pairing code: 123 456" : typed + "|";
+                color: typed == "" ? Theme.outline : Theme.text;
+                font-size: Theme.font-heading;
+                vertical-alignment: center;
+            }
+        }
+
+        if step != "find": Rectangle {
+            vertical-stretch: 1;
+        }
+        if step != "find": HorizontalLayout {
+            spacing: Theme.space-m;
+            ActionButton {
+                text: "Back";
+                enabled: busy == "";
+                clicked => {
+                    root.back();
+                }
+            }
+            if step == "code": ActionButton {
+                text: "Pair";
+                primary: true;
+                enabled: busy == "" && typed != "";
+                clicked => {
+                    root.pair();
+                }
+            }
+        }
+        if step != "find" && busy == "": Keyboard {
+            text <=> typed;
+            max-length: step == "code" ? 7 : 64;
+            backspace => {
+                root.backspace();
+            }
+            done => {
+                if (step == "code") {
+                    root.pair();
+                } else {
+                    root.address-done();
+                }
+            }
+        }
+    }
+}
+
+// Settings > This panel: which hub it controls, whether it's connected,
+// and "Unpair this panel" (tapped twice).
+export component PanelInfoPage inherits Rectangle {
+    in property <string> hub-name;
+    in property <string> hub-address;
+    in property <string> fingerprint-short;
+    in property <bool> connected;
+    // Why it can't connect, if it can't (the certificate changed...).
+    in property <string> problem;
+    callback back();
+    callback unpair();
+    property <bool> confirm: false;
+
+    background: Theme.background;
+
+    VerticalLayout {
+        padding: Theme.space-l;
+        spacing: Theme.space-m;
+        alignment: start;
+
+        PageHeader {
+            title: "This panel";
+            back => {
+                confirm = false;
+                root.back();
+            }
+        }
+        Text {
+            text: "This screen controls the hub over the network. The hub's own settings (its WiFi, paired devices) are only on the hub's screen.";
+            color: Theme.text-muted;
+            font-size: Theme.font-caption;
+            wrap: word-wrap;
+        }
+        Rectangle {
+            border-radius: Theme.radius-medium;
+            background: Theme.surface;
+            VerticalLayout {
+                padding: Theme.space-l;
+                spacing: Theme.space-xs;
+                Text {
+                    text: "Hub " + hub-name;
+                    color: Theme.text;
+                    font-size: Theme.font-subtitle;
+                }
+                Text {
+                    text: hub-address + "   Certificate " + fingerprint-short;
+                    color: Theme.text-muted;
+                    font-size: Theme.font-caption;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: connected ? "Connected" : "Not connected, trying again\u{2026}";
+                    color: connected ? Theme.ok : Theme.error;
+                    font-size: Theme.font-body;
+                }
+                if !connected && problem != "": Text {
+                    text: problem;
+                    color: Theme.text-muted;
+                    font-size: Theme.font-caption;
+                    wrap: word-wrap;
+                }
+            }
+        }
+        ActionButton {
+            text: confirm ? "Sure? It must be paired again to work" : "Unpair this panel";
+            destructive: true;
+            clicked => {
+                if (confirm) {
+                    confirm = false;
+                    root.unpair();
+                } else {
+                    confirm = true;
+                }
+            }
+        }
+        Text {
+            text: "To lock this panel out from the hub instead: on the hub, Settings \u{2192} Paired devices \u{2192} Remove.";
+            color: Theme.text-muted;
+            font-size: Theme.font-caption;
+            wrap: word-wrap;
+        }
+    }
+}

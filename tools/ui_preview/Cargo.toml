@@ -30,6 +30,10 @@ base64 = "0.23"
 zune-jpeg = "0.5"
 # The UI's ws_client.rs (issue #95: tiles.rs works on its device types).
 tungstenite = "0.24"
+# The UI's panel.rs (issue #106, ws_client.rs uses it): TLS to the hub's
+# LAN door, as in ui_layer's Cargo.toml.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+ring = "0.17"
 # The UI's zones.rs (time zone lists), as in ui_layer's Cargo.toml.
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 chrono-tz = { version = "0.10", default-features = false, features = ["std"] }

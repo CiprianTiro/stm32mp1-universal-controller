@@ -33,6 +33,7 @@ import { NetStatus, WifiNetwork, NetIndicator, NetworkPage, PasswordPage, Countr
 import { AccentItem, ZoneItem, AppearancePage, TimeZonePage } from "appearance.slint";
 import { SceneItem, PickItem, ScenesPage, CaptureScenePage } from "scenes.slint";
 import { AutomationItem, LogItem, AutomationsPage, LogPage, NewAutomationPage, LocationPage } from "automations.slint";
+import { HubItem, PanelSetupPage, PanelInfoPage } from "panel.slint";
 
 // Re-exported so main.rs can use these types (the Rust side only sees what
 // the main file exports).
@@ -152,6 +153,32 @@ export component AppWindow inherits Window {
     // losing the connection later is a different situation (see the status
     // text below). Set by main.rs on the first connection, never unset.
     in-out property <bool> ever-connected: false;
+
+    // ---- Wall panel (issue #106, see panel.slint / src/panel.rs) -------
+    // This UI runs on another machine and controls the hub over the
+    // network. Then the hub's own settings (its network, paired devices)
+    // and the camera's live video -- only possible on the hub's screen --
+    // are hidden.
+    in property <bool> panel-mode: false;
+    // Paired with a hub: false shows the "Connect to a hub" page.
+    in property <bool> panel-paired: true;
+    in property <string> panel-step: "find";
+    in property <[HubItem]> panel-hubs;
+    in property <string> panel-busy;
+    in property <string> panel-message;
+    in property <string> panel-hub-name;
+    in property <string> panel-hub-address;
+    in property <string> panel-fingerprint;
+    // Why it can't connect right now (ws_client's HubProblem).
+    in property <string> panel-problem;
+    in-out property <string> panel-typed;
+    callback panel-search();
+    callback panel-choose(HubItem);
+    callback panel-type-address();
+    callback panel-address-done();
+    callback panel-pair();
+    callback panel-back();
+    callback panel-unpair();
 
     // After 30 s of welcome screen without a connection (see the Timer
     // below).
@@ -532,7 +559,9 @@ export component AppWindow inherits Window {
                             root.open-add-device();
                         }
                     }
-                    NetIndicator {
+                    // The hub's network, and the way to change it: on the
+                    // hub's own screen only (#106).
+                    if !root.panel-mode: NetIndicator {
                         net: root.net;
                         compact: true;
                         clicked => {
@@ -567,7 +596,10 @@ export component AppWindow inherits Window {
         // Lost the backend after having had it (issue #59): say so, and
         // keep showing the last known devices underneath.
         if !connected: Text {
-            text: "Connection to the hub lost, reconnecting\u{2026}";
+            // A wall panel says why, when it knows (#106: the hub's
+            // certificate changed, a wrong address...).
+            text: root.panel-mode && root.panel-problem != "" ? "Can't reach the hub: " + root.panel-problem
+                : "Connection to the hub lost, reconnecting\u{2026}";
             color: Theme.error;
             font-size: Theme.font-body;
             wrap: word-wrap;
@@ -810,7 +842,9 @@ export component AppWindow inherits Window {
                         }
                     }
                     // A camera: Live on / off (top right of the picture).
-                    if controls-item.has-camera && root.controls-map-state == "": Rectangle {
+                    // Not on a wall panel: the hub only sends video to its
+                    // own screen (#106); the panel shows the stills.
+                    if controls-item.has-camera && root.controls-map-state == "" && !root.panel-mode: Rectangle {
                         x: parent.width - self.width - 2 * Theme.space-m;
                         y: 2 * Theme.space-m;
                         width: live-label.preferred-width + 2 * Theme.space-m;
@@ -1272,6 +1306,11 @@ export component AppWindow inherits Window {
         scenes-detail: scenes.length == 0 ? "None yet" : scenes.length == 1 ? "1 scene" : scenes.length + " scenes";
         automations-detail: automations.length == 0 ? "None yet" : automations.length == 1 ? "1 automation" : automations.length + " automations";
         location-detail: location-current == "" ? "Not set (needed for sunrise and sunset)" : location-current;
+        panel: root.panel-mode;
+        panel-detail: root.panel-hub-name + (root.connected ? ", connected" : ", not connected");
+        open-panel => {
+            page = 22;
+        }
         open-scenes => {
             root.open-scenes();
         }
@@ -1305,6 +1344,23 @@ export component AppWindow inherits Window {
         open-accounts => {
             page = 21;
             root.open-accounts();
+        }
+    }
+
+    if page == 22: PanelInfoPage {
+        width: min(parent.width, Theme.content-max-width);
+        x: (parent.width - self.width) / 2;
+        height: parent.height;
+        hub-name: root.panel-hub-name;
+        hub-address: root.panel-hub-address;
+        fingerprint-short: root.panel-fingerprint;
+        connected: root.connected;
+        problem: root.panel-problem;
+        back => {
+            page = 4;
+        }
+        unpair => {
+            root.panel-unpair();
         }
     }
 
@@ -1541,10 +1597,45 @@ export component AppWindow inherits Window {
     // `if`: the welcome screen only exists while the condition holds; once
     // the backend has answered, it's removed for good (along with its
     // timer).
-    if !ever-connected: WelcomeScreen {
+    if !ever-connected && !(panel-mode && !panel-paired): WelcomeScreen {
         width: parent.width;
         height: parent.height;
         slow: starting-slow;
+    }
+
+    // A wall panel not paired with a hub (yet, or any more): nothing else
+    // can work, so this covers everything (issue #106).
+    if panel-mode && !panel-paired: PanelSetupPage {
+        width: parent.width;
+        height: parent.height;
+        step: root.panel-step;
+        hubs: root.panel-hubs;
+        busy: root.panel-busy;
+        message: root.panel-message;
+        hub-name: root.panel-hub-name;
+        fingerprint-short: root.panel-fingerprint;
+        typed <=> root.panel-typed;
+        search => {
+            root.panel-search();
+        }
+        choose(hub) => {
+            root.panel-choose(hub);
+        }
+        type-address => {
+            root.panel-type-address();
+        }
+        address-done => {
+            root.panel-address-done();
+        }
+        backspace => {
+            root.panel-typed = drop-last(root.panel-typed);
+        }
+        pair => {
+            root.panel-pair();
+        }
+        back => {
+            root.panel-back();
+        }
     }
 
     // The mouse pointer: drawn after everything else, so it's on top of

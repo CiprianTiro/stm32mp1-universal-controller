@@ -65,6 +65,7 @@ SRC_URI = " \
     file://ui/tiles.slint \
     file://ui/icons.slint \
     file://ui/home.slint \
+    file://ui/panel.slint \
     file://ui/icons/ \
     file://ui/tokens.json \
     file://ui/images/welcome.png \
@@ -82,6 +83,7 @@ SRC_URI = " \
     file://src/ws_client.rs \
     file://src/tiles.rs \
     file://src/vacuum_map.rs \
+    file://src/panel.rs \
     file://ui-layer.service \
 "
 

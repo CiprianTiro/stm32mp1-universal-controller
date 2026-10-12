@@ -56,6 +56,12 @@ User=hubui
 Group=hubui
 SupplementaryGroups=video input
 UMask=0077
+# Issue #106: a wall panel keeps its pairing (the hub's address and
+# certificate, its own key) in /var/lib/ui-layer/panel.json -- the only
+# place this sandbox (ProtectSystem=strict) lets it write. 0700, owned by
+# hubui. Unused (empty) on the hub's own screen.
+StateDirectory=ui-layer
+StateDirectoryMode=0700
 
 # --- Privileges ------------------------------------------------------
 # No capabilities at all, and no way to gain any.
