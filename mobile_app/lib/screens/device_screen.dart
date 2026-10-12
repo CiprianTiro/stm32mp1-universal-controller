@@ -7,6 +7,7 @@ import '../theme/tokens.dart';
 import '../widgets/capability_controls.dart';
 import 'home_screen.dart';
 import '../widgets/hero_controls.dart';
+import '../widgets/power_link.dart';
 import 'wizard_screen.dart';
 
 /// One device: all its controls, its favourite star (#95), and renaming /
@@ -208,6 +209,9 @@ class _DeviceScreenState extends State<DeviceScreen> {
                       ]),
                     ),
                   ),
+                  // Set up also while the device is unreachable: it may be
+                  // unreachable BECAUSE its plug is off.
+                  if (PowerLinkSection.applies(d)) PowerLinkSection(device: d, hub: hub),
                 ],
               ),
             );

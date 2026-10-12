@@ -19,6 +19,7 @@ class Device {
     required this.lastSeen,
     required this.favourite,
     required this.capabilities,
+    this.config = const {},
   });
 
   final String id;
@@ -40,6 +41,10 @@ class Device {
   final bool favourite;
   final Map<String, Map<String, dynamic>> capabilities;
 
+  /// The adapter's plain settings ({"host": ...}; never secrets). The
+  /// screens read the "powered by" link from it (#99, power_link.rs).
+  final Map<String, String> config;
+
   factory Device.fromJson(Map<String, dynamic> j) {
     final caps = <String, Map<String, dynamic>>{};
     final raw = j['capabilities'];
@@ -49,6 +54,13 @@ class Device {
       });
     }
     final seen = j['last_seen'];
+    final config = <String, String>{};
+    final rawConfig = j['config'];
+    if (rawConfig is Map) {
+      rawConfig.forEach((k, v) {
+        if (k is String && v is String) config[k] = v;
+      });
+    }
     return Device(
       id: j['id'] as String,
       name: j['name'] as String? ?? j['id'] as String,
@@ -59,6 +71,7 @@ class Device {
       lastSeen: seen is int ? DateTime.fromMillisecondsSinceEpoch(seen * 1000) : null,
       favourite: j['favourite'] as bool? ?? false,
       capabilities: caps,
+      config: config,
     );
   }
 
@@ -85,6 +98,10 @@ const knownCapabilities = {
   'climate',
   'lock',
   'energy',
+  // #74
+  'vacuum',
+  'camera',
+  'options',
 };
 
 /// The buttons a screen lays out as a real remote (device.rs's

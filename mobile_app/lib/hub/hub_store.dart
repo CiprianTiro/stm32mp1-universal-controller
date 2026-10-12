@@ -333,9 +333,12 @@ class HubStore extends ChangeNotifier {
   }
 
   /// A one-off action (#44): a remote's button, a cover's open/stop...
-  Future<dynamic> action(String id, String capability, String name, [Map<String, dynamic>? args]) async {
-    final reply = await _request(
-        {'action': 'device_action', 'id': id, 'capability': capability, 'name': name, 'args': args ?? {}});
+  /// [timeout]: for the slow ones (a vacuum's map comes from the vendor's
+  /// cloud).
+  Future<dynamic> action(String id, String capability, String name, [Map<String, dynamic>? args, Duration? timeout]) async {
+    final reply = await request(
+        {'action': 'device_action', 'id': id, 'capability': capability, 'name': name, 'args': args ?? {}},
+        timeout: timeout);
     return reply['result'];
   }
 

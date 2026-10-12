@@ -2,7 +2,7 @@
 <!DOCTYPE service-group SYSTEM "avahi-service.dtd">
 <!--
   The hub's LAN API, announced over mDNS (issue #48): the phone app browses
-  for _uchub._tcp and finds the hub without a typed address -- also when
+  for _uchub._tcp and finds the hub without a typed address, also when
   the router hands out a new IP. Only where to connect is announced; who
   the hub is stays proven by its pinned certificate (ws.rs, tls.rs).
   %h = the host name (stm32mp1).

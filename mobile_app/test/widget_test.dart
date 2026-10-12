@@ -88,7 +88,7 @@ void main() {
         'lock': {'state': 'locked'},
         'climate': {'mode': 'heat', 'target': 21.5, 'current': 20.0, 'modes': ['off', 'heat']},
         'energy': {'power_w': 40.2},
-        'vacuum': {'status': 'docked'},
+        'irrigation': {'zone': 'lawn'},
       },
     });
     await tester.pumpWidget(MaterialApp(
@@ -100,6 +100,6 @@ void main() {
     expect(find.text('Unlock…'), findsOneWidget);
     expect(find.text('21.5 °C'), findsOneWidget);
     expect(find.text('40.2 W'), findsOneWidget);
-    expect(find.text('Vacuum'), findsOneWidget, reason: 'unknown capability shown read-only');
+    expect(find.text('Irrigation'), findsOneWidget, reason: 'unknown capability shown read-only');
   });
 }

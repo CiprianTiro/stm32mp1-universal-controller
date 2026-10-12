@@ -37,6 +37,10 @@ class _WizardScreenState extends State<WizardScreen> {
   String? _errorDetail;
   bool _ended = false;
   bool _done = false;
+  // Back was pressed: a step that runs by itself (test, waiting for the
+  // device) is skipped on the way back -- it would run at once and lead
+  // forward again to where Back was pressed (as on the hub, #95).
+  bool _goingBack = false;
   final Map<String, TextEditingController> _text = {};
   final Map<String, String> _picked = {};
 
@@ -74,7 +78,13 @@ class _WizardScreenState extends State<WizardScreen> {
       _errorDetail = null;
     });
     try {
-      final timeout = _waitingSteps.contains(_view?['step']) ? _timeoutFor(_view) : const Duration(seconds: 45);
+      final timeout = switch (_view?['step']) {
+        final String s when _waitingSteps.contains(s) => _timeoutFor(_view),
+        // A vendor's cloud: the hub allows several requests of 20 s each
+        // (wizard.rs, CLOUD_TIMEOUT * 4).
+        'vendor_login' => const Duration(seconds: 100),
+        _ => const Duration(seconds: 45),
+      };
       final reply = await widget.hub.request(request, timeout: timeout);
       if (!mounted) return;
       switch (reply['type']) {
@@ -107,7 +117,19 @@ class _WizardScreenState extends State<WizardScreen> {
     }
   }
 
+  void _back() {
+    _goingBack = true;
+    _send({'action': 'wizard_back', 'session': _session});
+  }
+
   void _showStep(Map<String, dynamic> view) {
+    if (_goingBack && _waitingSteps.contains(view['step'])) {
+      // Further back, past it. With nothing before it the hub answers with
+      // an error, shown as usual.
+      _send({'action': 'wizard_back', 'session': view['session']});
+      return;
+    }
+    _goingBack = false;
     // Fresh inputs for the new step, pre-filled with what the hub sends
     // (an earlier answer, a found device, a default -- never a secret).
     for (final c in _text.values) {
@@ -134,10 +156,11 @@ class _WizardScreenState extends State<WizardScreen> {
   static List<Map<String, dynamic>> _fields(Map<String, dynamic> view) => switch (view['step']) {
         'form' => (view['fields'] as List).cast<Map<String, dynamic>>(),
         'choice' || 'code_from_device' => [view['field'] as Map<String, dynamic>],
+        'vendor_login' => ((view['fields'] as List?) ?? const []).cast<Map<String, dynamic>>(),
         _ => const [],
       };
 
-  void _answer(Map<String, String> values) =>
+  void _answer(Map<String, dynamic> values) =>
       _send({'action': 'wizard_answer', 'session': _session, 'values': values});
 
   Map<String, String> _collect() => {
@@ -155,7 +178,7 @@ class _WizardScreenState extends State<WizardScreen> {
         title: Text(number == null ? widget.title : '${widget.title} · step $number'),
         actions: [
           if (view != null && (number as num? ?? 1) > 1 && !_busy && !_ended)
-            TextButton(onPressed: () => _send({'action': 'wizard_back', 'session': _session}), child: const Text('Back')),
+            TextButton(onPressed: _back, child: const Text('Back')),
         ],
       ),
       body: SafeArea(
@@ -246,6 +269,8 @@ class _WizardScreenState extends State<WizardScreen> {
           else if (!_ended)
             FilledButton(onPressed: () => _answer({}), child: const Text('Test again')),
         ]);
+      case 'vendor_login':
+        return _vendorLogin(context, v, next);
       case 'name':
         _text.putIfAbsent('name', () => TextEditingController(text: v['name'] as String? ?? ''));
         _text.putIfAbsent('room', () => TextEditingController(text: v['room'] as String? ?? ''));
@@ -296,6 +321,70 @@ class _WizardScreenState extends State<WizardScreen> {
         return Text('This step (“${v['step']}”) needs a newer version of the app. Use the hub\'s screen to finish.',
             style: theme.textTheme.bodyLarge);
     }
+  }
+
+  /// A vendor account (#74, wizard.rs's vendor_login): one step of the
+  /// hub in up to three screens ("phase") -- the account (email,
+  /// password; or one already saved on the hub), the one-time code the
+  /// vendor sent, then the account's devices to pick from. The password
+  /// and the code only pass through the hub: it keeps the session, never
+  /// the password.
+  Widget _vendorLogin(BuildContext context, Map<String, dynamic> v, Widget next) {
+    final sp = Spacing.of(context);
+    final theme = Theme.of(context);
+    final hint = v['hint'] as String? ?? '';
+    final phase = v['phase'] as String? ?? 'account';
+    final accounts = ((v['accounts'] as List?) ?? const []).cast<Map<String, dynamic>>();
+    final devices = ((v['devices'] as List?) ?? const []).cast<Map<String, dynamic>>();
+    final startOver = TextButton(
+      onPressed: _busy ? null : () => _answer({'restart': true}),
+      child: const Text('Use another account'),
+    );
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      if (hint.isNotEmpty) ...[Text(hint, style: theme.textTheme.bodyLarge), SizedBox(height: sp.l)],
+      if (phase == 'pick') ...[
+        if (devices.isEmpty) Text('No devices of this kind on that account.', style: theme.textTheme.bodySmall),
+        for (final d in devices)
+          Card(
+            child: ListTile(
+              title: Text(d['name'] as String? ?? d['id'] as String),
+              subtitle: (d['detail'] as String? ?? '').isEmpty ? null : Text(d['detail'] as String),
+              trailing: const Icon(Icons.chevron_right),
+              // An unavailable one is still offered: the hub says why.
+              enabled: !_busy,
+              onTap: () => _answer({'device': d['id'] as String}),
+            ),
+          ),
+        SizedBox(height: sp.l),
+        startOver,
+      ] else ...[
+        // Accounts the hub is signed in to already: one tap, no password.
+        // The screen's own choices (a vacuum's "show the map") still count.
+        if (phase == 'account' && accounts.isNotEmpty) ...[
+          for (final a in accounts)
+            Card(
+              child: ListTile(
+                leading: const Icon(Icons.account_circle_outlined),
+                title: Text(a['label'] as String? ?? a['id'] as String),
+                subtitle: const Text('Signed in: use it'),
+                trailing: const Icon(Icons.chevron_right),
+                enabled: !_busy,
+                onTap: () => _answer({
+                  'account': a['id'] as String,
+                  for (final f in _fields(v))
+                    if (f['type'] == 'toggle' || f['type'] == 'choice') f['id'] as String: _picked[f['id']] ?? '',
+                }),
+              ),
+            ),
+          SizedBox(height: sp.m),
+          Text('Or sign in with another account:', style: theme.textTheme.bodySmall),
+          SizedBox(height: sp.m),
+        ],
+        for (final f in _fields(v)) ...[_field(context, f), SizedBox(height: sp.l)],
+        next,
+        if (phase == 'code') ...[SizedBox(height: sp.s), startOver],
+      ],
+    ]);
   }
 
   Widget _field(BuildContext context, Map<String, dynamic> f) {

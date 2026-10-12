@@ -4,8 +4,9 @@ import '../hub/hub_store.dart';
 import '../theme/tokens.dart';
 import '../widgets/capability_controls.dart';
 
-/// The hub's look (#39) and its place in the world (#47): the same
-/// settings as on the hub's screen. A change shows on the hub, on this
+/// The hub's look (#39), its place in the world (#47) and the vendor
+/// accounts it's signed in to (#74): the same settings as on the hub's
+/// screen. A change shows on the hub, on this
 /// phone and on every other phone at once (settings_changed).
 class HubSettingsScreen extends StatefulWidget {
   const HubSettingsScreen({super.key, required this.hub});
@@ -34,6 +35,47 @@ class _HubSettingsScreenState extends State<HubSettingsScreen> {
     _lat.dispose();
     _lon.dispose();
     super.dispose();
+  }
+
+  /// The vendor accounts (#74, accounts.rs): null until loaded.
+  List<Map<String, dynamic>>? _accounts;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadAccounts();
+  }
+
+  void _takeAccounts(Map<String, dynamic> reply) {
+    if (mounted) setState(() => _accounts = ((reply['accounts'] as List?) ?? const []).cast<Map<String, dynamic>>());
+  }
+
+  Future<void> _loadAccounts() async {
+    try {
+      _takeAccounts(await widget.hub.request({'action': 'list_accounts'}));
+    } catch (_) {
+      if (mounted) setState(() => _accounts = const []);
+    }
+  }
+
+  Future<void> _signOut(Map<String, dynamic> a) async {
+    final devices = ((a['devices'] as List?) ?? const []).cast<String>();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Sign out of ${a['account']}?'),
+        content: Text(devices.isEmpty
+            ? 'The hub forgets this account\'s session.'
+            : 'These stop working until you sign in again (“Pair again” on each): ${devices.join(', ')}.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Sign out')),
+        ],
+      ),
+    );
+    if (ok == true && mounted) {
+      await runRequest(context, () async => _takeAccounts(await widget.hub.request({'action': 'remove_account', 'id': a['id']})));
+    }
   }
 
   void _set(Map<String, dynamic> values) => runRequest(context, () => widget.hub.setSettings(values));
@@ -124,9 +166,39 @@ class _HubSettingsScreenState extends State<HubSettingsScreen> {
                 child: const Text('Save time and place'),
               ),
             ),
+            SizedBox(height: sp.xl),
+            Text('Vendor accounts', style: theme.textTheme.titleMedium),
+            Text('Cloud accounts the hub is signed in to (it keeps their session, never the password). '
+                'Added when you add a device that needs one.', style: theme.textTheme.bodySmall),
+            SizedBox(height: sp.s),
+            if (_accounts == null)
+              const Center(child: CircularProgressIndicator())
+            else if (_accounts!.isEmpty)
+              Text('None.', style: theme.textTheme.bodySmall)
+            else
+              for (final a in _accounts!)
+                Card(
+                  child: ListTile(
+                    leading: const Icon(Icons.cloud_outlined),
+                    title: Text('${a['account']}'),
+                    subtitle: Text([
+                      _vendorName(a['vendor'] as String? ?? ''),
+                      if (((a['devices'] as List?) ?? const []).isNotEmpty) (a['devices'] as List).join(', '),
+                    ].join(' · ')),
+                    trailing: TextButton(onPressed: () => _signOut(a), child: const Text('Sign out')),
+                  ),
+                ),
           ]),
         );
       },
     );
   }
 }
+
+/// accounts.rs's vendor ids, as people know them.
+String _vendorName(String vendor) => switch (vendor) {
+      'roborock' => 'Roborock',
+      'ezviz' => 'EZVIZ',
+      'tapo' => 'Tapo',
+      _ => vendor,
+    };

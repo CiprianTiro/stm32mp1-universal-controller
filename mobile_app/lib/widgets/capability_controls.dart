@@ -1,10 +1,15 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../hub/device.dart';
 import '../hub/hub_store.dart';
 import '../theme/tokens.dart';
+
+part 'device_extras.dart';
 
 /// A device's controls, built from its capabilities alone (protocol v2):
 /// whatever device it is, a switch is a toggle, a dimmer a slider, a cover
@@ -23,7 +28,9 @@ class CapabilityControls extends StatelessWidget {
   /// Capabilities shown elsewhere (the page's hero control).
   final Set<String> skip;
 
-  static const _order = ['switch', 'dimmer', 'color', 'cover', 'climate', 'lock', 'media', 'remote', 'sensor', 'energy'];
+  static const _order = [
+    'camera', 'vacuum', 'switch', 'dimmer', 'color', 'cover', 'climate', 'lock', 'media', 'remote', 'options', 'sensor', 'energy',
+  ];
 
   @override
   Widget build(BuildContext context) {
@@ -55,6 +62,9 @@ class CapabilityControls extends StatelessWidget {
       'remote' => _RemoteControl(device: d, hub: hub),
       'sensor' => _SensorReadings(device: d),
       'energy' => _EnergyReadings(device: d),
+      'vacuum' => _VacuumControl(device: d, hub: hub),
+      'camera' => _CameraControl(device: d, hub: hub),
+      'options' => _OptionsControl(device: d, hub: hub),
       _ => const SizedBox.shrink(),
     };
   }
@@ -519,6 +529,8 @@ class _MediaControl extends StatelessWidget {
               ),
             ),
           ]),
+          SizedBox(height: sp.s),
+          _MediaLists(device: device, hub: hub),
           if (inputs.isNotEmpty) ...[
             SizedBox(height: sp.s),
             Wrap(
