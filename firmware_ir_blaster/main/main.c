@@ -9,16 +9,23 @@
  * The blaster sends IR codes for the hub and learns them from original
  * remotes. The pieces, each in its own file:
  *
+ *   ir_service.c  owns the IR hardware (ir_tx.c sends, ir_rx.c receives,
+ *                 ir_nec.c knows the NEC protocol)
+ *   ir_link.c     the blaster's requests on the hub connection: send,
+ *                 learn, "heard" (PROTOCOL.md)
+ *   main.c        start-up and the serial console (this file)
+ *
+ * ...and, shared with the hub's other add-ons (the room sensor, #86), in
+ * firmware_common/uc_addon/:
+ *
  *   identity.c    who this blaster is: key, certificate, pairing code, and
  *                 which hub it belongs to (kept in flash)
  *   wifi.c        joins the home network, reconnects by itself
  *   provision.c   WiFi setup over Bluetooth (no network yet / BOOT held)
- *   ir_service.c  owns the IR hardware (ir_tx.c sends, ir_rx.c receives,
- *                 ir_nec.c knows the NEC protocol)
  *   hub_link.c    the encrypted connection to the hub (PROTOCOL.md)
- *   main.c        start-up and the serial console (this file)
  *
- * Console commands (type `help` for the full list):
+ * Console commands (type `help` for the full list; the first five are
+ * shared with the other add-ons, uc_addon/addon_console.c):
  *
  *   status                     WiFi, hub connection, firmware version
  *   wifi <name> <password>     join a network (development; normally the
@@ -38,19 +45,20 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "addon_console.h"
 #include "esp_console.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "hub_link.h"
 #include "identity.h"
+#include "ir_link.h"
 #include "ir_nec.h"
 #include "ir_service.h"
 #include "ir_tx.h"
-#include "nvs.h"
 #include "provision.h"
 #include "nvs_flash.h"
+#include "uc_addon.h"
 #include "version.h"
 #include "wifi.h"
 
@@ -60,6 +68,26 @@ static const char *TAG = "ir_blaster";
  * strapping pin, not used by the N16R8's flash/PSRAM, not USB/UART). */
 #define IR_TX_GPIO GPIO_NUM_4
 #define IR_RX_GPIO GPIO_NUM_5
+
+/* What makes this add-on an IR blaster for the shared code (uc_addon.h).
+ * These names are the ones the blaster had before that code was shared
+ * (#86): a blaster paired before keeps working with its hub. */
+static const uc_addon_config_t ADDON = {
+  .product = "IR blaster",
+  .id_prefix = "irb",
+  .mdns_service = "_uc-irblaster",
+  .prov_prefix = "PROV_IRB_",
+  /* 1f2b9c64-3a5e-4c1d-9f0a-5b6e7d8c9a01, little-endian. Randomly
+   * generated for this project; the hub's template names it too. */
+  .ble_service_uuid = { 0x01, 0x9a, 0x8c, 0x7d, 0x6e, 0x5b, 0x0a, 0x9f,
+                        0x1d, 0x4c, 0x5e, 0x3a, 0x64, 0x9c, 0x2b, 0x1f },
+  .pair_label = "uc-irb-pair-v1",
+  .pair_role = "blaster",
+  .fw_version = FW_VERSION,
+  .protocol_version = PROTOCOL_VERSION,
+  /* IR must go out the moment the hub says: no WiFi power saving. */
+  .wifi_power_save = false,
+};
 
 /* Frame buffer for the console commands. Static: 2 KB. Only the console
  * task uses it. */
@@ -129,100 +157,6 @@ static bool parse_number(const char *text, unsigned long max, unsigned long *out
   }
   *out = value;
   return true;
-}
-
-static int cmd_status(int argc, char **argv)
-{
-  printf("IR blaster %s, firmware %s\n", identity_device_id(), FW_VERSION);
-  if (provision_active()) {
-    printf("WiFi: not set up. Bluetooth setup is waiting (the hub's wizard, pairing code: `pairing`)\n");
-  } else {
-    wifi_print_status();
-  }
-  if (!identity_hub_fingerprint()) {
-    printf("Hub: not paired yet (the hub's wizard asks for the code: type `pairing`)\n");
-  } else {
-    printf("Hub: paired with %.16s..., %s\n", identity_hub_fingerprint(),
-           hub_link_connected() ? "connected" : "not connected right now");
-  }
-  return 0;
-}
-
-static int cmd_wifi(int argc, char **argv)
-{
-  if (argc == 1) {
-    wifi_print_status();
-    return 0;
-  }
-  if (argc == 2 && strcmp(argv[1], "forget") == 0) {
-    /* Like holding BOOT: Bluetooth setup needs a restart (its memory was
-     * released once the WiFi was set up). */
-    esp_err_t err = wifi_forget();
-    printf("WiFi network forgotten (%s), restarting into Bluetooth setup...\n", esp_err_to_name(err));
-    vTaskDelay(pdMS_TO_TICKS(200));
-    esp_restart();
-    return 0;
-  }
-  if (argc != 2 && argc != 3) {
-    printf("usage: wifi <name> <password>   join a network\n"
-           "       wifi <name>              join an open network\n"
-           "       wifi                     show the connection\n"
-           "       wifi forget              forget the network, restart into Bluetooth setup\n"
-           "A name with spaces goes in quotes: wifi \"My Network\" secret123\n");
-    return 1;
-  }
-  esp_err_t err = wifi_set_network(argv[1], argc == 3 ? argv[2] : "");
-  if (err != ESP_OK) {
-    printf("could not use that network: %s (name 1-32, password up to 63 characters)\n",
-           esp_err_to_name(err));
-    return 1;
-  }
-  printf("saved, connecting to \"%s\"... (`status` shows the result)\n", argv[1]);
-  return 0;
-}
-
-static int cmd_pairing(int argc, char **argv)
-{
-  char code[20];
-  identity_pairing_code_display(code);
-  printf("Pairing code: %s\n", code);
-  printf("Device:       %s\n", identity_device_id());
-  printf("Certificate:  %s\n", identity_fingerprint());
-  printf("Hub:          %s\n", identity_hub_fingerprint() ? "paired" : "not paired");
-  return 0;
-}
-
-static int cmd_unpair(int argc, char **argv)
-{
-  if (!identity_hub_fingerprint()) {
-    printf("not paired\n");
-    return 0;
-  }
-  esp_err_t err = identity_clear_hub();
-  hub_link_pairing_changed();
-  printf("hub forgotten: %s. Add the blaster in the hub again to pair.\n", esp_err_to_name(err));
-  return err == ESP_OK ? 0 : 1;
-}
-
-static int cmd_factory_reset(int argc, char **argv)
-{
-  if (argc != 2 || strcmp(argv[1], "yes") != 0) {
-    printf("Forgets the WiFi network, the hub AND this blaster's identity: it gets\n"
-           "a new certificate and a NEW PAIRING CODE (a printed label becomes wrong).\n"
-           "To do it, type: factory-reset yes\n");
-    return 1;
-  }
-  printf("factory reset, restarting...\n");
-  wifi_forget();
-  nvs_handle_t nvs;
-  if (nvs_open("identity", NVS_READWRITE, &nvs) == ESP_OK) {
-    nvs_erase_all(nvs);
-    nvs_commit(nvs);
-    nvs_close(nvs);
-  }
-  vTaskDelay(pdMS_TO_TICKS(200)); /* let the message get out */
-  esp_restart();
-  return 0;
 }
 
 static int cmd_nec(int argc, char **argv)
@@ -298,14 +232,10 @@ static int cmd_ledtest(int argc, char **argv)
 
 static void register_commands(void)
 {
+  /* status, wifi, pairing, unpair, factory-reset: shared (uc_addon). */
+  ESP_ERROR_CHECK(uc_addon_console_register());
+
   const esp_console_cmd_t commands[] = {
-    { .command = "status", .help = "WiFi, hub connection and firmware version", .func = cmd_status },
-    { .command = "wifi", .help = "Join a network: wifi <name> <password>; `wifi` shows it, `wifi forget` forgets it",
-      .func = cmd_wifi },
-    { .command = "pairing", .help = "Show the pairing code the hub's wizard asks for", .func = cmd_pairing },
-    { .command = "unpair", .help = "Forget the hub this blaster belongs to", .func = cmd_unpair },
-    { .command = "factory-reset", .help = "Forget WiFi, hub and identity (new pairing code): factory-reset yes",
-      .func = cmd_factory_reset },
     { .command = "nec", .help = "Send an NEC code: nec <address> <command> [repeats] (LG TV power: nec 0x04 0x08)",
       .func = cmd_nec },
     { .command = "replay", .help = "Send the last code the receiver heard", .func = cmd_replay },
@@ -337,12 +267,13 @@ void app_main(void)
   }
   ESP_ERROR_CHECK(err);
 
+  uc_addon_init(&ADDON);
   ESP_ERROR_CHECK(identity_init());
   ESP_ERROR_CHECK(ir_service_start(IR_TX_GPIO, IR_RX_GPIO));
   ir_service_add_listener(print_heard);
   ESP_ERROR_CHECK(wifi_start());
   ESP_ERROR_CHECK(provision_watch_button());
-  ESP_ERROR_CHECK(hub_link_start());
+  ESP_ERROR_CHECK(ir_link_start());
 
   /* Interactive console on the COM port (UART0, through the board's
    * USB-serial chip) -- see sdkconfig.defaults for why COM, not USB. */

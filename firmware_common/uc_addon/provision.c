@@ -2,7 +2,8 @@
  * Copyright (c) 2026 Ciprian Tironeac
  * SPDX-License-Identifier: Apache-2.0
  *
- * WiFi setup over Bluetooth -- see provision.h.
+ * WiFi setup over Bluetooth -- see provision.h. (Moved here from
+ * firmware_ir_blaster/ for #86.)
  *
  * The provisioning manager (Espressif's network_provisioning component)
  * does the Bluetooth GATT service, the SRP6a session and the WiFi
@@ -25,6 +26,7 @@
 #include "network_provisioning/manager.h"
 #include "network_provisioning/scheme_ble.h"
 #include "esp_srp.h"
+#include "uc_addon.h"
 #include "wifi.h"
 
 static const char *TAG = "provision";
@@ -37,14 +39,11 @@ static const char *TAG = "provision";
 /* The salt is random for each setup; 16 bytes is the example's size. */
 #define SEC2_SALT_LEN 16
 
-/* Our own GATT service UUID, advertised so the hub finds IR blasters among
- * all the Bluetooth devices around (instead of every Espressif device).
- * Randomly generated for this project; the byte order is little-endian,
- * as the component expects: 1f2b9c64-3a5e-4c1d-9f0a-5b6e7d8c9a01. */
-static uint8_t service_uuid[16] = {
-  0x01, 0x9a, 0x8c, 0x7d, 0x6e, 0x5b, 0x0a, 0x9f,
-  0x1d, 0x4c, 0x5e, 0x3a, 0x64, 0x9c, 0x2b, 0x1f,
-};
+/* Our own GATT service UUID (uc_addon.h's ble_service_uuid), advertised
+ * so the hub finds this kind of add-on among all the Bluetooth devices
+ * around (instead of every Espressif device). The component keeps the
+ * pointer, and wants it writable: a copy. */
+static uint8_t service_uuid[16];
 
 /* How often the WiFi join is tried with the received network before the
  * setup client is told "failed" (so the person can correct a password). */
@@ -90,7 +89,7 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
     /* The manager stops Bluetooth by itself shortly after success. */
     network_prov_mgr_deinit();
     active = false;
-    wifi_no_power_save(); /* allowed now that Bluetooth is off */
+    wifi_power_save_settle(); /* allowed now that Bluetooth is off */
     free(salt);
     free(verifier);
     salt = verifier = NULL;
@@ -137,16 +136,17 @@ esp_err_t provision_start_if_needed(bool *started)
   sec2_params.verifier_len = verifier_len;
 
   /* "PROV_IRB_91E4": Espressif's apps list names starting with PROV_; the
-   * last 4 digits of the device id tell two blasters apart. */
-  char name[20];
+   * last 4 digits of the device id tell two add-ons apart. */
+  char name[24];
   const char *id = identity_device_id();
-  snprintf(name, sizeof(name), "PROV_IRB_%s", id + strlen(id) - 4);
+  snprintf(name, sizeof(name), "%s%s", uc_addon_config()->prov_prefix, id + strlen(id) - 4);
   for (char *c = name; *c; c++) {
     if (*c >= 'a' && *c <= 'f') {
       *c -= 'a' - 'A';
     }
   }
 
+  memcpy(service_uuid, uc_addon_config()->ble_service_uuid, sizeof(service_uuid));
   network_prov_scheme_ble_set_service_uuid(service_uuid);
   /* Marked active BEFORE starting: starting runs WiFi's start event,
    * whose handler (wifi.c) must already know that setup is running. */

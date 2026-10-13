@@ -1273,7 +1273,7 @@ mod tests {
     /* The hub's own list: a template using a new capability is checked
      * against what device.rs really has. */
     const ALL_CAPS: [&str; crate::device::CAPABILITY_NAMES.len()] = crate::device::CAPABILITY_NAMES;
-    const ADAPTERS: [&str; 11] = ["m4-led", "wled", "lg-webos", "ir-blaster", "wiz", "http", "mqtt", "roborock", "ezviz", "tapo", "camera"];
+    const ADAPTERS: [&str; 12] = ["m4-led", "wled", "lg-webos", "ir-blaster", "room-sensor", "wiz", "http", "mqtt", "roborock", "ezviz", "tapo", "camera"];
 
     fn known() -> Known<'static> {
         Known {

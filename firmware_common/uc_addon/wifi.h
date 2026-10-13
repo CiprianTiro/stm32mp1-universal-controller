@@ -2,13 +2,13 @@
  * Copyright (c) 2026 Ciprian Tironeac
  * SPDX-License-Identifier: Apache-2.0
  *
- * wifi: joins the home network (#42).
+ * wifi: joins the home network (#42; shared by the add-ons since #86).
  *
  * The network name and password come over Bluetooth from the hub's wizard
  * (provision.c), or -- for development -- from the serial console
  * (`wifi <name> <password>`); ESP-IDF keeps them in flash either way.
  *
- * Once configured, the blaster connects at every start and reconnects by
+ * Once configured, the add-on connects at every start and reconnects by
  * itself whenever the connection drops (router restart, out of range...).
  */
 
@@ -30,9 +30,11 @@ esp_err_t wifi_set_network(const char *ssid, const char *password);
  * restart: its memory was released once the WiFi was set up.) */
 esp_err_t wifi_forget(void);
 
-/* Turns WiFi power saving off, unless Bluetooth setup still runs (it's
- * needed then). provision.c calls it again when setup has finished. */
-void wifi_no_power_save(void);
+/* Sets the WiFi power saving the add-on wants (uc_addon.h: none for the
+ * blaster, modem sleep for the sensor) -- unless Bluetooth setup still
+ * runs (it needs power saving on). provision.c calls it again when setup
+ * has finished. */
+void wifi_power_save_settle(void);
 
 /* Connected and has an IP address. */
 bool wifi_is_connected(void);

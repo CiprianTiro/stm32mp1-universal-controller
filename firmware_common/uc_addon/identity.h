@@ -3,26 +3,27 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * ===========================================================================
- * identity: who this blaster is, and which hub it belongs to (#42)
+ * identity: who this add-on is, and which hub it belongs to (#42, #86)
  * ===========================================================================
  *
  * Made once, on the very first start, and kept in flash (NVS) from then on:
  *
- *   device id       "irb-<mac>", e.g. "irb-7ce8b1b091e4" -- from the chip's
- *                   factory MAC, so it's the same after a reflash
+ *   device id       "<prefix>-<mac>", e.g. "irb-7ce8b1b091e4" (uc_addon.h's
+ *                   id_prefix) -- from the chip's factory MAC, so it's the
+ *                   same after a reflash
  *   key             an ECDSA P-256 private key, generated ON the chip; it
  *                   never leaves it (only the TLS handshake uses it)
  *   certificate     self-signed, for that key; its SHA-256 is the
  *                   fingerprint the hub pins at pairing
  *   pairing code    16 random characters (80 bits), shown as
  *                   XXXX-XXXX-XXXX-XXXX; proves to the hub that the person
- *                   pairing has this blaster in hand (PROTOCOL.md)
+ *                   pairing has this add-on in hand (PROTOCOL.md)
  *   hub fingerprint the one hub allowed to connect, once paired; empty
  *                   while unpaired
  *
  * The key, certificate and code stay the same until a factory reset, so
  * a printed pairing-code label stays valid and a paired hub keeps
- * recognising the blaster after a firmware update.
+ * recognising the add-on after a firmware update.
  */
 
 #pragma once
@@ -43,7 +44,7 @@
  * start (takes a second or two: key generation). Needs NVS initialised. */
 esp_err_t identity_init(void);
 
-/* "irb-7ce8b1b091e4" */
+/* "irb-7ce8b1b091e4", "ths-..." */
 const char *identity_device_id(void);
 
 /* The pairing code without dashes, upper case ("7K3M...", 16 chars). */

@@ -6,11 +6,12 @@
  * provision: WiFi setup over Bluetooth (#42, the way issue #71 plans it)
  * ===========================================================================
  *
- * A blaster without a WiFi network (new, or after holding BOOT for 5 s)
- * announces itself over Bluetooth Low Energy as "PROV_IRB_xxxx". The hub
+ * An add-on without a WiFi network (new, or after holding BOOT for 5 s)
+ * announces itself over Bluetooth Low Energy as "PROV_IRB_xxxx" (the IR
+ * blaster; uc_addon.h names it per add-on). The hub
  * (or Espressif's esp_prov tool / phone app, for testing) connects, proves
  * it knows the PAIRING CODE, and sends the home WiFi's name and password.
- * The blaster joins the WiFi, reports whether it worked, and switches
+ * The add-on joins the WiFi, reports whether it worked, and switches
  * Bluetooth off.
  *
  * This is Espressif's standard "network provisioning" with security level

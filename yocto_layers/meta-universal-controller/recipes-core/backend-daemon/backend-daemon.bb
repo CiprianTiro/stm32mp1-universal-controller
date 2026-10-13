@@ -50,6 +50,7 @@ SRC_URI = " \
     file://Cargo.lock \
     file://src/accounts.rs \
     file://src/adapters/mod.rs \
+    file://src/adapters/addon.rs \
     file://src/adapters/camera.rs \
     file://src/adapters/channels.rs \
     file://src/adapters/cloud.rs \
@@ -71,6 +72,7 @@ SRC_URI = " \
     file://src/adapters/roborock_cloud.rs \
     file://src/adapters/roborock_map.rs \
     file://src/adapters/roborock_proto.rs \
+    file://src/adapters/room_sensor.rs \
     file://src/adapters/tapo.rs \
     file://src/adapters/wiz.rs \
     file://src/adapters/wled.rs \
