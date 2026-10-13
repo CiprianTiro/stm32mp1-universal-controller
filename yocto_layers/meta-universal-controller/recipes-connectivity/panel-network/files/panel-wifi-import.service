@@ -1,0 +1,12 @@
+[Unit]
+Description=Wall panel: take the WiFi settings from the SD card (/boot/wifi.txt)
+ConditionPathExists=/boot/wifi.txt
+RequiresMountsFor=/boot /etc
+Before=wpa_supplicant@wlan0.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/panel-wifi-import
+
+[Install]
+WantedBy=multi-user.target

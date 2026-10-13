@@ -34,11 +34,12 @@ inherit systemd useradd pkgconfig
 DEPENDS += "libinput libxkbcommon udev"
 RDEPENDS:${PN} += "xkeyboard-config"
 
-# Hardware-only (the image only installs it on stm32mp1common, see
-# universal-controller-image.bb), and do_compile below hardcodes the
-# 32-bit ARM Rust target -- refusing other machines up front gives a clear
-# "not compatible" message instead of a confusing link error.
-COMPATIBLE_MACHINE = "(stm32mp1common)"
+# Hardware-only, and do_compile below hardcodes the 32-bit ARM Rust
+# target -- refusing other machines up front gives a clear "not
+# compatible" message instead of a confusing link error. The DK2, and
+# (issue #107) the wall panel's 32-bit Raspberry Pi build (raspberrypi3,
+# a Cortex-A53 running ARMv7 code; see UI_TARGET_CPU).
+COMPATIBLE_MACHINE = "(stm32mp1common|raspberrypi3$)"
 
 # Real source lives at linux_a7/ui_layer/ (repo root), not duplicated into
 # this layer -- see backend-daemon.bb's own comment for why (same reasoning,
@@ -84,7 +85,9 @@ SRC_URI = " \
     file://src/tiles.rs \
     file://src/vacuum_map.rs \
     file://src/panel.rs \
+    file://src/backlight.rs \
     file://ui-layer.service \
+    file://10-panel.conf \
 "
 
 S = "${WORKDIR}"
@@ -105,6 +108,12 @@ UI_RUST_TARGET = "armv7-unknown-linux-gnueabihf"
 # happen once per container, and --locked below keeps them pinned to
 # exactly what Cargo.lock says.
 do_compile[network] = "1"
+
+# The CPU the code is tuned for: the DK2's Cortex-A7, or (issue #107) the
+# Raspberry Pi 3B+'s Cortex-A53 -- running 32-bit ARMv7 code, so the Rust
+# target stays the same.
+UI_TARGET_CPU ?= "cortex-a7"
+UI_TARGET_CPU:rpi = "cortex-a53"
 
 do_compile() {
     # Cargo wants the linker to be a single executable path, but Yocto's
@@ -146,7 +155,7 @@ do_compile() {
     # panic messages / debug info), which would leak build-machine paths
     # like /home/builder/workspace/build/tmp/... -- Yocto's QA flags that
     # as a [buildpaths] issue. These rewrite them to neutral paths instead.
-    export CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_RUSTFLAGS="-C target-cpu=cortex-a7 --remap-path-prefix=${WORKDIR}=/usr/src/debug/${PN}/${PV} --remap-path-prefix=${RUSTUP_CARGO_HOME}=/cargo"
+    export CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_RUSTFLAGS="-C target-cpu=${UI_TARGET_CPU} --remap-path-prefix=${WORKDIR}=/usr/src/debug/${PN}/${PV} --remap-path-prefix=${RUSTUP_CARGO_HOME}=/cargo"
 
     # C compilers for the `cc` crate, per target. Target-specific variable
     # names win over the plain CC/CFLAGS bitbake exports, so host build
@@ -175,7 +184,14 @@ do_install() {
     install -D -m 0755 ${B}/target/${UI_RUST_TARGET}/release/ui-layer ${D}${bindir}/ui-layer
     install -d ${D}${systemd_system_unitdir}
     install -m 0644 ${WORKDIR}/ui-layer.service ${D}${systemd_system_unitdir}/ui-layer.service
+    install -D -m 0644 ${WORKDIR}/10-panel.conf ${D}${systemd_system_unitdir}/ui-layer.service.d/10-panel.conf
 }
+
+# Issue #107: the wall panel's switch (panel mode + its network access),
+# a drop-in for ui-layer.service. Only the panel image installs it.
+PACKAGES =+ "${PN}-panel"
+FILES:${PN}-panel = "${systemd_system_unitdir}/ui-layer.service.d/10-panel.conf"
+RDEPENDS:${PN}-panel = "${PN}"
 
 # The UI's own user (issue #37): ui-layer.service runs it as "hubui"
 # instead of root. A system account with its own group, no home folder and

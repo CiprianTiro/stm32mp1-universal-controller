@@ -242,6 +242,8 @@ export component PanelInfoPage inherits Rectangle {
     in property <bool> connected;
     // Why it can't connect, if it can't (the certificate changed...).
     in property <string> problem;
+    // How warm it is (issue #107), e.g. "52.1 °C".
+    in property <string> health;
     callback back();
     callback unpair();
     property <bool> confirm: false;
@@ -287,6 +289,14 @@ export component PanelInfoPage inherits Rectangle {
                     text: connected ? "Connected" : "Not connected, trying again\u{2026}";
                     color: connected ? Theme.ok : Theme.error;
                     font-size: Theme.font-body;
+                }
+                if health != "": Text {
+                    // The literal "°C" here puts the degree sign into the
+                    // embedded font (see PasswordPage in network.slint).
+                    text: "Temperature " + health + (false ? "\u{b0}C" : "");
+                    color: Theme.text-muted;
+                    font-size: Theme.font-caption;
+                    wrap: word-wrap;
                 }
                 if !connected && problem != "": Text {
                     text: problem;

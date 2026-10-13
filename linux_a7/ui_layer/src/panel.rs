@@ -353,6 +353,43 @@ pub fn pair(host: &str, port: u16, hub_name: &str, fingerprint: &str, code: &str
 }
 
 // ---------------------------------------------------------------------
+// How warm the panel is (issue #107)
+// ---------------------------------------------------------------------
+
+/// The SoC's temperature and, on a Raspberry Pi, whether its firmware is
+/// slowing it down -- for Settings > This panel. E.g. "52.1 °C" or
+/// "61.3 °C, slowed down (heat)". Empty when the machine doesn't say.
+pub fn health_text() -> String {
+    let temp = std::fs::read_to_string("/sys/class/thermal/thermal_zone0/temp")
+        .ok()
+        .and_then(|t| t.trim().parse::<f32>().ok())
+        .map(|milli| format!("{:.1} \u{b0}C", milli / 1000.0));
+    // The firmware's flags (the kernel's raspberrypi-hwmon / firmware
+    // driver): bit 0 undervoltage now, 1 clock capped, 2 throttled now,
+    // 3 soft temperature limit now; 16-19 the same "since boot".
+    let throttled = std::fs::read_to_string("/sys/devices/platform/soc/soc:firmware/get_throttled")
+        .ok()
+        .and_then(|t| u32::from_str_radix(t.trim().trim_start_matches("0x"), 16).ok());
+    let mut text = temp.unwrap_or_default();
+    if let Some(flags) = throttled {
+        let mut why = Vec::new();
+        if flags & 0x1 != 0 {
+            why.push("power supply too weak");
+        }
+        if flags & 0xc != 0 {
+            why.push("slowed down (heat)");
+        }
+        if why.is_empty() && flags & 0x50000 != 0 {
+            why.push("was slowed down since start");
+        }
+        if !why.is_empty() {
+            text = format!("{text}, {}", why.join(", "));
+        }
+    }
+    text
+}
+
+// ---------------------------------------------------------------------
 // Finding hubs: one mDNS question
 // ---------------------------------------------------------------------
 

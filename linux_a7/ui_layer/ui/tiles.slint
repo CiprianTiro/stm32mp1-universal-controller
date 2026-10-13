@@ -22,6 +22,9 @@ import { Icon } from "icons.slint";
 export struct TileItem {
     id: string,
     name: string,
+    // Its room ("" = none): shown on big tiles of a category (#107), where
+    // rooms are mixed.
+    room: string,
     // One line: "On \u{2022} 42 %", "18.4 W", "40 % open", "21.5 °C".
     state: string,
     // icons.slint's kind: "light", "plug", "tv", ...
@@ -41,6 +44,21 @@ export struct TileItem {
     level: int,
     // Starred: a small star by its arrow.
     favourite: bool,
+}
+
+// Issue #107: a category card of the landscape home screen (tiles.rs
+// categories()): "Lights / 3 on", "Climate / 21-23 °C".
+export struct CategoryItem {
+    // The filter it opens: "cat:lights".
+    id: string,
+    name: string,
+    // icons.slint's kind.
+    icon: string,
+    summary: string,
+    // Something in it is on or running: the card is lit.
+    active: bool,
+    // Needs a look: unlocked, offline.
+    alert: bool,
 }
 
 // A row of the grid: a room's heading (tiles empty), or up to `columns`
@@ -63,27 +81,58 @@ export struct FilterChip {
 
 component DeviceTile inherits Rectangle {
     in property <TileItem> item;
+    // Issue #107: the wall panel's landscape home screen -- taller, with a
+    // bigger icon and name: buttons to hit from a step away.
+    in property <bool> big: false;
+    // ...and its room above its name (a category mixes rooms).
+    in property <bool> show-room: false;
     callback toggle(string, bool);
     callback open(string);
 
     property <bool> lit: item.on && item.status == "";
+    property <length> icon-size: big ? 52px : 40px;
+    property <length> text-top: big ? 76px : 56px;
+    // Big tiles (#107) have no arrow: HOLDING the tile opens its controls.
+    // Set when the hold has opened them, so letting go doesn't also
+    // switch the device.
+    property <bool> held: false;
 
-    height: 108px;
-    border-radius: Theme.radius-medium * 2;
+    height: big ? 136px : 108px;
+    border-radius: big ? Theme.radius-medium * 3 : Theme.radius-medium * 2;
     clip: true;
-    // On: tinted with its colour, so a glance shows what's on.
+    // On: tinted with its colour, so a glance shows what's on -- big tiles
+    // (#107) a bit more strongly, without the border. (A gradient would
+    // lose the rounded corners in the software renderer.)
     background: touch.pressed ? Theme.surface-pressed
+        : lit && big ? item.tint.mix(Theme.surface, 0.32)
         : lit ? item.tint.mix(Theme.surface, 0.22) : Theme.surface;
     animate background { duration: 180ms; }
-    border-width: lit ? 1px : 0;
+    border-width: lit && !big ? 1px : 0;
     border-color: item.tint.mix(Theme.surface, 0.6);
     // Not reachable: dimmed (its values may be stale).
     opacity: item.status == "" ? 1 : 0.6;
 
+    // Holding a big tile for a moment: its controls.
+    Timer {
+        interval: 550ms;
+        running: big && touch.pressed && !held;
+        triggered => {
+            held = true;
+            root.open(item.id);
+        }
+    }
+
     // The whole tile: the main action.
     touch := TouchArea {
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.down) {
+                held = false;
+            }
+        }
         clicked => {
-            if (item.can-toggle) {
+            if (held) {
+                held = false;
+            } else if (item.can-toggle) {
                 root.toggle(item.id, !item.on);
             } else {
                 root.open(item.id);
@@ -95,19 +144,23 @@ component DeviceTile inherits Rectangle {
     Rectangle {
         x: Theme.space-m;
         y: Theme.space-m;
-        width: 40px;
-        height: 40px;
+        width: icon-size;
+        height: icon-size;
         border-radius: self.height / 2;
         background: lit ? item.tint : Theme.surface-pressed;
         animate background { duration: 180ms; }
         Icon {
+            width: big ? 30px : 24px;
+            height: self.width;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
             kind: item.icon;
             color: lit ? item.on-tint : Theme.text-muted;
         }
     }
 
     // The arrow: the device's controls. Its own TouchArea, over the
-    // tile's, at least a finger wide.
+    // tile's, at least a finger wide. (Big tiles also open on a hold.)
     Rectangle {
         x: parent.width - self.width;
         y: 0;
@@ -126,7 +179,7 @@ component DeviceTile inherits Rectangle {
         }
     }
     if item.favourite: Icon {
-        x: parent.width - 48px - 14px;
+        x: big ? parent.width - 16px - Theme.space-l : parent.width - 48px - 14px;
         y: 16px;
         width: 16px;
         height: 16px;
@@ -151,14 +204,20 @@ component DeviceTile inherits Rectangle {
 
     VerticalLayout {
         x: Theme.space-m;
-        y: 56px;
+        y: text-top;
         width: parent.width - 2 * Theme.space-m;
-        height: parent.height - 56px - Theme.space-s;
+        height: parent.height - text-top - Theme.space-s;
         alignment: end;
+        if show-room && item.room != "": Text {
+            text: item.room;
+            color: Theme.text-muted;
+            font-size: Theme.font-caption;
+            overflow: elide;
+        }
         Text {
             text: item.name;
             color: Theme.text;
-            font-size: Theme.font-body;
+            font-size: big ? Theme.font-subtitle : Theme.font-body;
             overflow: elide;
         }
         Text {
@@ -171,12 +230,37 @@ component DeviceTile inherits Rectangle {
 }
 
 // The grid: rows of tiles, a room's heading before its tiles. Scrolls.
+//
+// Issue #107, `paged` (the wall panel's landscape home screen): NO
+// scrolling -- whole pages of `rows-per-page` rows (main.rs leaves out the
+// headings: the room tabs say where you are), swiped left/right, with a
+// dot per page under them (a tap on a dot goes there).
 export component TileGrid inherits Rectangle {
     in property <[TileRow]> rows;
     in property <int> columns: 2;
+    // Issue #107: big tiles (see DeviceTile).
+    in property <bool> big: false;
+    in property <bool> paged: false;
+    in property <int> rows-per-page: 2;
+    in-out property <int> page: 0;
+    // Each big tile says its room (a category's devices, #107).
+    in property <bool> show-room: false;
     in property <string> empty-text: "No devices yet";
     callback toggle(string, bool);
     callback open(string);
+
+    property <int> pages: max(1, ceil(rows.length / max(1, rows-per-page)));
+    // A paged tile's width, from the grid's own width (the rows are
+    // nested in an `if`: their width can't come from their contents).
+    property <length> paged-tile-width: (root.width - (columns - 1) * Theme.space-s) / columns;
+    // ...and height: the page's rows share its height (above the dots).
+    property <length> paged-tile-height: clamp((root.height - 20px - Theme.space-s) / max(1, rows-per-page) - Theme.space-s, 120px, 220px);
+    // A filter with fewer pages (another room): back onto a real page.
+    changed pages => {
+        if (page >= pages) {
+            page = pages - 1;
+        }
+    }
 
     if rows.length == 0: Text {
         text: empty-text;
@@ -187,7 +271,71 @@ export component TileGrid inherits Rectangle {
         wrap: word-wrap;
     }
 
-    ListView {
+    if paged: VerticalLayout {
+        spacing: Theme.space-s;
+        swipe := SwipeGestureHandler {
+            vertical-stretch: 1;
+            handle-swipe-left: page < pages - 1;
+            handle-swipe-right: page > 0;
+            swiped => {
+                if (self.current-position.x < self.pressed-position.x) {
+                    page = min(page + 1, pages - 1);
+                } else {
+                    page = max(page - 1, 0);
+                }
+            }
+            // No spacing here: the other pages' rows are empty but would
+            // still get it. Each shown row brings its own gap instead.
+            VerticalLayout {
+                alignment: start;
+                for row[i] in rows: HorizontalLayout {
+                    if i >= page * rows-per-page && i < (page + 1) * rows-per-page: HorizontalLayout {
+                        spacing: Theme.space-s;
+                        padding-bottom: Theme.space-s;
+                        for t in row.tiles: DeviceTile {
+                            width: root.paged-tile-width;
+                            height: root.paged-tile-height;
+                            item: t;
+                            big: root.big;
+                            show-room: root.show-room;
+                            toggle(id, on) => {
+                                root.toggle(id, on);
+                            }
+                            open(id) => {
+                                root.open(id);
+                            }
+                        }
+                        for n in columns - row.tiles.length: Rectangle {
+                            width: root.paged-tile-width;
+                        }
+                    }
+                }
+            }
+        }
+        // One dot per page, the current one long and lit.
+        if pages > 1: HorizontalLayout {
+            height: 20px;
+            alignment: center;
+            spacing: Theme.space-s;
+            for p in pages: Rectangle {
+                width: p == page ? 22px : 8px;
+                height: 8px;
+                y: (parent.height - self.height) / 2;
+                border-radius: 4px;
+                background: p == page ? Theme.accent : Theme.outline;
+                animate width { duration: 150ms; }
+                TouchArea {
+                    width: 28px;
+                    height: 28px;
+                    clicked => {
+                        page = p;
+                    }
+                }
+            }
+        }
+    }
+
+    if !paged: ListView {
         for row in rows: VerticalLayout {
             padding-bottom: Theme.space-s;
             if row.header != "": Text {
@@ -204,6 +352,7 @@ export component TileGrid inherits Rectangle {
                     // the cards did (#38): columns line up row after row.
                     width: (parent.width - (columns - 1) * parent.spacing) / columns;
                     item: t;
+                    big: root.big;
                     toggle(id, on) => {
                         root.toggle(id, on);
                     }
@@ -225,6 +374,10 @@ export component TileGrid inherits Rectangle {
 export component FilterBar inherits Rectangle {
     in property <[FilterChip]> chips;
     in property <string> selected;
+    // Issue #107: only the places (All, Favourites, the rooms) -- the
+    // landscape home screen shows the summaries ("3 on", "18 W",
+    // "2 offline") in its left column instead.
+    in property <bool> places-only: false;
     callback pick(string);
 
     height: 40px;
@@ -234,11 +387,15 @@ export component FilterBar inherits Rectangle {
         row := HorizontalLayout {
             spacing: Theme.space-s;
             alignment: start;
-            for chip in chips: Rectangle {
+            for chip in chips: HorizontalLayout {
+              // (The summaries' ids: tiles.rs LIGHTS, ENERGY, OFFLINE.)
+              if !(root.places-only && (chip.id == "lights" || chip.id == "energy" || chip.id == "offline")): Rectangle {
                 property <bool> on: chip.id == root.selected;
                 height: 40px;
                 border-radius: self.height / 2;
-                background: on ? Theme.accent : (chip-touch.pressed ? Theme.surface-pressed : Theme.surface);
+                // As tabs (places-only): only the chosen one is a pill.
+                background: on ? Theme.accent : chip-touch.pressed ? Theme.surface-pressed
+                    : root.places-only ? transparent : Theme.surface;
                 border-width: chip.warn && !on ? 1px : 0;
                 border-color: Theme.error;
                 HorizontalLayout {
@@ -267,6 +424,84 @@ export component FilterBar inherits Rectangle {
                         root.pick(chip.id);
                     }
                 }
+              }
+            }
+        }
+    }
+}
+
+// Issue #107: the landscape home screen's category cards -- big rounded
+// cards, a category's icon, name and live summary; lit when something in
+// it is on, outlined in red when it needs a look. As many rows as the
+// cards need, sharing the height: no scrolling.
+export component CategoryGrid inherits Rectangle {
+    in property <[CategoryItem]> categories;
+    in property <int> columns: 3;
+    callback open(CategoryItem);
+
+    property <int> rows: max(1, ceil(categories.length / max(1, columns)));
+    property <length> gap: Theme.space-s;
+    property <length> card-width: (root.width - (columns - 1) * gap) / columns;
+    property <length> card-height: min(170px, (root.height - (rows - 1) * gap) / rows);
+
+    for c[i] in categories: Rectangle {
+        x: mod(i, columns) * (card-width + gap);
+        y: floor(i / columns) * (card-height + gap);
+        width: card-width;
+        height: card-height;
+        border-radius: Theme.radius-medium * 3;
+        // Lit only lightly: on a wall panel most categories have something
+        // on, and a screen full of colour says nothing. The icon's circle
+        // carries the accent.
+        background: touch.pressed ? Theme.surface-pressed
+            : c.active ? Theme.accent.mix(Theme.surface, 0.12) : Theme.surface;
+        border-width: c.alert ? 1px : 0;
+        border-color: Theme.error;
+
+        // The icon in a circle, top left; the arrow, top right.
+        Rectangle {
+            x: Theme.space-m;
+            y: Theme.space-m;
+            width: 52px;
+            height: 52px;
+            border-radius: self.height / 2;
+            background: c.active ? Theme.accent : Theme.surface-pressed;
+            Icon {
+                width: 30px;
+                height: 30px;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                kind: c.icon;
+                color: c.active ? Theme.on-accent : Theme.text-muted;
+            }
+        }
+        Icon {
+            x: parent.width - self.width - Theme.space-m;
+            y: Theme.space-m + 14px;
+            kind: "chevron";
+            color: Theme.text-muted;
+        }
+        VerticalLayout {
+            x: Theme.space-m;
+            width: parent.width - 2 * Theme.space-m;
+            height: self.preferred-height;
+            y: parent.height - self.height - Theme.space-m;
+            Text {
+                text: c.name;
+                color: Theme.text;
+                font-size: Theme.font-heading;
+                overflow: elide;
+            }
+            Text {
+                text: c.summary;
+                color: c.alert ? Theme.error : Theme.text-muted;
+                font-size: Theme.font-body;
+                overflow: elide;
+            }
+        }
+        touch := TouchArea {
+            clicked => {
+                root.open(c);
             }
         }
     }

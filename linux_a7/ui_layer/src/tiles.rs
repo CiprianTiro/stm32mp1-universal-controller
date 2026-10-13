@@ -9,7 +9,7 @@
 //! itself only links on the board).
 
 use crate::ws_client::{Device, Template};
-use crate::{FilterChip, TileItem};
+use crate::{CategoryItem, FilterChip, TileItem};
 
 /* The filter chips' ids (app.slint's `device-filter`). A room's chip is
  * ROOM + its name ("room:Office"; "room:" = devices without a room). */
@@ -19,6 +19,9 @@ pub const LIGHTS: &str = "lights";
 pub const ENERGY: &str = "energy";
 pub const OFFLINE: &str = "offline";
 pub const ROOM: &str = "room:";
+/// Issue #107: one category's devices ("cat:lights"), the landscape home
+/// screen's category cards.
+pub const CATEGORY: &str = "cat:";
 
 /// A heading ("" = none) and the tiles under it, in order. main.rs splits
 /// each group's tiles into rows of the grid's width.
@@ -291,6 +294,7 @@ pub fn tile(d: &Device, templates: &[Template], accent: slint::Color, now: u64) 
     TileItem {
         id: d.id.clone().into(),
         name: d.name.clone().into(),
+        room: d.room.clone().into(),
         state: state_line(d, now).into(),
         icon: kind(d, templates).into(),
         on: is_on(d) || climate_on || vacuum_busy,
@@ -359,6 +363,7 @@ pub fn groups(devices: &[&Device], filter: &str, templates: &[Template], accent:
             LIGHTS => is_light(d, templates) && is_on(d) && reachable(d),
             ENERGY => is_plug(d, templates),
             OFFLINE => !reachable(d),
+            f if f.starts_with(CATEGORY) => category_of(d, templates) == &f[CATEGORY.len()..],
             f => f.strip_prefix(ROOM).is_none_or(|room| d.room == room),
         })
         .collect();
@@ -396,6 +401,193 @@ pub fn groups(devices: &[&Device], filter: &str, templates: &[Template], accent:
         .collect()
 }
 
+/// The landscape home screen's categories (issue #107), as Apple Home
+/// has them: what a device is FOR, whatever its brand. (id, name, icon.)
+const CATEGORIES: [(&str, &str, &str); 8] = [
+    ("lights", "Lights", "light"),
+    ("climate", "Climate", "climate"),
+    ("security", "Security", "lock"),
+    ("media", "Media", "tv"),
+    ("power", "Power", "plug"),
+    ("blinds", "Blinds", "blind"),
+    ("cleaning", "Cleaning", "vacuum"),
+    ("other", "Other", "device"),
+];
+
+/// Which category a device is in (its kind, see kind()).
+pub fn category_of(d: &Device, templates: &[Template]) -> &'static str {
+    match kind(d, templates) {
+        "light" | "light-off" | "strip" => "lights",
+        "climate" | "sensor" => "climate",
+        "lock" | "unlocked" | "camera" => "security",
+        "tv" | "remote" => "media",
+        "plug" | "switch" => "power",
+        "blind" => "blinds",
+        "vacuum" => "cleaning",
+        _ => "other",
+    }
+}
+
+/// The category cards: only categories with devices, in a fixed order,
+/// each with a live summary ("3 on", "21-23 °C", "Front door unlocked").
+/// `active`: something in it is on / running (the card is lit);
+/// `alert`: needs a look (unlocked, offline).
+pub fn categories(devices: &[&Device], templates: &[Template]) -> Vec<CategoryItem> {
+    let dot = " \u{2022} ";
+    CATEGORIES
+        .iter()
+        .filter_map(|&(id, name, icon)| {
+            let list: Vec<&Device> = devices.iter().copied().filter(|d| category_of(d, templates) == id).collect();
+            if list.is_empty() {
+                return None;
+            }
+            let on = list.iter().filter(|d| is_on(d) && reachable(d)).count();
+            let offline = list.iter().filter(|d| !reachable(d)).count();
+            let mut alert = offline > 0;
+            let mut active = on > 0;
+            let mut summary = match id {
+                "lights" => if on > 0 { format!("{on} on") } else { "All off".into() },
+                "climate" => {
+                    let temps: Vec<f64> = list
+                        .iter()
+                        .filter_map(|d| {
+                            let c = &d.capabilities;
+                            c.sensor.as_ref().and_then(|s| s.readings.get("temperature")).map(|r| r.value)
+                                .or_else(|| c.climate.as_ref().and_then(|c| c.current))
+                        })
+                        .collect();
+                    active = list.iter().any(|d| d.capabilities.climate.as_ref().is_some_and(|c| c.mode != "off"));
+                    match (temps.iter().cloned().reduce(f64::min), temps.iter().cloned().reduce(f64::max)) {
+                        (Some(lo), Some(hi)) if (hi - lo).abs() >= 0.5 => format!("{}\u{2013}{} °C", number(lo), number(hi)),
+                        (Some(t), _) => format!("{} °C", number(t)),
+                        _ => format!("{} devices", list.len()),
+                    }
+                }
+                "security" => {
+                    let unlocked: Vec<&str> = list
+                        .iter()
+                        .filter(|d| d.capabilities.lock.as_ref().is_some_and(|l| l.state == "unlocked"))
+                        .map(|d| d.name.as_str())
+                        .collect();
+                    let locks = list.iter().filter(|d| d.capabilities.lock.is_some()).count();
+                    let cameras = list.iter().filter(|d| d.capabilities.camera.is_some()).count();
+                    active = false;
+                    if !unlocked.is_empty() {
+                        alert = true;
+                        if unlocked.len() == 1 { format!("{} unlocked", unlocked[0]) } else { format!("{} unlocked", unlocked.len()) }
+                    } else {
+                        let mut parts = Vec::new();
+                        if locks > 0 {
+                            parts.push("Locked".to_string());
+                        }
+                        if cameras > 0 {
+                            parts.push(if cameras == 1 { "1 camera".into() } else { format!("{cameras} cameras") });
+                        }
+                        parts.join(dot)
+                    }
+                }
+                "power" => {
+                    let metered: Vec<f64> = list.iter().filter_map(|d| d.capabilities.energy.as_ref()).map(|e| e.power_w).collect();
+                    if metered.is_empty() {
+                        if on > 0 { format!("{on} on") } else { "All off".into() }
+                    } else {
+                        watts(metered.iter().sum())
+                    }
+                }
+                "blinds" => {
+                    let open = list.iter().filter(|d| d.capabilities.cover.as_ref().is_some_and(|c| c.position.unwrap_or(0) > 0)).count();
+                    active = open > 0;
+                    if open > 0 { format!("{open} open") } else { "Closed".into() }
+                }
+                "cleaning" => {
+                    let vacuum = list.iter().find_map(|d| d.capabilities.vacuum.as_ref());
+                    active = vacuum.is_some_and(|v| v.state == "cleaning");
+                    vacuum.map_or_else(|| format!("{} devices", list.len()), vacuum_line)
+                }
+                "media" => if on > 0 { format!("{on} on") } else { "Off".into() },
+                _ => if list.len() == 1 { "1 device".into() } else { format!("{} devices", list.len()) },
+            };
+            if offline > 0 && !summary.contains("unlocked") {
+                summary = format!("{summary}{dot}{offline} offline");
+            }
+            Some(CategoryItem {
+                id: format!("{CATEGORY}{id}").into(),
+                name: name.into(),
+                icon: icon.into(),
+                summary: summary.into(),
+                active,
+                alert,
+            })
+        })
+        .collect()
+}
+
+/// The landscape home screen's ROOM cards (issue #107), the other way to
+/// look at the house: a card per room (A-Z, "No room" last), what's on and
+/// its temperature ("2 on \u{2022} 21.5 °C"). Same card type as the
+/// categories; the id is the room filter ("room:Kitchen").
+pub fn room_cards(devices: &[&Device], templates: &[Template]) -> Vec<CategoryItem> {
+    let dot = " \u{2022} ";
+    let mut rooms: Vec<&str> = devices.iter().map(|d| d.room.as_str()).collect();
+    rooms.sort_by_key(|r| (r.is_empty(), r.to_lowercase()));
+    rooms.dedup();
+    if rooms == [""] {
+        return Vec::new();
+    }
+    rooms
+        .into_iter()
+        .map(|room| {
+            let list: Vec<&Device> = devices.iter().copied().filter(|d| d.room == room).collect();
+            let on = list.iter().filter(|d| is_on(d) && reachable(d)).count();
+            let offline = list.iter().filter(|d| !reachable(d)).count();
+            let temp = list.iter().find_map(|d| {
+                let c = &d.capabilities;
+                c.sensor.as_ref().and_then(|s| s.readings.get("temperature")).map(|r| r.value)
+                    .or_else(|| c.climate.as_ref().and_then(|c| c.current))
+            });
+            let mut parts = vec![if on > 0 { format!("{on} on") } else { "All off".to_string() }];
+            if let Some(t) = temp {
+                parts.push(format!("{} °C", number(t)));
+            }
+            if offline > 0 {
+                parts.push(format!("{offline} offline"));
+            }
+            // Its look: a light if it has lights, else its first device's.
+            let icon = if list.iter().any(|d| is_light(d, templates)) { "light" } else { "home" };
+            CategoryItem {
+                id: format!("{ROOM}{room}").into(),
+                name: (if room.is_empty() { "No room" } else { room }).into(),
+                icon: icon.into(),
+                summary: parts.join(dot).into(),
+                active: on > 0,
+                alert: offline > 0,
+            }
+        })
+        .collect()
+}
+
+/// The room's climate for the landscape home screen (issue #107): the
+/// temperature and humidity of one sensor -- a favourite one if any is
+/// starred, else the first that measures temperature -- and where it is
+/// ("Bedroom \u{2022} Bedroom air"). None without such a sensor.
+pub struct Climate {
+    pub place: String,
+    /// "21.5°"
+    pub temperature: String,
+    /// "48 %", or "" when it doesn't measure humidity.
+    pub humidity: String,
+}
+
+pub fn climate(devices: &[&Device]) -> Option<Climate> {
+    let measures = |d: &&&Device| d.capabilities.sensor.as_ref().is_some_and(|s| s.readings.contains_key("temperature"));
+    let sensor = devices.iter().filter(measures).find(|d| d.favourite).or_else(|| devices.iter().find(measures))?;
+    let readings = &sensor.capabilities.sensor.as_ref()?.readings;
+    let temperature = readings.get("temperature").map(|r| format!("{}\u{b0}", number(r.value)))?;
+    let humidity = readings.get("humidity").map(|h| format!("{} {}", number(h.value), h.unit)).unwrap_or_default();
+    let place = if sensor.room.is_empty() { sensor.name.clone() } else { format!("{} \u{2022} {}", sensor.room, sensor.name) };
+    Some(Climate { place, temperature, humidity })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -429,6 +621,50 @@ mod tests {
         assert_eq!(state_line(&all[0], 0), "On \u{2022} 42 %");
         assert_eq!(state_line(&all[1], 0), "On \u{2022} 1.86 kW");
         assert_eq!(state_line(&all[3], 1200), "21.5 °C \u{2022} 48 % \u{2022} seen 3 min ago");
+    }
+
+    #[test]
+    fn categories_sum_up_what_is_in_them() {
+        let all = sample();
+        let refs: Vec<&Device> = all.iter().collect();
+        let cards: Vec<(String, String, bool)> =
+            categories(&refs, &[]).iter().map(|c| (c.id.to_string(), c.summary.to_string(), c.alert)).collect();
+        assert_eq!(
+            cards,
+            [
+                ("cat:lights".into(), "1 on \u{2022} 1 offline".into(), true),
+                ("cat:climate".into(), "21.5 °C".into(), false),
+                ("cat:power".into(), "1.86 kW".into(), false),
+            ]
+        );
+        let lights = groups(&refs, "cat:lights", &[], accent(), 0);
+        let names: Vec<String> = lights.iter().flat_map(|(_, g)| g.iter().map(|t| t.name.to_string())).collect();
+        assert_eq!(names, ["Hall bulb", "Shelf strip"]);
+    }
+
+    #[test]
+    fn rooms_as_cards() {
+        let all = sample();
+        let refs: Vec<&Device> = all.iter().collect();
+        let cards: Vec<(String, String, String)> =
+            room_cards(&refs, &[]).iter().map(|c| (c.id.to_string(), c.name.to_string(), c.summary.to_string())).collect();
+        assert_eq!(
+            cards,
+            [
+                ("room:Hall".into(), "Hall".into(), "1 on \u{2022} 1 offline".into()),
+                ("room:Kitchen".into(), "Kitchen".into(), "1 on".into()),
+                ("room:".into(), "No room".into(), "All off \u{2022} 21.5 °C".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_rooms_climate_comes_from_a_sensor() {
+        let all = sample();
+        let refs: Vec<&Device> = all.iter().collect();
+        let c = climate(&refs).unwrap();
+        assert_eq!((c.place.as_str(), c.temperature.as_str(), c.humidity.as_str()), ("Bedroom air", "21.5\u{b0}", "48 %"));
+        assert!(climate(&refs[..2]).is_none(), "no sensor, no climate");
     }
 
     #[test]

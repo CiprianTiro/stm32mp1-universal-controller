@@ -37,12 +37,15 @@ class DeviceHero {
 // ---------------------------------------------------------------------------
 
 /// A tall rounded slider filled from the bottom (Apple Home's brightness
-/// control). Follows the finger, sends once on release.
+/// control). Follows the finger; with [onLive] the device follows it too,
+/// WHILE the finger is still down (as in Apple Home) -- see LiveSender --
+/// and [onCommit] gets the final value on release.
 class PillSlider extends StatefulWidget {
   const PillSlider({
     super.key,
     required this.value,
     required this.onCommit,
+    this.onLive,
     this.width = 120,
     this.height = 300,
     this.color,
@@ -53,6 +56,10 @@ class PillSlider extends StatefulWidget {
   /// 0..100.
   final double value;
   final ValueChanged<int> onCommit;
+
+  /// Called during the drag with the value under the finger (paced by
+  /// LiveSender); null = only on release.
+  final Future<void> Function(int)? onLive;
   final double width, height;
   final Color? color;
   final IconData? icon;
@@ -65,6 +72,7 @@ class PillSlider extends StatefulWidget {
 class _PillSliderState extends State<PillSlider> {
   double? _drag;
   int _lastTick = -1;
+  late final LiveSender _live = LiveSender((v) => widget.onLive?.call(v) ?? Future.value());
 
   void _update(Offset local) {
     final v = ((1 - local.dy / widget.height) * 100).clamp(0, 100).toDouble();
@@ -75,10 +83,12 @@ class _PillSliderState extends State<PillSlider> {
       _lastTick = tick;
     }
     setState(() => _drag = v);
+    if (widget.onLive != null) _live.offer(v.round());
   }
 
   void _end() {
     final v = _drag;
+    _live.stop();
     if (v != null) widget.onCommit(v.round());
     setState(() => _drag = null);
   }
@@ -144,6 +154,50 @@ class _PillSliderState extends State<PillSlider> {
         ),
       ),
     );
+  }
+}
+
+/// Sends a value that changes under a finger -- a brightness, a volume --
+/// at the pace the hub can take: the newest value, never two requests at
+/// once, and at most one every [gap]. In between, newer values replace
+/// older ones: what goes out is always where the finger is now, never a
+/// queue of where it was.
+class LiveSender {
+  LiveSender(this.send, {this.gap = const Duration(milliseconds: 150)});
+
+  final Future<void> Function(int) send;
+  final Duration gap;
+  int? _pending;
+  int? _sent;
+  bool _busy = false;
+
+  void offer(int value) {
+    _pending = value;
+    if (!_busy) _pump();
+  }
+
+  /// The drag ended: nothing more goes out (the caller sends the final
+  /// value itself).
+  void stop() {
+    _pending = null;
+    _sent = null;
+  }
+
+  Future<void> _pump() async {
+    _busy = true;
+    while (_pending != null && _pending != _sent) {
+      final v = _pending!;
+      _pending = null;
+      try {
+        await send(v);
+      } catch (_) {
+        // A refusal mid-drag isn't worth a message: the release sends
+        // again and reports.
+      }
+      _sent = v;
+      await Future<void>.delayed(gap);
+    }
+    _busy = false;
   }
 }
 
@@ -214,6 +268,12 @@ class _LightHero extends StatelessWidget {
         color: color,
         icon: on ? Icons.lightbulb_rounded : Icons.lightbulb_outline_rounded,
         label: (v) => v == 0 ? 'Off' : '$v%',
+        // The light follows the finger (0 -- off -- only on release).
+        onLive: (v) async {
+          if (v == 0) return;
+          if (d.has('switch') && hub.device(d.id)?.isOn != true) await hub.command(d.id, 'switch', {'on': true});
+          await hub.command(d.id, 'dimmer', {'level': v});
+        },
         onCommit: (v) => runRequest(context, () async {
           // 0 is "off" (as in Apple Home); moving up from off switches on.
           if (v == 0) {

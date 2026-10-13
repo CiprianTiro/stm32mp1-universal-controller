@@ -15,19 +15,57 @@
 //
 // Until #38 the UI drew into /dev/fb0 (the old fb_platform.rs). The kernel
 // binds /dev/fb0 to one output at boot -- the touchscreen -- so a monitor
-// never got a picture. Slint's KMS backend uses /dev/dri/card0 directly.
+// never got a picture. Slint's KMS backend uses the DRM device directly.
+//
+// Which DRM device: on the DK2 there's one, card0. On a Raspberry Pi
+// (issue #107, a wall panel) the 3D engine (v3d) and the display
+// controller (vc4) are two devices, and which one is card0 depends on
+// which driver loads first. The display is the one with OUTPUTS
+// ("card1-DSI-1" in sysfs): display_card() picks it. (Slint itself also
+// tries each device and keeps the first that has outputs.)
 
 use drm::control::{connector, Device as ControlDevice};
 use std::fs::{File, OpenOptions};
 use std::os::fd::{AsFd, BorrowedFd};
 use std::time::{Duration, Instant};
 
-/// The DRM device the display controller shows up as.
-const CARD_PATH: &str = "/dev/dri/card0";
-/// Its sysfs folder: the driver behind it, and one folder per output
-/// ("card0-HDMI-A-1", ...).
-const CARD_SYSFS: &str = "/sys/class/drm/card0";
+/// sysfs: one folder per DRM device ("card0") with the driver behind it,
+/// and one per output ("card0-HDMI-A-1", ...).
 const DRM_SYSFS: &str = "/sys/class/drm";
+
+/// The DRM device that drives a screen: the first card with outputs of
+/// its own -- and not the boot-time stand-in (STANDIN_DRIVER) if a real
+/// one is there too. "card0" if none has outputs (yet). Looked up again
+/// each time: during boot the devices come and go.
+fn display_card() -> String {
+    let names: Vec<String> = std::fs::read_dir(DRM_SYSFS)
+        .map(|entries| entries.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect())
+        .unwrap_or_default();
+    let mut cards: Vec<(u32, &String)> = names
+        .iter()
+        .filter_map(|name| name.strip_prefix("card").and_then(|n| n.parse().ok()).map(|n| (n, name)))
+        .collect();
+    cards.sort();
+    let with_outputs: Vec<&String> = cards
+        .into_iter()
+        .map(|(_, card)| card)
+        .filter(|card| names.iter().any(|n| n.starts_with(&format!("{card}-"))))
+        .collect();
+    with_outputs
+        .iter()
+        .find(|card| card_driver(card) != STANDIN_DRIVER)
+        .or(with_outputs.first())
+        .map_or_else(|| "card0".to_string(), |card| card.to_string())
+}
+
+/// The driver behind a card: /sys/class/drm/<card>/device/driver is a link
+/// to the driver's own folder, named after the driver.
+fn card_driver(card: &str) -> String {
+    std::fs::read_link(format!("{DRM_SYSFS}/{card}/device/driver"))
+        .ok()
+        .and_then(|link| link.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .unwrap_or_default()
+}
 
 /// The driver of the boot-time stand-in display (issue #59).
 ///
@@ -41,7 +79,7 @@ const DRM_SYSFS: &str = "/sys/class/drm";
 /// UI must wait for the real one.
 const STANDIN_DRIVER: &str = "simple-framebuffer";
 
-/// Waits until /dev/dri/card0 belongs to the real display driver (see
+/// Waits until the display card belongs to the real display driver (see
 /// STANDIN_DRIVER). Since issue #59 the UI starts early in boot, long
 /// before that driver is loaded, and simply waits here -- then draws its
 /// first frame within a fraction of a second of the display becoming
@@ -63,12 +101,8 @@ pub fn wait_for_display_driver(timeout: Duration) {
     let start = Instant::now();
     let mut announced = false;
     loop {
-        // /sys/class/drm/card0/device/driver is a link to the driver's own
-        // folder, named after the driver.
-        let driver = std::fs::read_link(format!("{CARD_SYSFS}/device/driver"))
-            .ok()
-            .and_then(|link| link.file_name().map(|n| n.to_string_lossy().into_owned()))
-            .unwrap_or_default();
+        let card = display_card();
+        let driver = card_driver(&card);
         // Opened only to test the permissions: closed again right away.
         let can_open = open_card().is_ok();
         if !driver.is_empty() && driver != STANDIN_DRIVER && can_open {
@@ -78,11 +112,11 @@ pub fn wait_for_display_driver(timeout: Duration) {
             return;
         }
         if start.elapsed() >= timeout {
-            println!("ui_layer: display driver not ready after {} s (card0: \"{driver}\", can open: {can_open}), starting anyway", timeout.as_secs());
+            println!("ui_layer: display driver not ready after {} s ({card}: \"{driver}\", can open: {can_open}), starting anyway", timeout.as_secs());
             return;
         }
         if !announced {
-            println!("ui_layer: waiting for the display driver (card0: \"{driver}\", can open: {can_open})");
+            println!("ui_layer: waiting for the display driver ({card}: \"{driver}\", can open: {can_open})");
             announced = true;
         }
         std::thread::sleep(Duration::from_millis(50));
@@ -102,7 +136,7 @@ pub fn choose_output() -> Option<String> {
     let card = match open_card() {
         Ok(card) => card,
         Err(e) => {
-            println!("ui_layer: can't open {CARD_PATH} to choose a screen ({e}), leaving it to Slint");
+            println!("ui_layer: can't open /dev/dri/{} to choose a screen ({e}), leaving it to Slint", display_card());
             return None;
         }
     };
@@ -148,10 +182,11 @@ pub fn external_connected() -> bool {
     let Ok(entries) = std::fs::read_dir(DRM_SYSFS) else {
         return false;
     };
+    let prefix = format!("{}-", display_card());
     entries.flatten().any(|entry| {
         let name = entry.file_name().to_string_lossy().into_owned();
-        // "card0-HDMI-A-1" -> "HDMI-A-1". Only card0's outputs.
-        let Some(output) = name.strip_prefix("card0-") else {
+        // "card0-HDMI-A-1" -> "HDMI-A-1". Only the display card's outputs.
+        let Some(output) = name.strip_prefix(&prefix) else {
             return false;
         };
         is_external(output)
@@ -243,5 +278,5 @@ impl Card {
 }
 
 fn open_card() -> std::io::Result<Card> {
-    OpenOptions::new().read(true).write(true).open(CARD_PATH).map(Card)
+    OpenOptions::new().read(true).write(true).open(format!("/dev/dri/{}", display_card())).map(Card)
 }

@@ -24,6 +24,10 @@ yocto_layers/build-qemu/*.lock
 yocto_layers/build-qemu/pseudodone
 yocto_layers/build-qemu/bitbake.lock
 
+# The Raspberry Pi wall panel's build (issue #107, ./run_build.sh rpi):
+# all of it is generated -- its settings come from rpi-panel.inc.
+yocto_layers/build-rpi/
+
 # Internal BitBake IPC trace log, regenerated every run - not build output
 yocto_layers/build*/bitbake-cookerdaemon.log
 

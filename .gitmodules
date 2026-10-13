@@ -10,3 +10,7 @@
 	path = yocto_layers/meta-st-stm32mp
 	url = https://github.com/STMicroelectronics/meta-st-stm32mp.git
 	branch = scarthgap
+[submodule "yocto_layers/meta-raspberrypi"]
+	path = yocto_layers/meta-raspberrypi
+	url = https://git.yoctoproject.org/meta-raspberrypi
+	branch = scarthgap

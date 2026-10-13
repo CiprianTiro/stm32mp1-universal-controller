@@ -5,3 +5,8 @@
 do_install:append:stm32mp1common() {
     echo "PermitRootLogin prohibit-password" >> ${D}${sysconfdir}/ssh/sshd_config
 }
+
+# The Raspberry Pi wall panel (issue #107): the same rule.
+do_install:append:rpi() {
+    echo "PermitRootLogin prohibit-password" >> ${D}${sysconfdir}/ssh/sshd_config
+}

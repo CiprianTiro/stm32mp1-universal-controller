@@ -68,6 +68,7 @@ pub fn apply(ui: &crate::AppWindow, appearance: &Appearance, dark: bool) {
     theme.set_font_heading(ty.heading);
     theme.set_font_title(ty.title);
     theme.set_font_display(ty.display);
+    theme.set_font_clock(ty.clock);
 
     theme.set_radius_small(t.radii.small);
     theme.set_radius_medium(t.radii.medium);
@@ -185,6 +186,8 @@ struct Typography {
     heading: f32,
     title: f32,
     display: f32,
+    /* Issue #107: the landscape home screen's clock. */
+    clock: f32,
 }
 
 #[derive(Deserialize)]

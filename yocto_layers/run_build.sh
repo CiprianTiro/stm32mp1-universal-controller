@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # =============================================================================
 # Hybrid Automated Yocto Build System Wrapper for Host OR Container Execution
-# Targets: stm32mp1 (ST Common Profile) & qemuarm64 (Simulation)
+# Targets: stm32mp1 (ST Common Profile), qemuarm64 (Simulation) and
+# raspberrypi3 (the wall panel, issue #107: ./run_build.sh rpi)
 # =============================================================================
 set -euo pipefail
 
@@ -10,11 +11,19 @@ MODE="${1:-hardware}"
 # instead of the generic core-image-minimal placeholder. Optional second
 # argument: another image recipe, e.g. the production variant without SSH
 # (issue #37): ./run_build.sh hardware universal-controller-image-prod
-TARGET_IMAGE="${2:-universal-controller-image}"
+# The Raspberry Pi wall panel (issue #107) builds its own image by default.
+if [ "$MODE" = "rpi" ]; then
+    TARGET_IMAGE="${2:-panel-image}"
+else
+    TARGET_IMAGE="${2:-universal-controller-image}"
+fi
 
 if [ "$MODE" = "qemu" ]; then
     TARGET_MACHINE="qemuarm64"
     BUILD_DIR="build-qemu"
+elif [ "$MODE" = "rpi" ]; then
+    TARGET_MACHINE="raspberrypi3"
+    BUILD_DIR="build-rpi"
 else
     # Corrected target machine mapping to match STMicroelectronics BSP tracking
     TARGET_MACHINE="stm32mp1"
@@ -133,7 +142,22 @@ compile_inside_container() {
         fi
     done
 
-    if [ "${TARGET_MACHINE}" != "qemuarm64" ]; then
+    # Issue #107: the panel's settings (rpi-panel.inc: config.txt, what's
+    # masked out, image type) and the Raspberry Pi BSP instead of ST's.
+    # Downloads and the shared-state cache are the DK2 build's: the build
+    # tools both need are built once.
+    if [ "${TARGET_MACHINE}" = "raspberrypi3" ]; then
+        if ! grep -q "rpi-panel.inc" conf/local.conf; then
+            echo "  -> Wall panel settings (rpi-panel.inc), shared downloads + sstate..."
+            echo 'require ${TOPDIR}/../meta-universal-controller/conf/rpi-panel.inc' >> conf/local.conf
+            echo 'DL_DIR = "${TOPDIR}/../build/downloads"' >> conf/local.conf
+            echo 'SSTATE_DIR = "${TOPDIR}/../build/sstate-cache"' >> conf/local.conf
+        fi
+        if ! grep -q 'meta-raspberrypi' conf/bblayers.conf; then
+            echo "     [+] Adding the Raspberry Pi BSP layer"
+            bitbake-layers add-layer ../meta-raspberrypi
+        fi
+    elif [ "${TARGET_MACHINE}" != "qemuarm64" ]; then
         if [ ! -f conf/bblayers.conf ] || ! grep -q 'meta-st-stm32mp' conf/bblayers.conf; then
             echo "     [+] Adding STMicroelectronics BSP hardware layer"
             bitbake-layers add-layer ../meta-st-stm32mp

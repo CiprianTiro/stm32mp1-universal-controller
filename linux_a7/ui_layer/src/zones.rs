@@ -106,8 +106,33 @@ pub fn clock(time_zone: &str, unix: u64) -> (String, String) {
     (at.format("%H:%M").to_string(), format!("{greeting} \u{2022} {}", at.format("%A %-d %B")))
 }
 
+/// Issue #107: the landscape home screen's clock card, in pieces: the
+/// greeting ("Good evening"), the date ("Friday, 2 October") and whether
+/// it's night (a moon by the greeting instead of a sun).
+pub fn clock_card(time_zone: &str, unix: u64) -> (String, String, bool) {
+    let tz: Tz = time_zone.parse().unwrap_or(Tz::UTC);
+    let Some(at) = chrono::DateTime::from_timestamp(unix as i64, 0) else {
+        return (String::new(), String::new(), false);
+    };
+    let at = at.with_timezone(&tz);
+    let hour = chrono::Timelike::hour(&at);
+    let greeting = match hour {
+        5..=11 => "Good morning",
+        12..=17 => "Good afternoon",
+        18..=22 => "Good evening",
+        _ => "Good night",
+    };
+    (greeting.to_string(), at.format("%A, %-d %B").to_string(), !(6..20).contains(&hour))
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_clock_card_in_pieces() {
+        let (greeting, date, night) = super::clock_card("Europe/Bucharest", 1_790_969_460);
+        assert_eq!((greeting.as_str(), date.as_str(), night), ("Good evening", "Friday, 2 October", true));
+    }
+
     #[test]
     fn the_clock_is_in_the_hub_time_zone() {
         /* 2026-10-02 19:31 UTC = 22:31 in Bucharest (summer time). */

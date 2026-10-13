@@ -1,0 +1,54 @@
+#!/usr/sbin/nft -f
+# panel-firewall.nft -- the wall panel's firewall (issue #107): it offers
+# NOTHING to the network. It only connects out (to the hub, DHCP, NTP),
+# so only the answers to that come in. Same table name and include folder
+# as the hub's (hub-hardening), so hub-hardening's ssh.nft (development
+# images) opens SSH here too.
+
+table inet hub
+delete table inet hub
+
+table inet hub {
+    # Ports opened by the files in hub.d/ (ssh.nft: 22, dev images only).
+    set lan_tcp {
+        type inet_service
+    }
+
+    chain input {
+        type filter hook input priority filter; policy drop;
+
+        # Answers to what the panel itself started (the hub, NTP, DNS).
+        ct state vmap { established : accept, related : accept, invalid : drop }
+        iif "lo" accept
+
+        icmp type echo-request limit rate 5/second accept
+        icmp type { destination-unreachable, time-exceeded, parameter-problem } accept
+        icmpv6 type echo-request limit rate 5/second accept
+        icmpv6 type != echo-request accept
+
+        # DHCP answers (IPv4, IPv6).
+        udp sport 67 udp dport 68 accept
+        ip6 saddr fe80::/10 udp sport 547 udp dport 546 accept
+
+        # mDNS answers to "which hubs are there?" (ui_layer's panel.rs):
+        # the question goes to the group (224.0.0.251), the answer comes
+        # back from the hub's own address -- not "established" for the
+        # connection tracker, so let in by its source port.
+        udp sport 5353 accept
+
+        tcp dport @lan_tcp accept
+
+        meta pkttype host limit rate 5/minute log prefix "panel-firewall drop: "
+        counter comment "dropped"
+    }
+
+    chain forward {
+        type filter hook forward priority filter; policy drop;
+    }
+
+    chain output {
+        type filter hook output priority filter; policy accept;
+    }
+}
+
+include "/etc/hub-firewall/hub.d/*.nft"

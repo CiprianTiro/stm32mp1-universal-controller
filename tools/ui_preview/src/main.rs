@@ -75,9 +75,32 @@ fn set_tiles(ui: &AppWindow, filter: &str) {
         let devices = d.borrow();
         let all: Vec<&ws_client::Device> = devices.iter().collect();
         ui.set_filter_chips(Rc::new(VecModel::from(tiles::chips(&all, &[]))).into());
+        // Issue #107: the landscape home screen's climate.
+        if let Some(c) = tiles::climate(&all) {
+            ui.set_home_climate(c.temperature.into());
+            ui.set_home_humidity(c.humidity.into());
+            ui.set_home_climate_place(c.place.into());
+        }
+        // "rooms": the landscape home screen's room cards (#107).
+        ui.set_home_view(if filter == "rooms" { "rooms".into() } else { "categories".into() });
+        let filter = if filter == "rooms" { "all" } else { filter };
         ui.set_device_filter(filter.into());
+        // Issue #107: the category cards, and the one open (if `filter` is one).
+        let categories = tiles::categories(&all, &[]);
+        let open = categories.iter().find(|c| c.id == filter).map(|c| c.name.to_string()).unwrap_or_default();
+        ui.set_home_category(if open.is_empty() { "".into() } else { filter.into() });
+        ui.set_home_category_name(open.into());
+        ui.set_home_categories(Rc::new(VecModel::from(categories)).into());
+        ui.set_home_rooms(Rc::new(VecModel::from(tiles::room_cards(&all, &[]))).into());
         let mut rows = Vec::new();
-        for (heading, group) in tiles::groups(&all, filter, &[], accent, 1_790_000_000) {
+        let groups = tiles::groups(&all, filter, &[], accent, 1_790_000_000);
+        // As main.rs: paged (#107) = no headings, tiles running on.
+        let groups: Vec<_> = if ui.get_tile_paged() {
+            vec![(String::new(), groups.into_iter().flat_map(|(_, g)| g).collect::<Vec<_>>())]
+        } else {
+            groups
+        };
+        for (heading, group) in groups {
             if !heading.is_empty() {
                 rows.push(TileRow { header: heading.into(), tiles: Default::default() });
             }
@@ -91,8 +114,15 @@ fn set_tiles(ui: &AppWindow, filter: &str) {
 
 /// Issue #95: the Devices page with each kind of chip selected, and one
 /// device's controls page.
-const DEVICE_VIEWS: [(&str, &str); 4] =
-    [("devices", "all"), ("devices-favourites", "fav"), ("devices-lights", "lights"), ("devices-room", "room:Living room")];
+const DEVICE_VIEWS: [(&str, &str); 6] = [
+    ("devices", "all"),
+    ("devices-favourites", "fav"),
+    ("devices-lights", "lights"),
+    ("devices-room", "room:Living room"),
+    // Issue #107: a category opened from its card (landscape home screen).
+    ("devices-category", "cat:lights"),
+    ("devices-rooms", "rooms"),
+];
 
 /// The pages worth looking at, with the number app.slint uses for each.
 /// None: the welcome screen (shown until the backend first answers).
@@ -124,7 +154,7 @@ const PAGES: [(&str, Option<i32>); 18] = [
 
 /// The wizard page (10) in each kind of step (issue #40): the step's
 /// sample data is set just before its render.
-const WIZARD_STEPS: [(&str, fn(&AppWindow)); 37] = [
+const WIZARD_STEPS: [(&str, fn(&AppWindow)); 38] = [
     // Issue #99: an IR LED strip's details page, "Powered by" opened: a
     // plug linked, then learned.
     ("device-power", |ui| {
@@ -339,6 +369,21 @@ const WIZARD_STEPS: [(&str, fn(&AppWindow)); 37] = [
             FoundItem { name: "S7".into(), address: "1tV5069KevcrlKa4Snsyyq".into(), type_name: "Roborock S7 - online".into(), ..Default::default() },
             FoundItem { name: "Q7 Max".into(), address: "x".into(), type_name: "Roborock Q7 Max: its protocol (B01) isn't supported yet".into(), ..Default::default() },
         ])).into());
+    }),
+    // Issue #107: a dimmable colour bulb's controls (the landscape
+    // screen's brightness pill).
+    ("controls-light", |ui| {
+        ui.set_page(20);
+        let bulb: ws_client::Device = serde_json::from_value(serde_json::json!(
+            {"id": "bulb", "name": "Hall bulb", "room": "Hall", "template": "wiz", "online": "online",
+             "capabilities": {"switch": {"on": true}, "dimmer": {"level": 62}, "color": {"hex": "#FFB45E"}}})).unwrap();
+        ui.set_controls_tile(tiles::tile(&bulb, &[], ui.global::<Theme>().get_accent(), 1_790_000_000));
+        ui.set_controls_item(DeviceItem {
+            id: "bulb".into(), name: "Hall bulb".into(), room: "Hall".into(), has_switch: true, on: true,
+            has_dimmer: true, level: 62, has_color: true,
+            color: slint::Color::from_rgb_u8(0xFF, 0xB4, 0x5E), color_text: "#FFB45E".into(),
+            ..Default::default()
+        });
     }),
     // Issue #74: a vacuum's controls page.
     ("controls-ezviz", |ui| {
@@ -774,6 +819,10 @@ fn fill_sample_data(ui: &AppWindow, appearance: &theme::Appearance) {
     let (time, date) = zones::clock("Europe/Bucharest", 1_790_969_460);
     ui.set_clock_time(time.into());
     ui.set_clock_date(date.into());
+    let (greeting, day, night) = zones::clock_card("Europe/Bucharest", 1_790_969_460);
+    ui.set_clock_greeting(greeting.into());
+    ui.set_clock_day(day.into());
+    ui.set_clock_night(night);
     DEVICES.with(|d| *d.borrow_mut() = samples);
 
     ui.set_net(NetStatus {
