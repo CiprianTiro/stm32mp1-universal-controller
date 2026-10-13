@@ -740,6 +740,7 @@ fn main() {
                 return;
             }
             show_remote(&ui, device);
+            ui.set_remote_direct(false);
             ui.set_remote_view(0);
             ui.set_remote_message("".into());
             ui.set_remote_text("".into());
@@ -782,6 +783,25 @@ fn main() {
         items.set_vec(Vec::new());
         act("media", "channels", serde_json::json!({ "limit": CHANNEL_PAGE }));
     });
+    // A TV's apps or channels opened from its card (as in the mobile app):
+    // the remote page, straight on that list; Back and a pick return to the
+    // card (remote-direct).
+    let (ui_weak, r) = (ui.as_weak(), rows.clone());
+    ui.on_open_remote_list(move |id, view| {
+        let ui = ui_weak.unwrap();
+        if let Some(device) = r.borrow().devices.get(id.as_str()) {
+            show_remote(&ui, device);
+            ui.set_remote_direct(true);
+            ui.set_remote_message("".into());
+            ui.set_remote_text("".into());
+            ui.set_page(PAGE_REMOTE);
+            if view == 1 {
+                ui.invoke_remote_open_apps();
+            } else {
+                ui.invoke_remote_open_channels();
+            }
+        }
+    });
     // Every change of the search: its first page.
     let (act, ui_weak) = (remote_action.clone(), ui.as_weak());
     ui.on_remote_search(move |query| {
@@ -808,6 +828,10 @@ fn main() {
             act("media", "tune", serde_json::json!({ "channel": id.as_str() }));
         }
         ui.set_remote_view(0);
+        // Opened from the TV's card: back to it (where "now playing" shows).
+        if ui.get_remote_direct() {
+            ui.set_page(ui.get_device_back());
+        }
     });
     let (act, ui_weak) = (remote_action.clone(), ui.as_weak());
     ui.on_remote_send_text(move || {

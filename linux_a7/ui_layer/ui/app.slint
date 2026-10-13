@@ -481,6 +481,10 @@ export component AppWindow inherits Window {
     callback remote-search(string);
     callback remote-more();
     callback open-remote(string);
+    // A TV's apps (1) or channels (2) straight from its card; Back from
+    // the list then returns to the card (remote-direct).
+    callback open-remote-list(string, int);
+    in-out property <bool> remote-direct;
     callback remote-press(string);
     callback remote-open-apps();
     callback remote-open-channels();
@@ -1340,6 +1344,9 @@ export component AppWindow inherits Window {
                     open-remote(id) => {
                         root.open-remote(id);
                     }
+                    open-list(id, view) => {
+                        root.open-remote-list(id, view);
+                    }
                     cover-action(id, action) => {
                         root.cover-action(id, action);
                     }
@@ -1449,6 +1456,7 @@ export component AppWindow inherits Window {
         tv-name: root.remote-name;
         now-playing: root.remote-playing;
         keyboard: root.remote-keyboard;
+        direct: root.remote-direct;
         view <=> root.remote-view;
         items: root.remote-items;
         loading: root.remote-loading;

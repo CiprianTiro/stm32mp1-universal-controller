@@ -347,6 +347,9 @@ export component DeviceRow inherits Rectangle {
     callback open(string);
     callback reauth(string);
     callback open-remote(string);
+    // A TV's apps (1) or channels (2) list, straight from its card -- no
+    // need to open the remote first (as in the mobile app).
+    callback open-list(string, int);
     // Issue #77.
     callback cover-action(string, string);
     callback set-cover-position(string, int);
@@ -640,6 +643,29 @@ export component DeviceRow inherits Rectangle {
                 enabled: item.on || !item.has-switch || item.remote-learns;
                 clicked => {
                     root.open-remote(item.id);
+                }
+            }
+        }
+
+        // A TV's apps and channels (issue #44), one tap from its card like
+        // in the mobile app. Only a TV's own remote (not an IR blaster's,
+        // which can't list anything), and only while it's on.
+        if item.has-media && item.has-remote && !item.remote-learns: HorizontalLayout {
+            spacing: Theme.space-s;
+            ActionButton {
+                text: "Apps";
+                horizontal-stretch: 1;
+                enabled: item.on;
+                clicked => {
+                    root.open-list(item.id, 1);
+                }
+            }
+            ActionButton {
+                text: "Channels";
+                horizontal-stretch: 1;
+                enabled: item.on;
+                clicked => {
+                    root.open-list(item.id, 2);
                 }
             }
         }
