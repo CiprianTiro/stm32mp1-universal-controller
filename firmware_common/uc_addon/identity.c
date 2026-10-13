@@ -2,7 +2,7 @@
  * Copyright (c) 2026 Ciprian Tironeac
  * SPDX-License-Identifier: Apache-2.0
  *
- * Identity -- see identity.h.
+ * Identity -- see identity.h. (Moved here from firmware_ir_blaster/ for #86.)
  *
  * Mbed TLS 4 (the version in ESP-IDF v6) does its cryptography through the
  * "PSA Crypto" API: keys are generated with psa_generate_key(), random
@@ -28,6 +28,7 @@
 #include "mbedtls/x509_crt.h"
 #include "nvs.h"
 #include "psa/crypto.h"
+#include "uc_addon.h"
 
 static const char *TAG = "identity";
 
@@ -103,7 +104,7 @@ static int make_cert(mbedtls_pk_context *pk, unsigned char *buf, size_t size)
   mbedtls_x509write_crt_set_version(&crt, MBEDTLS_X509_CRT_VERSION_3);
   mbedtls_x509write_crt_set_serial_raw(&crt, serial, sizeof(serial));
   /* The dates don't matter: the hub checks the fingerprint, not the
-   * validity (the blaster has no reliable clock anyway). Wide on purpose. */
+   * validity (the add-on has no reliable clock anyway). Wide on purpose. */
   mbedtls_x509write_crt_set_validity(&crt, "20260101000000", "20991231235959");
   mbedtls_x509write_crt_set_subject_name(&crt, subject);
   mbedtls_x509write_crt_set_issuer_name(&crt, subject);
@@ -132,7 +133,7 @@ static esp_err_t create(nvs_handle_t nvs)
 {
   static unsigned char der[DER_MAX]; /* static: keeps 1 KB off the stack */
 
-  ESP_LOGI(TAG, "first start: creating this blaster's key, certificate and pairing code...");
+  ESP_LOGI(TAG, "first start: creating this %s's key, certificate and pairing code...", uc_addon_config()->product);
 
   mbedtls_pk_context pk;
   mbedtls_pk_init(&pk);
@@ -179,8 +180,8 @@ esp_err_t identity_init(void)
 
   uint8_t mac[6];
   ESP_RETURN_ON_ERROR(esp_read_mac(mac, ESP_MAC_WIFI_STA), TAG, "read MAC");
-  snprintf(device_id, sizeof(device_id), "irb-%02x%02x%02x%02x%02x%02x",
-           mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+  snprintf(device_id, sizeof(device_id), "%s-%02x%02x%02x%02x%02x%02x",
+           uc_addon_config()->id_prefix, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
   nvs_handle_t nvs;
   ESP_RETURN_ON_ERROR(nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs), TAG, "open NVS");

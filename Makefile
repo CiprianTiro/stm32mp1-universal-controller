@@ -3,7 +3,7 @@
 # Target Architecture: STMicroelectronics STM32MP1 (Cortex-A7 + Cortex-M4)
 # =============================================================================
 
-.PHONY: help build-hw build-hw-prod build-qemu shell-yocto clean-yocto build-m4 build-a7 test-qemu verify-qemu flash-hw flash-hw-prod flash-m4 deploy-ui deploy-backend netboot restore-userfs audit build-ir flash-ir monitor-ir
+.PHONY: help build-hw build-hw-prod build-qemu shell-yocto clean-yocto build-m4 build-a7 test-qemu verify-qemu flash-hw flash-hw-prod flash-m4 deploy-ui deploy-backend netboot restore-userfs audit build-ir flash-ir monitor-ir build-sensor flash-sensor monitor-sensor
 
 # Zephyr workspace used to build the M4 firmware: a normal `west init` +
 # `west update` checkout at the Zephyr version pinned in firmware_m4/west.yml
@@ -48,6 +48,9 @@ help:
 	@echo "  make build-ir      - Compile the ESP32-S3 IR blaster firmware (ESP-IDF)"
 	@echo "  make flash-ir      - Build + flash the IR blaster over USB, then open its console (Ctrl+] quits)"
 	@echo "  make monitor-ir    - Open the IR blaster's console without flashing"
+	@echo "  make build-sensor  - Compile the ESP32-S3 room sensor firmware (ESP-IDF)"
+	@echo "  make flash-sensor  - Build + flash the room sensor over USB, then open its console"
+	@echo "  make monitor-sensor - Open the room sensor's console without flashing"
 	@echo "  make audit         - Check all Rust crates for known vulnerabilities + licenses (cargo audit/deny)"
 	@echo "============================================================================="
 
@@ -156,6 +159,21 @@ flash-ir:
 
 monitor-ir:
 	@$(IDF_ENV) idf.py -p $(IR_PORT) monitor'
+
+# ESP32-S3 room sensor (#86): the same, in firmware_sensor/ (same board,
+# same port setting: `make flash-sensor IR_PORT=/dev/ttyACM1`).
+SENSOR_ENV = bash -c '. $(IDF_PATH)/export.sh >/dev/null && cd firmware_sensor &&
+
+build-sensor:
+	@echo "🌡️  Compiling ESP32-S3 room sensor firmware..."
+	@$(SENSOR_ENV) idf.py build'
+
+flash-sensor:
+	@echo "🌡️  Flashing room sensor on $(IR_PORT)..."
+	@$(SENSOR_ENV) idf.py -p $(IR_PORT) flash monitor'
+
+monitor-sensor:
+	@$(SENSOR_ENV) idf.py -p $(IR_PORT) monitor'
 
 build-a7:
 	@echo "🦀 Compiling Cortex-A7 Application Daemons via Cargo Matrix..."

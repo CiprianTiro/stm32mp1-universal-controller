@@ -3,27 +3,28 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * ===========================================================================
- * Hub link -- see hub_link.h and PROTOCOL.md
+ * Hub link -- see hub_link.h and firmware_ir_blaster/PROTOCOL.md
  * ===========================================================================
+ *
+ * (Moved here from firmware_ir_blaster/ for #86: the blaster and the
+ * sensor share it. What only the blaster does -- send, learn, "heard" --
+ * moved to firmware_ir_blaster/main/ir_link.c.)
  *
  * One task does everything here, for one hub connection at a time:
  *
  *   wait for a TCP connection on port 7443
  *     -> TLS handshake (Mbed TLS), the hub must show a certificate
- *     -> check it: the pinned hub? an unpaired blaster? a stranger?
+ *     -> check it: the pinned hub? an unpaired add-on? a stranger?
  *     -> loop, every 100 ms:
  *          read what the hub sent, answer each complete line
- *          pass on IR frames the receiver heard (learn reply / "heard")
- *          learn timeout, idle timeout, a newer connection waiting?
+ *          the add-on's poll() hook (its events, late replies)
+ *          idle timeout, a newer connection waiting?
  *
  * Why ONE task that polls, instead of a reader task plus writers: an Mbed
  * TLS connection must not be read and written by two tasks at the same
  * time. With a single owner there's nothing to lock. Reads therefore wait
  * at most 100 ms (a "read timeout"), so the loop keeps turning and can
  * also write events.
- *
- * IR frames reach this task through a queue: the receiver's task
- * (ir_service) puts them in, this task takes them out.
  */
 
 #include "hub_link.h"
@@ -33,26 +34,21 @@
 #include <stdio.h>
 #include <string.h>
 #include "cJSON.h"
-#include "code_json.h"
 #include "esp_check.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
-#include "freertos/queue.h"
 #include "freertos/task.h"
 #include "identity.h"
-#include "ir_nec.h"
-#include "ir_service.h"
 #include "lwip/sockets.h"
 #include "mbedtls/net_sockets.h" /* only for its error codes */
 #include "mbedtls/ssl.h"
 #include "mdns.h"
 #include "psa/crypto.h"
-#include "version.h"
+#include "uc_addon.h"
 
 static const char *TAG = "hub_link";
 
-#define MDNS_SERVICE "_uc-irblaster"
 #define MDNS_PROTO "_tcp"
 
 /* Longest request line accepted (PROTOCOL.md). A raw code of 1024 timings
@@ -69,35 +65,24 @@ static const char *TAG = "hub_link";
  * (e.g. its network cable was pulled, so the TCP connection never closed). */
 #define IDLE_LIMIT_US (60LL * 1000 * 1000)
 
-#define LEARN_DEFAULT_MS 15000
-#define LEARN_MIN_MS 1000
-#define LEARN_MAX_MS 60000
-
 /* Wrong pairing proofs allowed before pairing is locked until restart:
  * enough for typos, far too few to guess an 80-bit code. */
 #define PAIR_MAX_FAILS 5
 
-/* Frames heard, waiting for this task. A few are plenty: a person presses
- * buttons slower than the loop turns. */
-#define HEARD_QUEUE_LEN 4
-
-typedef struct {
+struct hub_session {
   int fd;
   mbedtls_ssl_context ssl;
   /* The connected hub may do everything (it's the pinned hub, or pairing
    * just succeeded). Before that only hello and pair are allowed. */
   bool authorised;
   char peer_fingerprint[IDENTITY_FINGERPRINT_LEN];
-  /* A learn request waiting for a remote press. */
-  bool learning;
-  double learn_id;
-  int64_t learn_deadline_us;
   int64_t last_rx_us;
-} session_t;
+};
+typedef struct hub_session session_t;
 
 static mbedtls_ssl_config tls_config;
 static int listen_fd = -1;
-static QueueHandle_t heard_queue;
+static const uc_addon_app_t *app;
 static volatile bool session_active; /* an authorised hub is connected */
 static volatile bool drop_session;   /* hub_link_pairing_changed() */
 static int pair_fails;
@@ -105,8 +90,6 @@ static int pair_fails;
 /* Big buffers, static so they're not on the task's stack. Only this task
  * uses them. */
 static char line[REQUEST_LINE_MAX + 1];
-static ir_frame_t heard_frame;
-static ir_frame_t request_frame;
 
 /* ---------------------------------------------------------------------------
  * Sockets under TLS
@@ -199,8 +182,7 @@ static bool write_json(session_t *s, cJSON *json)
   return ok;
 }
 
-/* {"id": <id>, "ok": true} -- the caller may add fields before sending. */
-static cJSON *reply_ok(double id)
+cJSON *hub_link_reply_ok(double id)
 {
   cJSON *reply = cJSON_CreateObject();
   cJSON_AddNumberToObject(reply, "id", id);
@@ -222,26 +204,50 @@ static bool reply_error(session_t *s, const cJSON *id, const char *kind, const c
   return write_json(s, reply);
 }
 
+bool hub_link_reply_error(hub_session_t *s, double id, const char *kind, const char *detail)
+{
+  cJSON *number = cJSON_CreateNumber(id);
+  bool ok = reply_error(s, number, kind, detail);
+  cJSON_Delete(number);
+  return ok;
+}
+
+bool hub_link_send(hub_session_t *s, cJSON *msg)
+{
+  return write_json(s, msg);
+}
+
+/* Tells the add-on's code that the paired hub came or went. */
+static void set_session_active(bool active)
+{
+  session_active = active;
+  if (app && app->session_changed) {
+    app->session_changed(active);
+  }
+}
+
 /* ---------------------------------------------------------------------------
  * Pairing (PROTOCOL.md, "Pairing")
  * ------------------------------------------------------------------------- */
 
 static void mdns_update_paired(void)
 {
-  mdns_service_txt_item_set(MDNS_SERVICE, MDNS_PROTO, "paired", identity_hub_fingerprint() ? "1" : "0");
+  mdns_service_txt_item_set(uc_addon_config()->mdns_service, MDNS_PROTO, "paired", identity_hub_fingerprint() ? "1" : "0");
 }
 
-/* HMAC-SHA256(code, "uc-irb-pair-v1 <role> <FB> <FH>") as hex; "" on
+/* HMAC-SHA256(code, "<label> <role> <FB> <FH>") as hex, the label being
+ * uc_addon.h's pair_label ("uc-irb-pair-v1" for the blaster); "" on
  * error. Mbed TLS 4 computes HMACs through PSA: the code becomes a
  * short-lived HMAC key, used once, then destroyed. */
 static void pair_proof(const char *role, const char *hub_fp, char out[IDENTITY_FINGERPRINT_LEN])
 {
-  char message[160];
+  char message[192];
   unsigned char mac[32];
   size_t mac_len = 0;
 
   out[0] = '\0';
-  snprintf(message, sizeof(message), "uc-irb-pair-v1 %s %s %s", role, identity_fingerprint(), hub_fp);
+  snprintf(message, sizeof(message), "%s %s %s %s", uc_addon_config()->pair_label, role,
+           identity_fingerprint(), hub_fp);
   const char *code = identity_pairing_code();
 
   psa_key_attributes_t attributes = PSA_KEY_ATTRIBUTES_INIT;
@@ -280,7 +286,7 @@ static bool op_pair(session_t *s, const cJSON *id, const cJSON *req)
     return reply_error(s, id, "already_paired", "unpair first (from the hub, or `unpair` on the console)");
   }
   if (pair_fails >= PAIR_MAX_FAILS) {
-    return reply_error(s, id, "locked", "too many wrong pairing codes; restart the blaster");
+    return reply_error(s, id, "locked", "too many wrong pairing codes; restart the add-on");
   }
 
   const cJSON *proof = cJSON_GetObjectItemCaseSensitive(req, "proof");
@@ -297,14 +303,14 @@ static bool op_pair(session_t *s, const cJSON *id, const cJSON *req)
     return reply_error(s, id, "failed", "could not store the hub");
   }
   s->authorised = true;
-  session_active = true;
+  set_session_active(true);
   pair_fails = 0;
   mdns_update_paired();
   ESP_LOGI(TAG, "paired with hub %.16s...", s->peer_fingerprint);
 
   char ours[IDENTITY_FINGERPRINT_LEN];
-  pair_proof("blaster", s->peer_fingerprint, ours);
-  cJSON *reply = reply_ok(id->valuedouble);
+  pair_proof(uc_addon_config()->pair_role, s->peer_fingerprint, ours);
+  cJSON *reply = hub_link_reply_ok(id->valuedouble);
   cJSON_AddStringToObject(reply, "proof", ours);
   return write_json(s, reply);
 }
@@ -315,62 +321,13 @@ static bool op_pair(session_t *s, const cJSON *id, const cJSON *req)
 
 static bool op_hello(session_t *s, const cJSON *id)
 {
-  cJSON *reply = reply_ok(id->valuedouble);
+  cJSON *reply = hub_link_reply_ok(id->valuedouble);
   cJSON_AddStringToObject(reply, "device", identity_device_id());
-  cJSON_AddStringToObject(reply, "fw", FW_VERSION);
-  cJSON_AddNumberToObject(reply, "proto", PROTOCOL_VERSION);
+  cJSON_AddStringToObject(reply, "fw", uc_addon_config()->fw_version);
+  cJSON_AddNumberToObject(reply, "proto", uc_addon_config()->protocol_version);
   cJSON_AddBoolToObject(reply, "paired", identity_hub_fingerprint() != NULL);
   cJSON_AddStringToObject(reply, "fingerprint", identity_fingerprint());
   return write_json(s, reply);
-}
-
-static bool op_send(session_t *s, const cJSON *id, const cJSON *req)
-{
-  code_t code;
-  const char *why = NULL;
-  if (code_from_json(cJSON_GetObjectItemCaseSensitive(req, "code"), &code, &request_frame, &why) != ESP_OK) {
-    return reply_error(s, id, "bad_request", why);
-  }
-
-  int repeats = 0;
-  const cJSON *r = cJSON_GetObjectItemCaseSensitive(req, "repeats");
-  if (r) {
-    if (!cJSON_IsNumber(r) || r->valuedouble < 0 || r->valuedouble > 20 || !code.is_nec) {
-      return reply_error(s, id, "bad_request", "repeats: 0-20, NEC codes only");
-    }
-    repeats = (int)r->valuedouble;
-  }
-
-  esp_err_t err = code.is_nec ? ir_service_send_nec(code.address, code.command, repeats)
-                              : ir_service_send(&request_frame, code.carrier_hz);
-  if (err != ESP_OK) {
-    return reply_error(s, id, "failed", esp_err_to_name(err));
-  }
-  return write_json(s, reply_ok(id->valuedouble));
-}
-
-static bool op_learn(session_t *s, const cJSON *id, const cJSON *req)
-{
-  if (s->learning) {
-    return reply_error(s, id, "busy", "already learning");
-  }
-
-  double timeout_ms = LEARN_DEFAULT_MS;
-  const cJSON *t = cJSON_GetObjectItemCaseSensitive(req, "timeout_ms");
-  if (t) {
-    if (!cJSON_IsNumber(t) || t->valuedouble < LEARN_MIN_MS || t->valuedouble > LEARN_MAX_MS) {
-      return reply_error(s, id, "bad_request", "timeout_ms: 1000-60000");
-    }
-    timeout_ms = t->valuedouble;
-  }
-
-  /* Only a press from NOW on counts: forget frames already waiting. */
-  xQueueReset(heard_queue);
-  s->learning = true;
-  s->learn_id = id->valuedouble;
-  s->learn_deadline_us = esp_timer_get_time() + (int64_t)(timeout_ms * 1000);
-  ESP_LOGI(TAG, "learning: press a button on the remote");
-  return true; /* the reply comes when a frame arrives (pass_on_heard) */
 }
 
 static bool op_unpair(session_t *s, const cJSON *id)
@@ -378,7 +335,7 @@ static bool op_unpair(session_t *s, const cJSON *id)
   identity_clear_hub();
   mdns_update_paired();
   ESP_LOGI(TAG, "unpaired by the hub");
-  write_json(s, reply_ok(id->valuedouble));
+  write_json(s, hub_link_reply_ok(id->valuedouble));
   return false; /* close the connection: this hub isn't ours any more */
 }
 
@@ -403,70 +360,22 @@ static bool handle_line(session_t *s, char *text)
   } else if (!s->authorised) {
     keep = reply_error(s, id, "not_paired", "pair first");
   } else if (strcmp(op->valuestring, "ping") == 0) {
-    keep = write_json(s, reply_ok(id->valuedouble));
-  } else if (strcmp(op->valuestring, "send") == 0) {
-    keep = op_send(s, id, req);
-  } else if (strcmp(op->valuestring, "learn") == 0) {
-    keep = op_learn(s, id, req);
+    keep = write_json(s, hub_link_reply_ok(id->valuedouble));
   } else if (strcmp(op->valuestring, "unpair") == 0) {
     keep = op_unpair(s, id);
   } else {
-    keep = reply_error(s, id, "bad_request", "unknown op");
+    /* The add-on's own requests (the blaster's send / learn, ...). */
+    bool handled = false;
+    if (app && app->handle) {
+      keep = app->handle(s, op->valuestring, id->valuedouble, req, &handled);
+    }
+    if (!handled) {
+      keep = reply_error(s, id, "bad_request", "unknown op");
+    }
   }
 
   cJSON_Delete(req);
   return keep;
-}
-
-/* ---------------------------------------------------------------------------
- * IR frames heard -> the hub
- * ------------------------------------------------------------------------- */
-
-/* ir_service listener, in the RECEIVE task: only queue, never block. */
-static void on_heard(const ir_frame_t *frame, bool echo)
-{
-  if (echo || !session_active) {
-    return;
-  }
-  xQueueSend(heard_queue, frame, 0); /* full: drop it, the hub missed one press */
-}
-
-/* In this task: frames from the queue become the learn reply, or
- * "heard" events. */
-static bool pass_on_heard(session_t *s)
-{
-  while (xQueueReceive(heard_queue, &heard_frame, 0) == pdTRUE) {
-    /* An NEC "button held" repeat carries no code: nothing to learn or
-     * report. */
-    ir_nec_result_t nec;
-    if (ir_nec_decode(&heard_frame, &nec) == IR_NEC_REPEAT) {
-      continue;
-    }
-
-    cJSON *code = code_to_json(&heard_frame);
-    cJSON *msg;
-    if (s->learning) {
-      s->learning = false;
-      msg = reply_ok(s->learn_id);
-      ESP_LOGI(TAG, "learned a code");
-    } else {
-      msg = cJSON_CreateObject();
-      cJSON_AddStringToObject(msg, "event", "heard");
-    }
-    cJSON_AddItemToObject(msg, "code", code);
-    if (!write_json(s, msg)) {
-      return false;
-    }
-  }
-
-  if (s->learning && esp_timer_get_time() > s->learn_deadline_us) {
-    s->learning = false;
-    cJSON *id = cJSON_CreateNumber(s->learn_id);
-    bool ok = reply_error(s, id, "timeout", "no remote was pressed");
-    cJSON_Delete(id);
-    return ok;
-  }
-  return true;
 }
 
 /* ---------------------------------------------------------------------------
@@ -543,7 +452,9 @@ static int run_session(int fd)
   if (!check_peer(&s)) {
     goto done;
   }
-  session_active = s.authorised;
+  if (s.authorised) {
+    set_session_active(true);
+  }
   mbedtls_ssl_conf_read_timeout(&tls_config, POLL_MS);
 
   size_t line_len = 0;
@@ -575,7 +486,7 @@ static int run_session(int fd)
       goto done;
     }
 
-    if (!pass_on_heard(&s)) {
+    if (s.authorised && app && app->poll && !app->poll(&s)) {
       goto done;
     }
     if (esp_timer_get_time() - s.last_rx_us > IDLE_LIMIT_US) {
@@ -592,7 +503,9 @@ static int run_session(int fd)
   }
 
 done:
-  session_active = false;
+  if (session_active) {
+    set_session_active(false);
+  }
   mbedtls_ssl_close_notify(&s.ssl);
   mbedtls_ssl_free(&s.ssl);
   close(fd);
@@ -625,27 +538,25 @@ static esp_err_t start_mdns(void)
   ESP_RETURN_ON_ERROR(mdns_hostname_set(identity_device_id()), TAG, "mdns hostname");
 
   /* "IR blaster 91e4": the device id's last 4 digits tell two apart. */
-  char instance[32];
+  char instance[48];
   const char *id = identity_device_id();
-  snprintf(instance, sizeof(instance), "IR blaster %s", id + strlen(id) - 4);
+  snprintf(instance, sizeof(instance), "%s %s", uc_addon_config()->product, id + strlen(id) - 4);
   ESP_RETURN_ON_ERROR(mdns_instance_name_set(instance), TAG, "mdns instance");
 
   char proto[4];
-  snprintf(proto, sizeof(proto), "%d", PROTOCOL_VERSION);
+  snprintf(proto, sizeof(proto), "%d", uc_addon_config()->protocol_version);
   mdns_txt_item_t txt[] = {
     { "id", id },
-    { "fw", FW_VERSION },
+    { "fw", uc_addon_config()->fw_version },
     { "proto", proto },
     { "paired", identity_hub_fingerprint() ? "1" : "0" },
   };
-  return mdns_service_add(NULL, MDNS_SERVICE, MDNS_PROTO, HUB_LINK_PORT, txt, 4);
+  return mdns_service_add(NULL, uc_addon_config()->mdns_service, MDNS_PROTO, HUB_LINK_PORT, txt, 4);
 }
 
-esp_err_t hub_link_start(void)
+esp_err_t hub_link_start(const uc_addon_app_t *add_on)
 {
-  heard_queue = xQueueCreate(HEARD_QUEUE_LEN, sizeof(ir_frame_t));
-  ESP_RETURN_ON_FALSE(heard_queue, ESP_ERR_NO_MEM, TAG, "queue");
-  ir_service_add_listener(on_heard);
+  app = add_on;
 
   /* TLS settings, shared by every connection. */
   mbedtls_ssl_config_init(&tls_config);

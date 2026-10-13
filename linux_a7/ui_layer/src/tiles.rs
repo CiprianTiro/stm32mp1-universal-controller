@@ -540,7 +540,9 @@ pub fn room_cards(devices: &[&Device], templates: &[Template]) -> Vec<CategoryIt
             let list: Vec<&Device> = devices.iter().copied().filter(|d| d.room == room).collect();
             let on = list.iter().filter(|d| is_on(d) && reachable(d)).count();
             let offline = list.iter().filter(|d| !reachable(d)).count();
-            let temp = list.iter().find_map(|d| {
+            // A room's temperature: from its sensors and thermostats only
+            // (not a plug's own electronics, see climate()).
+            let temp = list.iter().filter(|d| category_of(d, templates) == "climate").find_map(|d| {
                 let c = &d.capabilities;
                 c.sensor.as_ref().and_then(|s| s.readings.get("temperature")).map(|r| r.value)
                     .or_else(|| c.climate.as_ref().and_then(|c| c.current))
@@ -570,6 +572,10 @@ pub fn room_cards(devices: &[&Device], templates: &[Template]) -> Vec<CategoryIt
 /// temperature and humidity of one sensor -- a favourite one if any is
 /// starred, else the first that measures temperature -- and where it is
 /// ("Bedroom \u{2022} Bedroom air"). None without such a sensor.
+///
+/// Only a room sensor or a thermostat counts (the "climate" category): a
+/// Shelly plug also reports a temperature, but its own electronics' (45 °C
+/// while the room has 24, #86).
 pub struct Climate {
     pub place: String,
     /// "21.5°"
@@ -578,8 +584,10 @@ pub struct Climate {
     pub humidity: String,
 }
 
-pub fn climate(devices: &[&Device]) -> Option<Climate> {
-    let measures = |d: &&&Device| d.capabilities.sensor.as_ref().is_some_and(|s| s.readings.contains_key("temperature"));
+pub fn climate(devices: &[&Device], templates: &[Template]) -> Option<Climate> {
+    let measures = |d: &&&Device| {
+        category_of(d, templates) == "climate" && d.capabilities.sensor.as_ref().is_some_and(|s| s.readings.contains_key("temperature"))
+    };
     let sensor = devices.iter().filter(measures).find(|d| d.favourite).or_else(|| devices.iter().find(measures))?;
     let readings = &sensor.capabilities.sensor.as_ref()?.readings;
     let temperature = readings.get("temperature").map(|r| format!("{}\u{b0}", number(r.value)))?;
@@ -662,9 +670,18 @@ mod tests {
     fn the_rooms_climate_comes_from_a_sensor() {
         let all = sample();
         let refs: Vec<&Device> = all.iter().collect();
-        let c = climate(&refs).unwrap();
+        let c = climate(&refs, &[]).unwrap();
         assert_eq!((c.place.as_str(), c.temperature.as_str(), c.humidity.as_str()), ("Bedroom air", "21.5\u{b0}", "48 %"));
-        assert!(climate(&refs[..2]).is_none(), "no sensor, no climate");
+        assert!(climate(&refs[..2], &[]).is_none(), "no sensor, no climate");
+        /* A plug's own temperature (#86) is never the room's -- not even
+         * when it's starred and comes first. */
+        let hot_plug = device(serde_json::json!({"id": "shelly", "name": "Plug", "room": "Living room",
+            "template": "shelly-plug-gen3", "favourite": true, "online": "online",
+            "capabilities": {"switch": {"on": true}, "energy": {"power_w": 5.0},
+                             "sensor": {"readings": {"temperature": {"value": 45.7, "unit": "°C"}}}}}));
+        let refs: Vec<&Device> = std::iter::once(&hot_plug).chain(all.iter()).collect();
+        assert_eq!(climate(&refs, &[]).unwrap().temperature, "21.5\u{b0}");
+        assert!(climate(&refs[..1], &[]).is_none());
     }
 
     #[test]

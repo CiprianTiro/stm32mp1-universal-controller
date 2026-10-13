@@ -96,13 +96,24 @@ unrecognised frames under 8 marks are dropped as noise.
 
 ## Files
 
+Since #86 the parts every add-on needs are shared with the room sensor
+(`firmware_sensor/`), in [`firmware_common/uc_addon/`](../firmware_common/uc_addon/uc_addon.h):
+
 | File | What |
 |---|---|
-| `main/main.c` | start-up, console commands, printing |
-| `main/identity.c` | the blaster's key, certificate, pairing code, and its hub (NVS) |
-| `main/wifi.c` | joins the network, reconnects by itself |
-| `main/provision.c` | WiFi setup over Bluetooth (security 2 with the pairing code); the BOOT button |
-| `main/hub_link.c` | mDNS, the TLS server, pairing, the hub's requests (PROTOCOL.md) |
+| `uc_addon.h` | what makes an add-on a blaster or a sensor: its names (mDNS service, Bluetooth service, pairing label), its WiFi power saving |
+| `identity.c` | the key, certificate, pairing code, and the hub (NVS) |
+| `wifi.c` | joins the network, reconnects by itself |
+| `provision.c` | WiFi setup over Bluetooth (security 2 with the pairing code); the BOOT button |
+| `hub_link.c` | mDNS, the TLS server, pairing, `hello`/`ping`/`unpair`; passes the other requests to the add-on (here: `ir_link.c`) |
+| `addon_console.c` | the console commands `status`, `wifi`, `pairing`, `unpair`, `factory-reset` |
+
+The blaster's own files:
+
+| File | What |
+|---|---|
+| `main/main.c` | start-up, the blaster's console commands, printing |
+| `main/ir_link.c` | the blaster's requests on the hub connection: `send`, `learn`, the `heard` event (PROTOCOL.md) |
 | `main/code_json.c` | IR codes to and from the hub's JSON |
 | `main/ir_service.c` | one owner of the IR hardware: one send at a time, echo detection, noise filter |
 | `main/ir_tx.c` | sending: RMT channel on GPIO4, 38 kHz carrier |
@@ -111,5 +122,5 @@ unrecognised frames under 8 marks are dropped as noise.
 | `main/ir_frame.h` | the shared frame format (mark/space durations in us) |
 | `sdkconfig.defaults` | board settings: 16 MB flash, octal PSRAM, console on COM, TLS options |
 | `partitions.csv` | two 4 MB app slots (for signed updates later), NVS, NVS keys |
-| `main/idf_component.yml` | registry components: mDNS, cJSON, network_provisioning (pinned in `dependencies.lock`) |
+| `main/idf_component.yml` | registry component cJSON (pinned in `dependencies.lock`); mDNS and network_provisioning come with uc_addon |
 | `tools/hub_sim.py` | plays the hub from a PC: `hello`, `pair`, `nec`, `learn`, `listen`, `unpair` |

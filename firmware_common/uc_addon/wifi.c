@@ -2,7 +2,7 @@
  * Copyright (c) 2026 Ciprian Tironeac
  * SPDX-License-Identifier: Apache-2.0
  *
- * WiFi -- see wifi.h.
+ * WiFi -- see wifi.h. (Moved here from firmware_ir_blaster/ for #86.)
  *
  * ESP-IDF's WiFi works through EVENTS: we ask it to start or connect, and
  * it tells us later what happened (started, connected, got an IP address,
@@ -22,6 +22,7 @@
 #include "esp_wifi.h"
 #include "identity.h"
 #include "provision.h"
+#include "uc_addon.h"
 
 static const char *TAG = "wifi";
 
@@ -106,19 +107,23 @@ esp_err_t wifi_start(void)
   if (!provisioning) {
     ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_STA), TAG, "mode");
     ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "start");
-    wifi_no_power_save();
+    wifi_power_save_settle();
   }
   return ESP_OK;
 }
 
-void wifi_no_power_save(void)
+void wifi_power_save_settle(void)
 {
-  /* The blaster is mains-powered and must answer the hub quickly: no WiFi
-   * power saving (which can add 100+ ms of delay to every message). Not
-   * while Bluetooth runs: sharing the radio needs power saving, and
-   * ESP-IDF halts the chip if it's off then. */
+  /* Not while Bluetooth runs: sharing the radio needs power saving, and
+   * ESP-IDF halts the chip if it's off then.
+   *
+   * The blaster is mains-powered and must answer the hub quickly: no WiFi
+   * power saving (which can add 100+ ms of delay to every message). The
+   * sensor wants the opposite: modem sleep (the radio sleeps between the
+   * router's beacons) uses much less power, so the ESP32 warms itself --
+   * and the sensor next to it -- much less. uc_addon.h decides. */
   if (!provision_active()) {
-    esp_wifi_set_ps(WIFI_PS_NONE);
+    esp_wifi_set_ps(uc_addon_config()->wifi_power_save ? WIFI_PS_MIN_MODEM : WIFI_PS_NONE);
   }
 }
 
@@ -133,7 +138,7 @@ esp_err_t wifi_set_network(const char *ssid, const char *password)
   strcpy((char *)config.sta.ssid, ssid);
   strcpy((char *)config.sta.password, password);
   /* With a password, refuse networks weaker than WPA2 -- so a fake open
-   * network with the same name can't lure the blaster in. */
+   * network with the same name can't lure the add-on in. */
   config.sta.threshold.authmode = password[0] ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
 
   /* Set on the console while Bluetooth setup waits: stop that first. */

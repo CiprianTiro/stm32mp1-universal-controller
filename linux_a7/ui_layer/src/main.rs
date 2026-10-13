@@ -1989,7 +1989,7 @@ impl DeviceRows {
         // The landscape home screen's climate (issue #107), only when it
         // changed (every change redraws).
         let (place, temperature, humidity) =
-            tiles::climate(&all).map_or_else(Default::default, |c| (c.place, c.temperature, c.humidity));
+            tiles::climate(&all, &self.templates).map_or_else(Default::default, |c| (c.place, c.temperature, c.humidity));
         if ui.get_home_climate() != temperature.as_str() || ui.get_home_humidity() != humidity.as_str() || ui.get_home_climate_place() != place.as_str() {
             ui.set_home_climate(temperature.into());
             ui.set_home_humidity(humidity.into());

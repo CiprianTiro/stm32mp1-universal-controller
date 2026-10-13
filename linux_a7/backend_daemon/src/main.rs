@@ -122,6 +122,7 @@ async fn main() {
         Box::new(adapters::wled::Wled),
         Box::new(adapters::lg_webos::LgWebos),
         Box::new(adapters::ir_blaster::IrBlaster),
+        Box::new(adapters::room_sensor::RoomSensor),
         Box::new(adapters::wiz::Wiz::new()),
         Box::new(adapters::roborock::Roborock),
         Box::new(adapters::ezviz::Ezviz),

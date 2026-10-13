@@ -1,7 +1,12 @@
 # Hub ↔ IR blaster protocol (v1)
 
 How the hub talks to an IR blaster (#42). The firmware side is
-`main/hub_link.c`, the hub side the `ir-blaster` adapter in `backend_daemon`.
+`firmware_common/uc_addon/hub_link.c` (the connection, pairing, `hello`,
+`ping`, `unpair`) plus `main/ir_link.c` (`send`, `learn`, `heard`). The hub
+side is `adapters/addon.rs` plus the `ir-blaster` adapter in `backend_daemon`.
+
+The room sensor (#86) uses this same connection and pairing with its own
+names; [its PROTOCOL.md](../firmware_sensor/PROTOCOL.md) lists the differences.
 
 ## Finding it
 

@@ -1,0 +1,40 @@
+# Board: ESP32-S3 N16R8 = 16 MB flash, 8 MB octal PSRAM (#86, the same board
+# as the IR blaster).
+CONFIG_IDF_TARGET="esp32s3"
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+
+# PSRAM left OFF: the sensor needs no extra memory, and powered PSRAM is a
+# few milliwatts more heat next to the sensor. (It sits on GPIO 33-37 --
+# never wire anything there anyway.)
+CONFIG_SPIRAM=n
+
+# 80 MHz instead of 160: the sensor does almost nothing, and a slower CPU
+# draws less power, so it warms the board (and the sensor) less.
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_80=y
+
+# Console (logs + the `sensor>` prompt) on the COM port (UART0 through the
+# board's CH343 USB-serial chip), as on the blaster. Logs also go to the
+# native USB port (output only).
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y
+
+# The hub connection (uc_addon's hub_link.c): the sensor checks the hub's
+# certificate itself after the handshake, so Mbed TLS must keep it.
+CONFIG_MBEDTLS_SSL_KEEP_PEER_CERTIFICATE=y
+
+# identity.c writes the sensor's own self-signed certificate on first start.
+CONFIG_MBEDTLS_X509_CREATE_C=y
+CONFIG_MBEDTLS_X509_CRT_WRITE_C=y
+
+# Partitions: two 4 MB app slots for over-the-air updates (partitions.csv).
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# No public web certificates needed: the sensor only talks to its own hub,
+# checked by fingerprint.
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=n
+
+# WiFi setup over Bluetooth (uc_addon's provision.c): Bluetooth LE with the
+# NimBLE stack. Its memory is released once the WiFi is set up.
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y

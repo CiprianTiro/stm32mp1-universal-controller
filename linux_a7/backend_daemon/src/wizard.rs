@@ -1582,7 +1582,7 @@ mod tests {
         let (templates, problems) = Templates::load(
             &dir,
             &Known {
-                adapters: &["m4-led", "wled", "lg-webos", "ir-blaster", "wiz", "http", "mqtt", "roborock", "ezviz", "tapo", "camera"],
+                adapters: &["m4-led", "wled", "lg-webos", "ir-blaster", "room-sensor", "wiz", "http", "mqtt", "roborock", "ezviz", "tapo", "camera"],
                 capabilities: &device::CAPABILITY_NAMES,
             },
         );

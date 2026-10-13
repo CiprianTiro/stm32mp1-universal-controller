@@ -28,6 +28,7 @@
  * (templates::ErrorKind), which the wizard turns into a sentence a person
  * understands.
  */
+pub mod addon;
 pub mod camera;
 pub mod channels;
 pub mod cloud;
@@ -44,6 +45,7 @@ pub mod mqtt_generic;
 pub mod roborock_cloud;
 pub mod roborock_map;
 pub mod roborock_proto;
+pub mod room_sensor;
 pub mod tapo;
 pub mod net;
 pub mod onvif;
