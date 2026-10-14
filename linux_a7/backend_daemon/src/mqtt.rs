@@ -11,7 +11,8 @@
  *     deleting a device's shadow in the cloud removes the device, and
  *     removing a device locally deletes its shadow;
  *   - reports the hub's own health (health.rs, #29) to the classic shadow
- *     every report interval;
+ *     every report interval (1 h, #108), and at once when something
+ *     important changes (health::Significant);
  *   - lists the hub's scenes in the named shadow "hub-scenes" (issue #47),
  *     and runs one when the cloud sets desired {"run": "<scene id>"}. A
  *     run request still pending at (re)connect is cleared, NOT carried
@@ -61,11 +62,29 @@ const DEFAULT_PORT: u16 = 8883;
  * certificates are per device, so they must NOT be baked into the image. */
 const DEFAULT_CERT_DIR: &str = "/usr/local/etc/universal-controller/mqtt";
 
-/* How often the hub's health (`system`, classic shadow) is published.
- * Devices are NOT repeated on this timer -- only sent when they change. Overridable with MQTT_REPORT_INTERVAL (seconds) in the
- * on-device env file: 10 s is ~260k messages/month per board -- fine for
- * one, but a fleet would rather use 60. */
-const DEFAULT_REPORT_INTERVAL: Duration = Duration::from_secs(10);
+/* Issue #108 -- what AWS bills: each report costs a message, a shadow
+ * update and a rule (~$3 per million together). Under ~1,500 a month the
+ * invoice rounds to $0.00. Measured before #108: ~260k health reports
+ * (every 10 s) + ~250k from one Shelly's watts (every reading).
+ *
+ * How often the hub's health (`system`, classic shadow) is published:
+ * hourly (~720 a month). Something important changing in between still
+ * reports at once (CHECK_INTERVAL). Overridable with MQTT_REPORT_INTERVAL
+ * (seconds) in the on-device env file, e.g. 10 for debugging. */
+const DEFAULT_REPORT_INTERVAL: Duration = Duration::from_secs(60 * 60);
+
+/* A device whose READINGS changed (watts, temperature: see
+ * shadow::READING_CAPABILITIES) and nothing else is reported at most this
+ * often -- 4 a day per device. Any other change (on/off, online, name...)
+ * still goes at once, with the latest readings. Only the cloud's copy
+ * waits: the touchscreen, the panel, the app on the LAN and automations
+ * get every reading live. Overridable with MQTT_READINGS_INTERVAL. */
+const DEFAULT_READINGS_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
+
+/* How often the few readings that can't wait for the hourly report are checked (M4
+ * stopped, SoC hot, disk full, devices added/removed: health::Significant).
+ * Local file reads only -- nothing is sent unless one of them changed. */
+const CHECK_INTERVAL: Duration = Duration::from_secs(30);
 
 /* Reconnect delays: start fast, double on every failure, cap at a minute.
  * A broker that's down for hours then costs one attempt per minute
@@ -94,6 +113,7 @@ struct Config {
     cert_file: String,
     key_file: String,
     report_interval: Duration,
+    readings_interval: Duration,
 }
 
 impl Config {
@@ -109,13 +129,15 @@ impl Config {
         };
         let thing = std::env::var("MQTT_THING_NAME")
             .map_err(|_| "MQTT_BROKER_HOST is set but MQTT_THING_NAME is not".to_string())?;
-        let report_interval = match std::env::var("MQTT_REPORT_INTERVAL") {
+        let seconds = |var: &str, default: Duration| match std::env::var(var) {
             Ok(v) => match v.parse::<u64>() {
-                Ok(secs) if secs >= 1 => Duration::from_secs(secs),
-                _ => return Err(format!("MQTT_REPORT_INTERVAL must be whole seconds >= 1, got {v}")),
+                Ok(secs) if secs >= 1 => Ok(Duration::from_secs(secs)),
+                _ => Err(format!("{var} must be whole seconds >= 1, got {v}")),
             },
-            Err(_) => DEFAULT_REPORT_INTERVAL,
+            Err(_) => Ok(default),
         };
+        let report_interval = seconds("MQTT_REPORT_INTERVAL", DEFAULT_REPORT_INTERVAL)?;
+        let readings_interval = seconds("MQTT_READINGS_INTERVAL", DEFAULT_READINGS_INTERVAL)?;
         let file = |var: &str, default: &str| {
             std::env::var(var).unwrap_or_else(|_| format!("{DEFAULT_CERT_DIR}/{default}"))
         };
@@ -127,6 +149,7 @@ impl Config {
             key_file: file("MQTT_KEY_FILE", "device.key"),
             thing,
             report_interval,
+            readings_interval,
         }))
     }
 
@@ -237,6 +260,7 @@ pub async fn run(
         shadow::Topics::new(&config.thing),
         connected.clone(),
         config.report_interval,
+        config.readings_interval,
         known_shadows,
         shadows_tx,
         automations.clone(),
@@ -489,6 +513,8 @@ impl Reporter {
  *   - a Sync message from run()  (reconnect, command done, shadow deleted)
  *   - state.rs changing (any device, the LED included)
  *   - the timer: the hub's `system` report, every `interval`
+ *   - the check timer: the same report early, if something important
+ *     changed (health::Significant, issue #108)
  *
  * Only while connected: rumqttc's request queue is only emptied once the
  * connection is back. In #26, reports queued during an outage filled it
@@ -512,6 +538,7 @@ async fn reporting_task(
     topics: shadow::Topics,
     connected: Arc<AtomicBool>,
     interval: Duration,
+    readings_interval: Duration,
     known_shadows: BTreeSet<DeviceId>,
     shadows_tx: watch::Sender<Vec<u8>>,
     automations: Arc<Automations>,
@@ -523,9 +550,14 @@ async fn reporting_task(
     /* The id set last handed to shadows_tx. */
     let mut saved_names: BTreeSet<DeviceId> = published.keys().cloned().collect();
     let mut tick = tokio::time::interval(interval);
+    let mut check = tokio::time::interval(CHECK_INTERVAL.min(interval));
+    /* What the last `system` report was sent with (issue #108). */
+    let mut reported: Option<health::Significant> = None;
+    let mut pacing = Pacing { readings_interval, last_sent: HashMap::new() };
     let publisher = Publisher {
         client: &client,
         connected: &connected,
+        sent: Mutex::new((Default::default(), Instant::now())),
     };
 
     loop {
@@ -550,19 +582,22 @@ async fn reporting_task(
                     let Some(devices) = reporter.devices().await else { break };
                     /* First delete the shadows of devices removed while we
                      * were offline (still in `published`, gone here)... */
-                    sync_devices(&publisher, &topics, &mut published, &devices, None, false).await;
+                    sync_devices(&publisher, &topics, &mut published, &mut pacing, &devices, None, false).await;
                     /* ...then send every device again: the cloud may have
                      * changed while we were away (e.g. a shadow deleted and
                      * recreated), so don't trust `published` for those.
                      * These first reports also delete the pre-#34 keys
                      * (shadow::device_report's drop_old_keys). */
                     published.retain(|id, _| !devices.contains_key(id));
-                    sync_devices(&publisher, &topics, &mut published, &devices, None, true).await;
+                    sync_devices(&publisher, &topics, &mut published, &mut pacing, &devices, None, true).await;
                     for id in devices.keys() {
                         publisher.send(&topics.device_get(id), Vec::new()).await;
                     }
                     let system = reporter.system(devices.len());
                     publisher.send(&topics.classic_update(), shadow::classic_report(&system, true)).await;
+                    /* Just reported: the next full one in `interval`. */
+                    reported = Some(health::Significant::read(reported.as_ref(), devices.len()));
+                    tick.reset();
                     /* The scenes, and any stale run request cleared (see
                      * the header). */
                     publisher.send(&topics.device_update(shadow::SCENES_SHADOW), scenes_report(true)).await;
@@ -586,7 +621,7 @@ async fn reporting_task(
                 }
                 Sync::CommandDone(id) => {
                     let Some(devices) = reporter.devices().await else { break };
-                    sync_devices(&publisher, &topics, &mut published, &devices, Some(&id), false).await;
+                    sync_devices(&publisher, &topics, &mut published, &mut pacing, &devices, Some(&id), false).await;
                     continue;
                 }
                 Sync::ShadowDeleted(id) => {
@@ -626,6 +661,23 @@ async fn reporting_task(
                 let Some(devices) = reporter.devices().await else { break };
                 let system = reporter.system(devices.len());
                 publisher.send(&topics.classic_update(), shadow::classic_report(&system, false)).await;
+                reported = Some(health::Significant::read(reported.as_ref(), devices.len()));
+                continue;
+            }
+            _ = check.tick() => {
+                let Some(devices) = reporter.devices().await else { break };
+                let now = health::Significant::read(reported.as_ref(), devices.len());
+                /* Before the first report there's nothing to compare
+                 * with; the timer's first tick (straight away) sends it. */
+                if reported.as_ref().is_some_and(|before| *before != now) {
+                    println!("mqtt: health changed ({}), reporting now", now.describe());
+                    let system = reporter.system(devices.len());
+                    publisher.send(&topics.classic_update(), shadow::classic_report(&system, false)).await;
+                    reported = Some(now);
+                    tick.reset();
+                }
+                /* Readings that waited long enough go out now. */
+                sync_devices(&publisher, &topics, &mut published, &mut pacing, &devices, None, false).await;
                 continue;
             }
             Ok(()) = state_changed_rx.changed() => {}
@@ -635,7 +687,7 @@ async fn reporting_task(
          * again for a NEW change. */
         state_changed_rx.mark_unchanged();
         let Some(devices) = reporter.devices().await else { break };
-        sync_devices(&publisher, &topics, &mut published, &devices, None, false).await;
+        sync_devices(&publisher, &topics, &mut published, &mut pacing, &devices, None, false).await;
     }
 }
 
@@ -652,6 +704,7 @@ async fn sync_devices(
     publisher: &Publisher<'_>,
     topics: &shadow::Topics,
     published: &mut HashMap<DeviceId, Value>,
+    pacing: &mut Pacing,
     current: &HashMap<DeviceId, Value>,
     command_done: Option<&DeviceId>,
     first: bool,
@@ -665,6 +718,11 @@ async fn sync_devices(
     for id in changes.updated {
         let report = &current[&id];
         let clear = command_done == Some(&id);
+        /* Only readings changed, and the last report is recent: wait. Not
+         * recorded in `published`, so a later sync still sees the change. */
+        if !clear && !first && pacing.wait(&id, published.get(&id), report) {
+            continue;
+        }
         /* Keys the last report had and this one lacks: deleted in the
          * cloud too (shadow::deletions, issue #72). */
         let gone = published.get(&id).map_or(Value::Null, |old| shadow::deletions(old, report));
@@ -673,14 +731,35 @@ async fn sync_devices(
             .send(&topics.device_update(&id), shadow::device_report(&document, clear, first))
             .await
         {
+            pacing.last_sent.insert(id.clone(), Instant::now());
             published.insert(id, report.clone());
         }
     }
     for id in changes.removed {
         if publisher.send(&topics.device_delete(&id), Vec::new()).await {
             println!("mqtt: {id} was removed, deleting its shadow");
+            pacing.last_sent.remove(&id);
             published.remove(&id);
         }
+    }
+}
+
+/* Issue #108: when a device's report may go out (DEFAULT_READINGS_INTERVAL). */
+struct Pacing {
+    readings_interval: Duration,
+    /* When each device's report last went out. */
+    last_sent: HashMap<DeviceId, Instant>,
+}
+
+impl Pacing {
+    /* true = hold this report back: compared with what the cloud has,
+     * only readings changed, and the last report is younger than
+     * readings_interval. A device never sent (or not yet since this
+     * start) always goes. */
+    fn wait(&self, id: &DeviceId, sent: Option<&Value>, now: &Value) -> bool {
+        let Some(sent) = sent.filter(|sent| !sent.is_null()) else { return false };
+        let recent = self.last_sent.get(id).is_some_and(|at| at.elapsed() < self.readings_interval);
+        recent && shadow::without_readings(sent) == shadow::without_readings(now)
     }
 }
 
@@ -688,7 +767,15 @@ async fn sync_devices(
 struct Publisher<'a> {
     client: &'a AsyncClient,
     connected: &'a AtomicBool,
+    /* Issue #108: AWS bills every message, so the log says once an hour
+     * how many went out and for which shadow -- the device behind a
+     * surprising bill shows up straight away. Counts per shadow + when
+     * counting started; the Mutex is never held across an .await. */
+    sent: Mutex<(HashMap<String, u32>, Instant)>,
 }
+
+/* How often the message count is written to the log. */
+const SENT_LOG_EVERY: Duration = Duration::from_secs(60 * 60);
 
 impl Publisher<'_> {
     /* true = handed to rumqttc (it delivers it once the broker is
@@ -698,12 +785,43 @@ impl Publisher<'_> {
             return false;
         }
         match self.client.publish(topic, QoS::AtLeastOnce, false, payload).await {
-            Ok(()) => true,
+            Ok(()) => {
+                self.count(topic);
+                true
+            }
             Err(e) => {
                 println!("mqtt: could not publish to {topic}: {e}");
                 false
             }
         }
+    }
+
+    /* Counts one message under its shadow's name; once an hour logs e.g.
+     * "mqtt: sent in the last 60 min: 9 (hub 5, pc 3, hub-scenes 1)". */
+    fn count(&self, topic: &str) {
+        let mut guard = self.sent.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let (sent, since) = &mut *guard;
+        *sent.entry(shadow_of(topic).to_string()).or_default() += 1;
+        let elapsed = since.elapsed();
+        if elapsed >= SENT_LOG_EVERY {
+            let mut list: Vec<(&String, &u32)> = sent.iter().collect();
+            list.sort_by(|a, b| b.1.cmp(a.1));
+            let total: u32 = list.iter().map(|(_, n)| **n).sum();
+            let each: Vec<String> = list.iter().map(|(name, n)| format!("{name} {n}")).collect();
+            println!("mqtt: sent in the last {} min: {total} ({})", elapsed.as_secs() / 60, each.join(", "));
+            sent.clear();
+            *since = Instant::now();
+        }
+    }
+}
+
+/* The shadow a topic belongs to: the named shadow's name
+ * ($aws/things/<thing>/shadow/name/<NAME>/update), or "hub" for the
+ * classic shadow (the health report). */
+fn shadow_of(topic: &str) -> &str {
+    match topic.split_once("/shadow/name/") {
+        Some((_, rest)) => rest.split('/').next().unwrap_or(rest),
+        None => "hub",
     }
 }
 
@@ -740,4 +858,34 @@ pub(crate) fn clock_synced() -> bool {
     let mut tx: libc::timex = unsafe { std::mem::zeroed() };
     let state = unsafe { libc::adjtimex(&mut tx) };
     state != libc::TIME_ERROR && (tx.status & libc::STA_UNSYNC) == 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn only_recent_reading_changes_wait() {
+        let id: DeviceId = "plug".into();
+        let plug = |on: bool, watts: f64| json!({"capabilities": {"switch": {"on": on}, "energy": {"power_w": watts}}});
+        let mut pacing = Pacing { readings_interval: Duration::from_secs(3600), last_sent: HashMap::new() };
+        /* Never sent since the start: goes. */
+        assert!(!pacing.wait(&id, Some(&plug(true, 39.0)), &plug(true, 53.0)));
+        pacing.last_sent.insert(id.clone(), Instant::now());
+        /* Sent just now, watts moved: waits. */
+        assert!(pacing.wait(&id, Some(&plug(true, 39.0)), &plug(true, 53.0)));
+        /* Switched off: goes at once. */
+        assert!(!pacing.wait(&id, Some(&plug(true, 39.0)), &plug(false, 0.0)));
+        /* Readings old enough: go. */
+        pacing.readings_interval = Duration::ZERO;
+        assert!(!pacing.wait(&id, Some(&plug(true, 39.0)), &plug(true, 53.0)));
+    }
+
+    #[test]
+    fn messages_are_counted_under_their_shadow() {
+        assert_eq!(shadow_of("$aws/things/dk2-01/shadow/name/pc/update"), "pc");
+        assert_eq!(shadow_of("$aws/things/dk2-01/shadow/name/hub-scenes/get"), "hub-scenes");
+        assert_eq!(shadow_of("$aws/things/dk2-01/shadow/update"), "hub");
+    }
 }

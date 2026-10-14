@@ -433,6 +433,21 @@ pub fn discover(wait: Duration) -> Vec<FoundHub> {
     found
 }
 
+/// The paired hub at a new address (it moved from Ethernet to WiFi, or the
+/// router handed out another IP): asks mDNS which hubs there are and keeps
+/// the first whose certificate is the pinned one -- a stranger on the LAN
+/// announcing the same name can't take its place. The hub with the paired
+/// name is tried first. None if it isn't found (off, or another network).
+pub fn find_moved(config: &PanelConfig) -> Option<FoundHub> {
+    let mut found = discover(Duration::from_secs(2));
+    // Stable sort: the paired name first, the rest in their order.
+    found.sort_by_key(|hub| hub.name != config.hub_name);
+    found.into_iter().find(|hub| {
+        (hub.host != config.host || hub.port != config.port)
+            && connect_tls(&hub.host, hub.port, Some(&config.fingerprint)).is_ok()
+    })
+}
+
 /// A DNS question for `name`'s PTR records (the instances of a service).
 fn mdns_query(name: &str) -> Vec<u8> {
     let mut q = vec![0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0]; // id 0, no flags, 1 question
