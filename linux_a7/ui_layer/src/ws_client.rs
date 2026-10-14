@@ -903,6 +903,18 @@ fn connection_loop(target: Target, request_rx: mpsc::Receiver<Request>, update_t
                 PanelLogin::Ready(socket) => socket,
                 PanelLogin::Failed(why) => {
                     println!("ui_layer: hub {}: {why}", config.host);
+                    // Maybe it only moved: found under its pinned
+                    // certificate at a new address -> saved, and tried
+                    // again straight away.
+                    if let (Some(hub), Target::Panel(shared)) = (crate::panel::find_moved(&config), &target) {
+                        println!("ui_layer: hub {} found at {}:{} (was {}:{})", config.hub_name, hub.host, hub.port, config.host, config.port);
+                        let moved = crate::panel::PanelConfig { host: hub.host, port: hub.port, ..config };
+                        if let Err(e) = crate::panel::save(&moved) {
+                            println!("ui_layer: {e}");
+                        }
+                        *shared.lock().unwrap() = Some(moved);
+                        continue;
+                    }
                     if update_tx.send(Update::HubProblem(why)).is_err() {
                         return;
                     }

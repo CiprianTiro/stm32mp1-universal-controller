@@ -16,7 +16,7 @@
  *
  * Everything comes from files the Linux kernel provides (/proc, /sys) or one
  * libc call (statvfs) -- no external tools like `top` or `df`, which would
- * mean starting a whole process every 10 s.
+ * mean starting a whole process for every report.
  *
  * Any value that can't be read (e.g. there's no thermal sensor or M4 in
  * QEMU) becomes `null` in the JSON. A missing number must never stop the
@@ -111,6 +111,87 @@ impl Sampler {
              * `version`, so the binary always knows which version it is. */
             "version": env!("CARGO_PKG_VERSION"),
         })
+    }
+}
+
+/* Issue #108: the full report goes out only hourly (AWS bills each
+ * message). In between, mqtt.rs checks these few things every 30 s and
+ * reports at once when one of them changes -- the cloud still hears about
+ * trouble straight away. Not here: the network link (a new link means a
+ * reconnect, and reconnecting always sends a report) and the version (only
+ * changes with a restart, which also reports). */
+
+/* SoC temperature that counts as "hot": the STM32MP157 is rated to 105 °C
+ * at the junction, and the DK2 idles around 45-50 °C. Hot from HOT_C up;
+ * back to normal only below COOL_C, so a temperature hovering around one
+ * value doesn't send a report every 30 s. */
+const HOT_C: f64 = 75.0;
+const COOL_C: f64 = 70.0;
+/* A filesystem this full needs attention (logs, the device registry and
+ * certificates live on them). */
+const DISK_FULL_PERCENT: f64 = 90.0;
+
+/* What the 30-s check compares. Any difference = report now. */
+#[derive(Clone, Debug, PartialEq)]
+pub struct Significant {
+    /* The M4's remoteproc state ("running", "offline"...). */
+    m4: Option<String>,
+    hot: bool,
+    rootfs_full: bool,
+    userfs_full: bool,
+    device_count: usize,
+}
+
+impl Significant {
+    /* Reads the board now. `before` is the last check's result: the
+     * temperature needs it to know which side of the gap it was on. */
+    pub fn read(before: Option<&Significant>, device_count: usize) -> Self {
+        significant_from(
+            before,
+            read(M4_STATE).map(|s| s.trim().to_string()),
+            read(CPU_TEMP).and_then(|s| parse_millidegrees(&s)),
+            disk_used_percent(ROOTFS),
+            disk_used_percent(USERFS),
+            device_count,
+        )
+    }
+
+    /* For the daemon's log: why a report went out early. */
+    pub fn describe(&self) -> String {
+        format!(
+            "m4 {}, {}, rootfs {}, userfs {}, {} device(s)",
+            self.m4.as_deref().unwrap_or("unknown"),
+            if self.hot { "hot" } else { "temperature normal" },
+            if self.rootfs_full { "full" } else { "ok" },
+            if self.userfs_full { "full" } else { "ok" },
+            self.device_count
+        )
+    }
+}
+
+/* The readings -> Significant, without touching the board (unit tests). A
+ * reading that's missing (None) never counts as hot or full. */
+fn significant_from(
+    before: Option<&Significant>,
+    m4: Option<String>,
+    temperature_c: Option<f64>,
+    rootfs_percent: Option<f64>,
+    userfs_percent: Option<f64>,
+    device_count: usize,
+) -> Significant {
+    let was_hot = before.is_some_and(|b| b.hot);
+    let hot = match temperature_c {
+        Some(t) if was_hot => t >= COOL_C,
+        Some(t) => t >= HOT_C,
+        None => false,
+    };
+    let full = |p: Option<f64>| p.is_some_and(|p| p >= DISK_FULL_PERCENT);
+    Significant {
+        m4,
+        hot,
+        rootfs_full: full(rootfs_percent),
+        userfs_full: full(userfs_percent),
+        device_count,
     }
 }
 
@@ -288,6 +369,48 @@ mod tests {
         assert_eq!(parse_millidegrees("45538\n"), Some(45.5));
         assert_eq!(parse_uptime("234.14 427.00\n"), Some(234));
         assert_eq!(parse_millidegrees("garbage"), None);
+    }
+
+    /* Issue #108: the early-report triggers. */
+    fn sig(before: Option<&Significant>, m4: &str, temp: f64, rootfs: f64, devices: usize) -> Significant {
+        significant_from(before, Some(m4.into()), Some(temp), Some(rootfs), Some(1.0), devices)
+    }
+
+    #[test]
+    fn nothing_significant_changes_with_ordinary_readings() {
+        /* Temperature and disk wander a little: no early report. */
+        let a = sig(None, "running", 48.3, 4.0, 10);
+        let b = sig(Some(&a), "running", 52.9, 4.1, 10);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn m4_stopping_or_a_device_count_change_is_significant() {
+        let a = sig(None, "running", 48.0, 4.0, 10);
+        assert_ne!(a, sig(Some(&a), "offline", 48.0, 4.0, 10));
+        assert_ne!(a, sig(Some(&a), "running", 48.0, 4.0, 11));
+    }
+
+    #[test]
+    fn hot_has_a_gap_so_a_steady_temperature_does_not_flap() {
+        let normal = sig(None, "running", 74.9, 4.0, 1);
+        assert!(!normal.hot);
+        let hot = sig(Some(&normal), "running", 75.0, 4.0, 1);
+        assert!(hot.hot);
+        /* Between 70 and 75: stays whatever it was. */
+        assert!(sig(Some(&hot), "running", 72.0, 4.0, 1).hot);
+        assert!(!sig(Some(&normal), "running", 72.0, 4.0, 1).hot);
+        /* Below 70: normal again. */
+        assert!(!sig(Some(&hot), "running", 69.9, 4.0, 1).hot);
+    }
+
+    #[test]
+    fn a_nearly_full_disk_is_significant_and_missing_readings_are_not() {
+        assert!(sig(None, "running", 48.0, 90.0, 1).rootfs_full);
+        assert!(!sig(None, "running", 48.0, 89.9, 1).rootfs_full);
+        /* QEMU / dev PC: nothing readable -> nothing alarming. */
+        let blank = significant_from(None, None, None, None, None, 0);
+        assert!(!blank.hot && !blank.rootfs_full && !blank.userfs_full);
     }
 
     #[test]

@@ -294,6 +294,43 @@ pub fn classic_report(system: &Value, migrate: bool) -> Vec<u8> {
     doc.to_string().into_bytes()
 }
 
+/* Issue #108: capabilities that are measurements -- they change by
+ * themselves all the time (a plug's watts every few seconds, a room's
+ * temperature every minute). Each change sent to AWS is billed, so a
+ * change in ONLY these waits (mqtt.rs READINGS_INTERVAL); anything else
+ * in the same report (on/off, online...) still goes at once and takes the
+ * latest readings along. */
+pub const READING_CAPABILITIES: [&str; 2] = ["sensor", "energy"];
+
+/* The same inside other capabilities: fields that are measurements, next
+ * to real state. A cleaning vacuum's battery and minutes change on every
+ * poll (every 5 s: ~45 reports in 5 min, measured); its parts' wear and
+ * totals slowly. A thermostat's `current` is the room temperature; its
+ * `target` and `mode` are settings and still go at once. */
+pub const READING_FIELDS: [(&str, &[&str]); 2] = [
+    ("vacuum", &["battery", "minutes", "parts", "totals"]),
+    ("climate", &["current"]),
+];
+
+/* A device's report without its readings: two reports equal under this
+ * differ in readings only. */
+pub fn without_readings(report: &Value) -> Value {
+    let mut report = report.clone();
+    if let Some(capabilities) = report.get_mut("capabilities").and_then(Value::as_object_mut) {
+        for name in READING_CAPABILITIES {
+            capabilities.remove(name);
+        }
+        for (name, fields) in READING_FIELDS {
+            if let Some(capability) = capabilities.get_mut(name).and_then(Value::as_object_mut) {
+                for field in fields {
+                    capability.remove(*field);
+                }
+            }
+        }
+    }
+    report
+}
+
 /* What has to be published to bring the cloud from `published` (what we
  * last sent) to `current` (what the hub has now). */
 #[derive(Debug, Default, PartialEq)]
@@ -495,6 +532,30 @@ mod tests {
         );
         let plain: Value = serde_json::from_slice(&classic_report(&sys, false)).unwrap();
         assert_eq!(plain, json!({"state":{"reported":{"system":{"uptime_s":5}}}}));
+    }
+
+    #[test]
+    fn only_readings_are_left_out_of_the_comparison() {
+        let report = |on: bool, watts: f64, temperature: f64| {
+            json!({"name": "Plug", "online": true, "capabilities": {
+                "switch": {"on": on},
+                "energy": {"power_w": watts},
+                "sensor": {"readings": {"temperature": {"value": temperature, "unit": "°C"}}},
+            }})
+        };
+        /* Watts and temperature moved: the same without readings. */
+        assert_eq!(without_readings(&report(true, 39.1, 24.0)), without_readings(&report(true, 53.1, 24.3)));
+        /* Switched off: a real change. */
+        assert_ne!(without_readings(&report(true, 39.1, 24.0)), without_readings(&report(false, 39.1, 24.0)));
+        /* A cleaning vacuum: battery and minutes are readings, its state
+         * isn't. */
+        let vacuum = |state: &str, battery: u8, minutes: u32| {
+            json!({"capabilities": {"vacuum": {"state": state, "battery": battery, "minutes": minutes}}})
+        };
+        assert_eq!(without_readings(&vacuum("cleaning", 80, 3)), without_readings(&vacuum("cleaning", 79, 4)));
+        assert_ne!(without_readings(&vacuum("cleaning", 80, 3)), without_readings(&vacuum("returning", 80, 3)));
+        /* A report without capabilities is left as it is. */
+        assert_eq!(without_readings(&json!({"name": "x"})), json!({"name": "x"}));
     }
 
     #[test]
